@@ -2,7 +2,7 @@
 
 **Engine**: PostgreSQL 15+
 **Migrations**: `infra/scripts/migrations/` (managed by `drizzle-kit`)
-**Conventions**:
+**Conventions**: 1
 
 - All ids are `uuid` (v7, time-ordered) generated app-side unless noted.
 - All timestamps are `timestamptz` UTC.

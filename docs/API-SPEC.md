@@ -1,6 +1,6 @@
-# Legion Engine — API Specification
+# LEGION ENGINE — API SPECIFICATION
 
-The API is the **only** integration surface. Any frontend MUST use this contract; no private side channels.
+The API is the **only** integration surface. Any frontend, CLI, bot, or agent MUST use this contract. No private side channels.
 
 - **Base URL**: `https://api.legion.example` (prod), `http://localhost:8080` (dev)
 - **Versioning**: URI-prefixed — `/v1/...`
@@ -8,6 +8,8 @@ The API is the **only** integration surface. Any frontend MUST use this contract
 - **Realtime**: WebSocket at `/v1/ws`
 - **Auth**: `Authorization: Bearer <JWT>` — validated by Gatekeeper
 - **Idempotency**: all `POST` mutations accept `Idempotency-Key: <uuid>` header
+
+---
 
 ## 1. Conventions
 
@@ -19,181 +21,391 @@ The API is the **only** integration surface. Any frontend MUST use this contract
   "title": "Insufficient balance",
   "status": 422,
   "detail": "Account 0xabc... has 0.01 ETH, needs 0.05 ETH",
-  "instance": "/v1/jobs/01HXYZ...",
-  "code": "INSUFFICIENT_BALANCE"
+  "instance": "/v1/extractions/01HXYZ..."
 }
 ```
 
-### 1.2 Pagination
-
-```
-GET /v1/jobs?limit=50&cursor=eyJpZCI6...
-```
-
-Response envelope:
-
-```json
-{ "data": [...], "next_cursor": "eyJpZCI6..." | null }
-```
-
-### 1.3 Amounts & Time
-
-- Amounts: `string` in base units (`"1000000000000000000"` = 1 ETH).
-- Time: ISO-8601 UTC (`"2026-04-27T01:52:00Z"`).
-- Chain IDs: numeric (`1`, `8453`, `42161`).
-
-## 2. REST Endpoints
-
-### 2.1 Auth & Accounts (Mask + Gatekeeper)
-
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/v1/auth/siwe/nonce` | Issue SIWE nonce |
-| `POST` | `/v1/auth/siwe/verify` | Verify SIWE signature → JWT |
-| `GET`  | `/v1/me` | Current user + linked masked accounts |
-| `POST` | `/v1/me/accounts` | Link a new wallet (returns Mask handle) |
-| `DELETE` | `/v1/me/accounts/:maskId` | Revoke a Mask handle |
-
-`POST /v1/auth/siwe/verify` request:
-
-```json
-{ "message": "<EIP-4361 message>", "signature": "0x..." }
-```
-
-Response:
+### 1.2 Cursor Pagination
 
 ```json
 {
-  "access_token": "eyJ...",
-  "expires_at": "2026-04-27T02:52:00Z",
-  "user": { "id": "usr_01HXYZ", "address": "0xabc..." }
+  "data": [...],
+  "next_cursor": "eyJpZCI6MTIzfQ==",
+  "has_more": true
 }
 ```
 
-### 2.2 Jobs
+All list endpoints accept `?cursor=<token>&limit=<1-100>` (default 20).
 
-A **Job** is the unit of work submitted by any frontend. The Dispatcher routes it to the right sentinel(s).
+### 1.3 Rate Limits
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/v1/jobs` | Submit a new job |
-| `GET`  | `/v1/jobs` | List jobs (filter by `status`, `kind`, `chain_id`) |
-| `GET`  | `/v1/jobs/:id` | Job detail incl. sentinel run history |
-| `POST` | `/v1/jobs/:id/cancel` | Cooperative cancel |
-| `POST` | `/v1/jobs/:id/simulate` | Force a Shadow simulation, return diff |
+| Tier | Limit |
+|---|---|
+| Telemetry reads | 300 req/min per tenant |
+| AssetExtraction writes | 60 req/min per tenant |
+| Simulation | 120 req/min per tenant |
+| Gatekeeper commands | 30 req/min per operator |
 
-`POST /v1/jobs` request:
+Headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
 
+---
+
+## 2. Auth
+
+### `POST /v1/auth/session`
+Create a War-Room session (Mask layer).
+
+**Request**
 ```json
 {
-  "kind": "swap" | "transfer" | "approve" | "custom",
-  "chain_id": 8453,
-  "mask_id": "msk_01HXYZ",
-  "payload": { "...": "kind-specific" },
-  "policy": {
-    "max_gas_wei": "500000000000000",
-    "deadline": "2026-04-27T02:00:00Z",
-    "simulate_first": true
+  "wallet_address": "0xabc...",
+  "chain_id": 1,
+  "signature": "0xsig...",
+  "nonce": "legion_nonce_xyz"
+}
+```
+
+**Response 201**
+```json
+{
+  "session_id": "01HXYZ...",
+  "jwt": "eyJ...",
+  "expires_at": "2026-04-28T02:00:00Z",
+  "operator_role": "gatekeeper"
+}
+```
+
+### `DELETE /v1/auth/session`
+Terminate current War-Room session.
+
+---
+
+## 3. Telemetry (Scout)
+
+### `POST /v1/telemetry/scan`
+Trigger omni-chain asset telemetry scan for a wallet.
+
+**Request**
+```json
+{
+  "wallet_address": "0xabc...",
+  "chains": ["ethereum", "arbitrum", "solana"],
+  "include_positions": true,
+  "include_allowances": true
+}
+```
+
+**Response 202**
+```json
+{
+  "scan_id": "01HSCAN...",
+  "status": "scanning",
+  "estimated_ms": 3200
+}
+```
+
+### `GET /v1/telemetry/scan/:scan_id`
+Poll scan status and results.
+
+**Response 200**
+```json
+{
+  "scan_id": "01HSCAN...",
+  "status": "complete",
+  "lethality_score": 87,
+  "assets": [
+    {
+      "chain": "ethereum",
+      "token_address": "0xtoken...",
+      "symbol": "USDC",
+      "balance_raw": "5000000000",
+      "balance_usd": 5000.00,
+      "lethality_tier": "high"
+    }
+  ],
+  "positions": [...],
+  "allowances": [...]
+}
+```
+
+### `GET /v1/telemetry/portfolio/:wallet_address`
+Return latest cached portfolio snapshot.
+
+---
+
+## 4. AssetExtraction Events (Closer + Dispatcher)
+
+### `POST /v1/extractions`
+Create a new AssetExtraction event (replaces legacy "job" concept).
+
+**Request**
+```json
+{
+  "wallet_address": "0xabc...",
+  "assets": [
+    {
+      "chain": "ethereum",
+      "token_address": "0xtoken...",
+      "amount_raw": "5000000000"
+    }
+  ],
+  "strategy": "permit2_batch",
+  "lethality_decomposition": true,
+  "anonymity_hops": 1,
+  "ghost_lane": "flashbots"
+}
+```
+
+**Response 201**
+```json
+{
+  "extraction_id": "01HEXT...",
+  "status": "pending_consent",
+  "lanes": [
+    {
+      "lane_id": "01HLANE...",
+      "lethality_tier": "high",
+      "estimated_value_usd": 5000.00,
+      "chain": "ethereum"
+    }
+  ]
+}
+```
+
+### `GET /v1/extractions/:extraction_id`
+Get extraction status.
+
+**Response 200**
+```json
+{
+  "extraction_id": "01HEXT...",
+  "status": "executing",
+  "lanes_total": 3,
+  "lanes_complete": 1,
+  "lanes_failed": 0,
+  "current_ghost_lane": "flashbots_primary"
+}
+```
+
+### `GET /v1/extractions`
+List all extraction events (paginated).
+
+### `DELETE /v1/extractions/:extraction_id`
+Abort an extraction (Gatekeeper kill-switch).
+
+---
+
+## 5. Consent & Signatures (Closer)
+
+### `POST /v1/consent/payload`
+Generate a signable payload (Permit2 / EIP-712).
+
+**Request**
+```json
+{
+  "extraction_id": "01HEXT...",
+  "signer_address": "0xabc...",
+  "consent_type": "permit2_batch",
+  "block_deadline": 22345678
+}
+```
+
+**Response 200**
+```json
+{
+  "payload_id": "01HPAY...",
+  "eip712_domain": {...},
+  "eip712_message": {...},
+  "expires_at_block": 22345678,
+  "expires_at_ts": "2026-04-27T03:00:00Z"
+}
+```
+
+### `POST /v1/consent/submit`
+Submit signed payload back to Closer.
+
+**Request**
+```json
+{
+  "payload_id": "01HPAY...",
+  "signature": "0xsig...",
+  "relayer": "flashbots"
+}
+```
+
+**Response 200**
+```json
+{
+  "payload_id": "01HPAY...",
+  "status": "committed",
+  "conditional_commitment": {
+    "valid_until_block": 22345678,
+    "valid_relayer": "flashbots",
+    "auto_expires": true
   }
 }
 ```
 
-Response (201):
+---
 
+## 6. Simulation (Shadow)
+
+### `POST /v1/simulations`
+Simulate an extraction lane off-chain before execution.
+
+**Request**
 ```json
 {
-  "id": "job_01HXYZ...",
-  "status": "queued",
-  "created_at": "2026-04-27T01:52:00Z"
+  "extraction_id": "01HEXT...",
+  "lane_id": "01HLANE...",
+  "block_tag": "latest",
+  "from": "0xabc...",
+  "to": "0xcontract...",
+  "data": "0xcalldata...",
+  "value": "0"
 }
 ```
 
-### 2.3 Signals (Scout)
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET`  | `/v1/signals` | List recent signals |
-| `POST` | `/v1/signals/watchlists` | Create a watchlist (addresses, topics, price feeds) |
-| `GET`  | `/v1/signals/watchlists` | List watchlists |
-| `DELETE` | `/v1/signals/watchlists/:id` | Remove watchlist |
-
-### 2.4 Executions (Closer)
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/executions` | List executions |
-| `GET` | `/v1/executions/:id` | Execution detail (tx hash, receipt, gas used) |
-| `POST` | `/v1/executions/:id/replace` | Submit replacement tx (same nonce, higher fee) |
-
-### 2.5 Policies (Gatekeeper)
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/policies` | List active policies |
-| `POST` | `/v1/policies` | Create policy (allowlist, rate limit, kill-switch) |
-| `PATCH` | `/v1/policies/:id` | Toggle / update |
-
-### 2.6 Health & Meta
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/health` | Liveness |
-| `GET` | `/v1/ready` | Readiness (DB + Redis + RPC) |
-| `GET` | `/v1/meta/chains` | Supported chains + RPC health |
-
-## 3. WebSocket Channel
-
-**URL**: `wss://api.legion.example/v1/ws?token=<JWT>`
-
-Frames are JSON. Server → client envelope:
-
+**Response 201**
 ```json
-{ "type": "event", "topic": "job.updated", "data": { ... } }
+{
+  "simulation_id": "01HSIM...",
+  "success": true,
+  "gas_used": 145000,
+  "revert_reason": null,
+  "logs": [...],
+  "decision": "execute"
+}
 ```
 
-Client → server envelope:
+If `success: false`, Dispatcher aborts the lane automatically.
 
+### `GET /v1/simulations/:simulation_id`
+Get simulation result.
+
+---
+
+## 7. Policies (Gatekeeper)
+
+### `GET /v1/policies`
+List active War-Room policies.
+
+### `POST /v1/policies`
+Create a new policy (rate limit, chain pause, value threshold, etc.).
+
+**Request**
 ```json
-{ "type": "subscribe", "topics": ["job.*", "signal.created"] }
+{
+  "type": "chain_pause",
+  "chain": "ethereum",
+  "reason": "RPC degradation detected",
+  "duration_seconds": 300
+}
 ```
 
-### 3.1 Topics
+### `DELETE /v1/policies/:policy_id`
+Revoke a policy.
 
-| Topic | Emitted by | Payload |
-|---|---|---|
-| `job.created` | Gateway | Full job |
-| `job.updated` | Core | `{ id, status, prev_status }` |
-| `job.completed` | Closer | `{ id, execution_id, tx_hash }` |
-| `job.failed` | any | `{ id, error }` |
-| `signal.created` | Scout | Signal record |
-| `execution.confirmed` | Closer | `{ id, tx_hash, block_number }` |
-| `policy.tripped` | Gatekeeper | `{ policy_id, reason }` |
+### `POST /v1/policies/kill-switch`
+Global emergency stop — halts all active extraction lanes immediately.
 
-Subscriptions are **scoped to the authenticated user** — Gatekeeper filters frames before fan-out.
-
-### 3.2 Heartbeat
-
-Server sends `{"type":"ping"}` every 25s. Client must reply `{"type":"pong"}` or be disconnected.
-
-## 4. SDK
-
-`packages/sdk` is a typed TypeScript client generated from the OpenAPI document at `apps/api/openapi.yaml`. It is the **only** sanctioned client for in-house frontends, but third parties may call the REST/WS API directly.
-
-```ts
-import { LegionClient } from '@legion/sdk';
-const legion = new LegionClient({ baseUrl, token });
-const job = await legion.jobs.create({ kind: 'swap', chainId: 8453, ... });
-legion.ws.on('job.completed', (e) => { ... });
+**Request**
+```json
+{
+  "operator_id": "01HOP...",
+  "reason": "Suspicious activity detected"
+}
 ```
 
-## 5. Rate Limits
+---
 
-Enforced by Gatekeeper via Redis token buckets. Defaults:
+## 8. RPC & Ghost Lanes (Dispatcher)
 
-| Scope | Limit |
+### `GET /v1/rpc/health`
+Return health of all registered RPC endpoints and ghost lanes.
+
+**Response 200**
+```json
+{
+  "lanes": [
+    {
+      "lane_id": "flashbots_primary",
+      "chain": "ethereum",
+      "status": "healthy",
+      "latency_p95_ms": 87,
+      "slo_breach": false
+    },
+    {
+      "lane_id": "flashbots_backup",
+      "chain": "ethereum",
+      "status": "standby",
+      "latency_p95_ms": null,
+      "slo_breach": false
+    }
+  ]
+}
+```
+
+### `POST /v1/rpc/failover`
+Manually trigger ghost lane failover (Gatekeeper override).
+
+---
+
+## 9. WebSocket Events `/v1/ws`
+
+After auth, subscribe to real-time War-Room events.
+
+### Topics
+
+| Topic | Payload |
 |---|---|
-| Per user, all endpoints | 600 req / min |
-| `POST /v1/jobs` per user | 60 req / min |
-| WS frames per connection | 240 / min |
+| `extraction.status_changed` | `{ extraction_id, old_status, new_status, ts }` |
+| `lane.failover` | `{ lane_id, from_rpc, to_rpc, reason, ts }` |
+| `simulation.complete` | `{ simulation_id, decision, ts }` |
+| `policy.activated` | `{ policy_id, type, chain, ts }` |
+| `kill_switch.triggered` | `{ operator_id, reason, ts }` |
+| `telemetry.scan_complete` | `{ scan_id, wallet, lethality_score, ts }` |
+| `heartbeat` | `{ ts }` every 30s |
 
-`429` responses include `Retry-After` (seconds) and `X-RateLimit-Remaining`.
+### Heartbeat
+Server sends `heartbeat` every 30 seconds. Client must respond within 10s or connection is dropped.
+
+---
+
+## 10. Meta
+
+### `GET /v1/health`
+Engine health check.
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "sentinels": {
+    "mask": "ok",
+    "scout": "ok",
+    "closer": "ok",
+    "dispatcher": "ok",
+    "shadow": "ok",
+    "gatekeeper": "ok"
+  },
+  "redis": "ok",
+  "postgres": "ok"
+}
+```
+
+### `GET /v1/version`
+Return engine version and commit SHA.
+
+---
+
+## 11. Frontend-Agnostic Contract Rules
+
+1. **No frontend-specific endpoints** — all surfaces share the same `/v1/` API.
+2. **No session state in URL** — all auth via `Authorization` header.
+3. **All money values** — returned as both `_raw` (string, wei/lamports) and `_usd` (float) fields.
+4. **All timestamps** — ISO 8601 UTC.
+5. **All IDs** — ULID format (`01H...`) for sortability.
+6. **AssetExtraction events** (not "jobs") — any consumer referring to "jobs" or "signals" in legacy sense is outdated.
+7. **Ghost lane routing** — opaque to frontend; frontend only sees `current_ghost_lane` string, never internal RPC URLs.
+8. **Simulation-first** — Dispatcher MUST simulate before executing any lane with `value_usd > threshold_policy`.

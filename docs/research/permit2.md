@@ -1,52 +1,63 @@
-# Logic-Map: Permit2 (Advanced Approvals)
+# 🛡️ Permit2 "God-Level" Logic-Map — Core Execution Hardening
 
-**Target Repository**: `https://github.com/Uniswap/permit2`
-**Focus**: Time-bound Approvals, Signature-based Transfers, and Batching.
+Target Repository: `https://github.com/Uniswap/permit2`
+Focus: Universal Approvals, Signature-based Transfers, Nonce Bitmaps.
 
-## 🏛 Architecture Overview
+## 1. EIP-712 Domain & TypeHashes
 
-Permit2 is a next-generation approval mechanism that introduces "universal approvals" and time-limited permissions. For Legion Engine, it serves as the core of the **Closer** sentinel's consent logic.
+### 1.1 Domain Separator
+Legion uses the universal Permit2 address: `0x000000000022d473030f116ddee9f6b43ac78ba3`.
 
-- **`AllowanceTransfer`**: Handles time-bound budgets and recurring extraction permissions.
-- **`SignatureTransfer`**: Handles single-use, signature-based asset movements (Permit-style).
-- **EIP-712 Integration**: Uses structured data signing to ensure users know exactly what they are approving.
+```solidity
+bytes32 public constant DOMAIN_SEPARATOR = keccak256(
+    abi.encode(
+        keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)"),
+        keccak256("Permit2"),
+        block.chainid,
+        0x000000000022d473030f116ddee9f6b43ac78ba3
+    )
+);
+```
 
-## 🤝 Core Patterns to Copy
+### 1.2 Structural TypeHashes
+| Type | Value (Hex / String) |
+|------|----------------------|
+| **PermitSingle** | `keccak256("PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)")` |
+| **PermitBatch** | `keccak256("PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)")` |
+| **PermitDetails** | `keccak256("PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)")` |
 
-1. **Extraction Budgets (AllowanceTransfer)**:
-   - Users grant a "budget" to the Legion contract for a specific token and timeframe (e.g., 5000 USDC for 30 days).
-   - **Legion Application**: Enables the **Dispatcher** to perform autonomous "Extraction Lanes" without requiring a signature for every small move.
+## 2. Nonce Bitmap Logic (256-bit Unordered Nonces)
 
-2. **One-Tap Execution (SignatureTransfer)**:
-   - A single EIP-712 signature authorizes a transfer to a specific destination with a precise expiration.
-   - **Legion Application**: The **Closer** sentinel uses this for high-value "Sovereign Syncs" where trust is minimized.
+To prevent replay attacks while allowing parallel extraction, Permit2 uses a mapping: `mapping(address => mapping(uint256 => uint256)) public nonceBitmap`.
 
-3. **Master Approval Pattern**:
-   - The user approves the Permit2 contract once. All subsequent permissions are granted via off-chain signatures.
-   - **Legion Application**: Dramatically improves UX for the **Mask** sentinel while maintaining the security of the **Gatekeeper**.
+### 2.1 Math for Nonce Tracking
+*   **Word Position**: `wordPos = nonce >> 8`
+*   **Bit Position**: `bitPos = nonce & 0xff`
+*   **Check if Used**: `(bitmap[wordPos] >> bitPos) & 1 == 1`
+*   **Update (Mark Used)**: `nonceBitmap[owner][wordPos] |= (1 << bitPos)`
 
-## ✍️ Key Flows
+*Legion Strategy*: The **Dispatcher** maintain a local state of `wordPos` to select a `bitPos` with a zero bit for the next extraction lane to ensure zero revert risk due to nonce collisions.
 
-1. **Approval**: User calls `erc20.approve(permit2, infinity)`.
-2. **Consent**: User signs an EIP-712 message containing `token`, `amount`, `expiration`, and `nonce`.
-3. **Execution**: Legion's **Dispatcher** submits the signature to the Permit2 contract to move assets.
-4. **Validation**: Permit2 verifies the signature, checks for expiration, and ensures the nonce hasn't been used.
+## 3. Real API Signatures (Closer Sentinel)
 
-## 🧬 Data Models
+### 3.1 `permit` (Single)
+```solidity
+struct PermitSingle {
+    PermitDetails details;
+    address spender;
+    uint256 sigDeadline;
+}
+function permit(address owner, PermitSingle calldata permitSingle, bytes calldata signature) external;
+```
 
-- **`PermitSingle`**: Individual token approval.
-  - `details`: (token, amount, expiration, nonce)
-  - `spender`: The Legion engine address.
-  - `sigDeadline`: When the signature itself expires.
-- **`PermitBatch`**: Authorizing multiple token extractions in one signature.
-- **`Allowance`**: On-chain storage of current budget and expiration.
+### 3.2 `transferFrom` (Execution)
+```solidity
+function transferFrom(address from, address to, uint160 amount, address token) external;
+function batchTransferFrom(AllowanceTransfer.AllowanceBatchTransfer[] calldata batch) external;
+```
 
-## 📂 Key File References
-
-- `src/AllowanceTransfer.sol`: Logic for recurring budgets.
-- `src/SignatureTransfer.sol`: Logic for one-time signatures.
-- `src/interfaces/IPermit2.sol`: The master interface for integration.
-- `src/libraries/PermitHash.sol`: Pattern for EIP-712 hash calculation.
-
----
-*Generated for Legion Engine Research*
+## 4. STRICT_RULES
+1. **Nonce Bitmap Integrity**: Never reuse a nonce. Calculate `wordPos` and `bitPos` locally before signing.
+2. **Infinite Approval**: ALWAYS approve `type(uint256).max` to the Permit2 contract once, then manage granular permissions via EIP-712.
+3. **Expiration Hardening**: Set `expiration` to `block.timestamp + 300` (5 mins) for JIT extractions to minimize "Toxic Signature" exposure.
+4. **DOMAIN_SEPARATOR Re-calc**: Re-calculate domain separator if `chainId` changes (cross-chain extraction).

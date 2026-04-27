@@ -8,28 +8,19 @@
     "pnpm": ">=9.0.0"
   },
   "scripts": {
-    "build": "pnpm -r build",
-    "dev": "pnpm -r --parallel dev",
-    "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "clean": "pnpm -r clean && rm -rf node_modules",
+    "dev": "pnpm --filter @legion/api dev",
+    "build": "pnpm --filter './packages/**' build && pnpm --filter './apps/**' build",
+    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "db:migrate": "pnpm --filter @legion/api db:migrate",
     "db:generate": "pnpm --filter @legion/api db:generate"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
-    "typescript": "^5.5.0",
-    "tsx": "^4.16.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "eslint": "^8.57.0",
     "vitest": "^1.6.0",
-    "eslint": "^9.5.0",
-    "prettier": "^3.3.0",
-    "@typescript-eslint/eslint-plugin": "^7.14.0",
-    "@typescript-eslint/parser": "^7.14.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "viem": "^2.17.0"
-    }
+    "prettier": "^3.3.0"
   }
 }

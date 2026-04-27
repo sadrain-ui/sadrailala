@@ -22,7 +22,7 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
-# IDE
+# Editor
 .vscode/
 .idea/
 *.swp
@@ -31,6 +31,9 @@ Thumbs.db
 # Testing
 coverage/
 .vitest/
+
+# Docker
+.docker/
 
 # Misc
 *.pem

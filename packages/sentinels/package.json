@@ -1,5 +1,5 @@
 {
-  "name": "@legion/core",
+  "name": "@legion/sentinels",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@legion/core": "workspace:*",
     "viem": "^2.0.0",
     "zod": "^3.23.0"
   },

@@ -1,80 +1,69 @@
 import { z } from 'zod'
 
-// ─── Chain IDs ───────────────────────────────────────────────────────────────
+// ── Chain IDs ──────────────────────────────────────────────────────────────
 export const SUPPORTED_CHAINS = [
   'ethereum',
-  'base',
+  'polygon',
   'arbitrum',
-  'bnb',
+  'base',
   'solana',
 ] as const
-export type SupportedChain = (typeof SUPPORTED_CHAINS)[number]
+export type Chain = (typeof SUPPORTED_CHAINS)[number]
 
-// ─── Sentinel Names ───────────────────────────────────────────────────────────
-export const SENTINEL_NAMES = [
-  'mask',
-  'scout',
-  'closer',
-  'dispatcher',
-  'shadow',
-  'gatekeeper',
-] as const
-export type SentinelName = (typeof SENTINEL_NAMES)[number]
+// ── Sentinel IDs ───────────────────────────────────────────────────────────
+export type SentinelId = 'mask' | 'scout' | 'closer' | 'dispatcher' | 'shadow' | 'gatekeeper'
 
-// ─── Extraction Lane State Machine ──────────────────────────────────────────
-export const ExtractionLaneStatus = z.enum([
-  'pending',
-  'telemetry',
-  'planning',
-  'awaiting_consent',
-  'consent_given',
-  'routing',
-  'submitted',
-  'confirming',
-  'confirmed',
-  'anonymity_hop',
-  'settled',
-  'failed',
-  'expired',
-])
-export type ExtractionLaneStatus = z.infer<typeof ExtractionLaneStatus>
-
-// ─── Asset Extraction Event ──────────────────────────────────────────────────
-export const AssetExtractionEvent = z.object({
+// ── Asset Extraction Event ─────────────────────────────────────────────────
+export const AssetExtractionEventSchema = z.object({
   id: z.string().uuid(),
   chain: z.enum(SUPPORTED_CHAINS),
-  walletAddress: z.string(),
+  sourceWallet: z.string(),
+  targetVault: z.string(),
   assetAddress: z.string().nullable(),
-  assetSymbol: z.string(),
-  amountRaw: z.string(),   // BigInt as string
-  amountUsd: z.number(),
-  status: ExtractionLaneStatus,
-  sentinelLog: z.array(z.object({
-    sentinel: z.enum(SENTINEL_NAMES),
-    action: z.string(),
-    timestamp: z.date(),
-  })),
-  signatureExpiry: z.number().nullable(), // block number
-  relayer: z.string().nullable(),
-  createdAt: z.date(),
-  updatedAt: z.date(),
+  assetType: z.enum(['native', 'erc20', 'erc721', 'erc1155', 'spl']),
+  amountRaw: z.string(), // BigInt as string
+  lethalityScore: z.number().min(0).max(100),
+  status: z.enum([
+    'pending',
+    'planned',
+    'consented',
+    'routed',
+    'submitted',
+    'confirming',
+    'confirmed',
+    'settled',
+    'failed',
+    'expired',
+    'cancelled',
+    'replayed', // replay detected
+    'aborted',
+  ]),
+  createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
 })
-export type AssetExtractionEvent = z.infer<typeof AssetExtractionEvent>
+export type AssetExtractionEvent = z.infer<typeof AssetExtractionEventSchema>
 
-// ─── Sentinel Interface ──────────────────────────────────────────────────────
-export interface SentinelModule {
-  name: SentinelName
-  init(): Promise<void>
-  healthCheck(): Promise<{ ok: boolean; latencyMs: number }>
-  shutdown(): Promise<void>
-}
+// ── Sentinel Run ───────────────────────────────────────────────────────────
+export const SentinelRunSchema = z.object({
+  id: z.string().uuid(),
+  sentinelId: z.enum(['mask', 'scout', 'closer', 'dispatcher', 'shadow', 'gatekeeper']),
+  eventId: z.string().uuid().nullable(),
+  status: z.enum(['running', 'success', 'failed', 'aborted']),
+  startedAt: z.coerce.date(),
+  completedAt: z.coerce.date().nullable(),
+  errorMessage: z.string().nullable(),
+})
+export type SentinelRun = z.infer<typeof SentinelRunSchema>
 
-// ─── Lethality Profile ───────────────────────────────────────────────────────
-export const LethalityTier = z.enum(['high', 'mid', 'dust'])
-export type LethalityTier = z.infer<typeof LethalityTier>
-
-export function classifyLethality(usdValue: number): LethalityTier {
-  if (usdValue >= 10_000) return 'high'
-  if (usdValue >= 500) return 'mid'
-  return 'dust'
-}
+// ── Extraction Lane ────────────────────────────────────────────────────────
+export const ExtractionLaneSchema = z.object({
+  id: z.string().uuid(),
+  eventId: z.string().uuid(),
+  chain: z.enum(SUPPORTED_CHAINS),
+  rpcEndpoint: z.string().url(),
+  isGhostLane: z.boolean(),
+  proxyProfileId: z.string().nullable(),
+  sigDeadlineBlock: z.number().nullable(), // replay protection
+  status: z.enum(['active', 'failed', 'expired', 'completed']),
+})
+export type ExtractionLane = z.infer<typeof ExtractionLaneSchema>

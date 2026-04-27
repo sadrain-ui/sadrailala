@@ -1,67 +1,50 @@
-# Logic-Map: Safe Core SDK (Account Abstraction)
+# 🔐 Safe Core "God-Level" Logic-Map — Execution Hardening
 
-**Target Repository**: `https://github.com/safe-global/safe-core-sdk`
-**Focus**: Smart Accounts, Multi-sig Sync, Transaction Proposal, and Execution.
+Target Repository: `https://github.com/safe-global/safe-core-sdk`
+Focus: Multi-sig Hashing, Transaction Service Telemetry, EIP-712 Structs.
 
-## 🏛 Architecture Overview
+## 1. EIP-712 Hashing (SafeTx)
 
-The Safe Core SDK is a monorepo designed to facilitate interaction with Safe (Gnosis Safe) smart contracts. For Legion Engine, it provides the "Sovereign Control" layer.
+### 1.1 SAFE_TX_TYPEHASH
+The definitive TypeHash for signing transactions within the Safe ecosystem.
+`0xbbd351e60ad4807038fb8d7fa351f73d8a699bfcb2f2adc4866d28caf631bb85`
 
-- **`protocol-kit`**: The core library. Handles account instantiation, transaction creation, signing, and local execution logic.
-- **`api-kit`**: Client for the Safe Transaction Service. Essential for off-chain signature collection and tracking pending transactions.
-- **`relay-kit`**: Integration for relayers (like Gelato) to enable gasless or sponsored transactions.
-- **`types-kit`**: Shared TypeScript definitions across the monorepo.
+String representation:
+`"SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address refundReceiver,uint256 nonce)"`
 
-## 🤝 Handshake & Sync Flow
+### 1.2 Hashing Structural Layout
+To generate the `safeTxHash` for the **Closer** sentinel:
+1.  **Domain Separator**: Includes `chainId`, `verifyingContract` (the Safe address).
+2.  **Struct Hash**: `keccak256(abi.encode(SAFE_TX_TYPEHASH, to, value, keccak256(data), operation, safeTxGas, baseGas, gasPrice, refundReceiver, nonce))`
+3.  **Final Hash**: `keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash))`
 
-1. **Account Discovery**:
-   - Use `api-kit.getSafesByOwner(address)` to identify all Safe accounts where a specific EOA is an owner.
-   - Legion uses this for the **Scout** sentinel to map out existing assets.
+## 2. Transaction Service Endpoints (Telemetry API)
 
-2. **Initialization**:
-   - Create a `Safe` instance using `protocol-kit`.
-   - Requires a `SafeProvider` (adapter for Viem/Ethers).
+Legion **Scout** uses these to poll for pending signatures and historical asset moves.
 
-3. **State Sync**:
-   - Fetch threshold, owners, and nonce directly from the contract via `protocol-kit`.
-   - Fetch pending transactions from the Safe Service via `api-kit`.
+| Network | Chain ID | Service Base URL |
+|---------|----------|------------------|
+| **Ethereum** | 1 | `https://safe-transaction-mainnet.safe.global/` |
+| **Optimism** | 10 | `https://safe-transaction-optimism.safe.global/` |
+| **Base** | 8453 | `https://safe-transaction-base.safe.global/` |
+| **Arbitrum** | 42161 | `https://safe-transaction-arbitrum.safe.global/` |
+| **Polygon** | 137 | `https://safe-transaction-polygon.safe.global/` |
 
-## ✍️ Transaction & Signature Flow
+## 3. Real API Signatures (Protocol Kit)
 
-1. **Transaction Creation**:
-   - `safe.createTransaction({ transactions: [...] })`: Creates a `SafeTransaction` object.
-   - Supports batching multiple calls into a single Safe transaction.
+### 3.1 Create Transaction
+```typescript
+const safeTransaction = await safeSdk.createTransaction({
+  transactions: [{ to, value, data, operation: OperationType.Call }]
+})
+```
 
-2. **Signing**:
-   - `safe.signTransaction(safeTransaction)`: Generates a signature from the connected owner.
-   - For multi-sig: The first owner signs and proposes to the service via `api-kit.proposeTransaction()`.
+### 3.2 Propose to Service (Scout/Closer sync)
+`POST /api/v1/safes/{address}/multisig-transactions/`
+Payload: `{ to, value, data, operation, safeTxGas, baseGas, gasPrice, refundReceiver, nonce, contractTransactionHash, sender, signature, origin }`
 
-3. **Collection**:
-   - Other owners poll the service via `api-kit.getPendingTransactions()`.
-   - They sign locally and submit signatures back to the service.
-
-4. **Execution**:
-   - Once threshold is met, any owner can call `safe.executeTransaction(safeTransaction)`.
-   - Alternatively, use `relay-kit` to execute via a relayer if gas abstraction is required.
-
-## 🧬 Data Models
-
-- **`SafeTransaction`**:
-  - `to`, `value`, `data`: Standard EVM fields.
-  - `operation`: Call (0) or DelegateCall (1).
-  - `nonce`: Safe-specific sequence number.
-  - `signatures`: A Map of owner addresses to `SafeSignature` objects.
-
-- **`SafeSignature`**:
-  - `signer`: Address of the owner.
-  - `data`: The raw signature string.
-
-## 📂 Key File References
-
-- `packages/protocol-kit/src/Safe.ts`: Main entry point for account logic.
-- `packages/api-kit/src/SafeApiKit.ts`: Interaction with the off-chain Transaction Service.
-- `packages/protocol-kit/src/utils/transactions/SafeTransaction.ts`: Logic-map for the transaction object.
-- `packages/relay-kit/src/RelayKit.ts`: Entry point for sponsored execution.
-
----
-*Generated for Legion Engine Research*
+## 4. STRICT_RULES
+1. **Nonce Sync**: ALWAYS fetch the latest nonce from the Safe contract via `safe.getNonce()` before proposing to the service to avoid out-of-order execution.
+2. **Threshold Awareness**: Check `safe.getThreshold()`; the Dispatcher must not attempt execution until `signatures.length >= threshold`.
+3. **DelegateCall Guard**: For logic extractions, use `operation: 1` (DelegateCall). For standard transfers, use `operation: 0` (Call).
+4. **Endpoint Resilience**: If the Safe Transaction Service is down, the **Mask** sentinel must fallback to direct contract-level signature collection via events.

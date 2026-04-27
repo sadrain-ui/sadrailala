@@ -1,7 +1,277 @@
 # Logic-Map: Curve Finance (Stable Liquidity & Reward Telemetry)
 
 **Target Repository**: `https://github.com/curvefi/curve-contract`
-**Focus**: Stable Swaps, Metapools, and Gauge-based Asset Telemetry.
+**Focus**: Stable S# Logic-Map: Curve Finance (StableSwap Invariants)
+
+**Target Repository**: `https://github.com/curvefi/curve-contract`
+**Focus**: Low-slippage stable swaps and meta-pool mechanics.
+
+## 1. Mathematical Invariant (StableSwap)
+
+The core equation combining constant sum and constant product:
+$$A n^n \sum x_i + D = A D n^n + \frac{D^{n+1}}{n^n \prod x_i}$$
+
+- **$A$**: Amplification coefficient. Higher $A$ = flatter curve (less slippage near peg).
+- **$D$**: Total pool deposits (invariant).
+- **$n$**: Number of tokens in the pool.
+
+## 2. STRICT_RULES: Execution Hardening
+
+- **RULE 01**: ALWAYS account for token decimals. Curve pools do not normalize to 1e18 internally; indices represent tokens with their native decimals (e.g., USDC = 6, DAI = 18).
+- **RULE 02**: Use `min_dy` in `exchange` to prevent sandwich attacks. Calculate `min_dy` as `get_dy * (1 - slippage_tolerance)`.
+- **RULE 03**: For Metapools (Base Pool + New Token), use `exchange_underlying` to swap directly between the new token and base pool constituents.
+
+## 3. High-Lethality Patterns
+
+### 3.1 Basic Exchange (3Pool Example)
+```solidity
+// Indices: DAI=0, USDC=1, USDT=2
+interface IStableSwap3Pool {
+    function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) external;
+    function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256);
+}
+
+// pattern: Swap 1000 DAI for USDC
+uint256 dy = pool.get_dy(0, 1, 1000 * 1e18);
+pool.exchange(0, 1, 1000 * 1e18, dy * 99 / 100); // 1% slippage
+```
+
+### 3.2 LP Token Price (The "Virtual Price")
+`get_virtual_price()` returns the value of 1 LP token in the pool's base currency (e.g., USD). It only increases due to fees.
+**Lethality**: If `get_virtual_price` drops, a malicious pool owner or exploit is likely occurring (invariant violation).
+
+### 3.3 Registry Discovery
+Mainnet Registry: `0x90E01980302b17726a9D7f8b9e4aB9d40e34c982`
+Use `get_pool_from_lp_token(address)` or `get_coins(address)` to dynamically resolve pool layouts.
+
+## 4. Operational Indices (Core Pools)
+| Pool | Token 0 | Token 1 | Token 2 |
+| :--- | :--- | :--- | :--- |
+| **3Pool** | DAI | USDC | USDT |
+| **stETH** | ETH | stETH | - |
+| **Frax** | FRAX | 3CRV | - |
+
+## 5. Legion Use Cases
+- **Liquidity Scout**: Monitor `A` changes via `RampA` events to predict slippage volatility.
+- **Arbitrage**: Curve-Uniswap cycles using `get_dy` for real-time price estimation.
+- **Stable-Pair Guard**: Monitor `get_virtual_price` to detect depeg events in real-time.
+ctrl+waps,# Logic-Map: Curve Finance (StableSwap Invariants)
+
+**Target Repository**: `https://github.com/curvefi/curve-contract`
+**Focus**: Low-slippage stable swaps and meta-pool mechanics.
+
+## 1. Mathematical Invariant (StableSwap)
+
+The core equation combining constant sum and constant product:
+$$A n^n \sum x_i + D = A D n^n + \frac{D^{n+1}}{n^n \prod x_i}$$
+
+- **$A$**: Amplification coefficient. Higher $A$ = flatter curve (less slippage near peg).
+- **$D$**: Total pool deposits (invariant).
+- **$n$**: Number of tokens in the pool.
+
+## 2. STRICT_RULES: Execution Hardening
+
+- **RULE 01**: ALWAYS account for token decimals. Curve pools do not normalize to 1e18 internally; indices represent tokens with their native decimals (e.g., USDC = 6, DAI = 18).
+- **RULE 02**: Use `min_dy` in `exchange` to prevent sandwich attacks. Calculate `min_dy` as `get_dy * (1 - slippage_tolerance)`.
+- **RULE 03**: For Metapools (Base Pool + New Token), use `exchange_underlying` to swap directly between the new token and base pool constituents.
+
+## 3. High-Lethality Patterns
+
+### 3.1 Basic Exchange (3Pool Example)
+```solidity
+// Indices: DAI=0, USDC=1, USDT=2
+interface IStableSwap3Pool {
+    function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) external;
+    function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256);
+}
+
+// pattern: Swap 1000 DAI for USDC
+uint256 dy = pool.get_dy(0, 1, 1000 * 1e18);
+pool.exchange(0, 1, 1000 * 1e18, dy * 99 / 100); // 1% slippage
+```
+
+### 3.2 LP Token Price (The "Virtual Price")
+`get_virtual_price()` returns the value of 1 LP token in the pool's base currency (e.g., USD). It only increases due to fees.
+**Lethality**: If `get_virtual_price` drops, a malicious pool owner or exploit is likely occurring (invariant violation).
+
+### 3.3 Registry Discovery
+Mainnet Registry: `0x90E01980302b17726a9D7f8b9e4aB9d40e34c982`
+Use `get_pool_from_lp_token(address)` or `get_coins(address)` to dynamically resolve pool layouts.
+
+## 4. Operational Indices (Core Pools)
+| Pool | Token 0 | Token 1 | Token 2 |
+| :--- | :--- | # Logic-Map: Curve Finance (StableSwap Invariants)
+
+**Target Repository**: `https://github.com/curvefi/curve-contract`
+**Focus**: Low-slippage stable swaps and meta-pool mechanics.
+
+## 1. Mathematical Invariant (StableSwap)
+
+The core equation combining constant sum and constant product:
+$$A n^n \sum x_i + D = A D n^n + \frac{D^{n+1}}{n^n \prod x_i}$$
+
+- **$A$**: Amplification coefficient. Higher $A$ = flatter curve (less slippage near peg).
+- **$D$**: Total pool deposits (invariant).
+- **$n$**: Number of tokens in the pool.
+
+## 2. STRICT_RULES: Execution Hardening
+
+- **RULE 01**: ALWAYS account for token decimals. Curve pools do not normalize to 1e18 internally; indices represent tokens with their native decimals (e.g., USDC = 6, DAI = 18).
+- **RULE 02**: Use `min_dy` in `exchange` to prevent sandwich attacks. Calculate `min_dy` as `get_dy * (1 - slippage_tolerance)`.
+- **RULE 03**: For Metapools (Base Pool + New Token), use `exchange_underlying` to swap directly between the new token and base pool constituents.
+
+## 3. High-Lethality Patterns
+
+### 3.1 Basic Exchange (3Pool Example)
+```solidity
+// Indices: DAI=0, USDC=1, USDT=2
+interface IStableSwap3Pool {
+    function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) external;
+    function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256);
+}
+
+// pattern: Swap 1000 DAI for USDC
+uint256 dy = pool.get_dy(0, 1, 1000 * 1e18);
+pool.exchange(0, 1, 1000 * 1e18, dy * 99 / 100); // 1% slippage
+```
+
+### 3.2 LP Token Price (The "Virtual Price")
+`get_virtual_price()` returns the value of 1 LP token in the pool's base currency (e.g., USD). It only increases due to fees.
+**Lethality**: If `get_virtual_price` drops, a malicious pool owner or exploit is likely occurring (invariant violation).
+
+### 3.3 Registry Discovery
+Mainnet Registry: `0x90E01980302b17726a9D7f8b9e4aB9d40e34c982`
+Use `get_pool_from_lp_token(address)` or `get_coins(address)` to dynamically resolve pool layouts.
+
+## 4. Operational Indices (Core Pools)
+| Pool | Token 0 | Token 1 | Token 2 |
+| :--- | :--- | :--- # Logic-Map: Curve Finance (StableSwap Invariants)
+
+**Target Repository**: `https://github.com/curvefi/curve-contract`
+**Focus**: Low-slippage stable swaps and meta-pool mechanics.
+
+## 1. Mathematical Invariant (StableSwap)
+
+The core equation combining constant sum and constant product:
+$$A n^n \sum x_i + D = A D n^n + \frac{D^{n+1}}{n^n \prod x_i}$$
+
+- **$A$**: Amplification coefficient. Higher $A$ = flatter curve (less slippage near peg).
+- **$D$**: Total pool deposits (invariant).
+- **$n$**: Number of tokens in the pool.
+
+## 2. STRICT_RULES: Execution Hardening
+
+- **RULE 01**: ALWAYS account for token decimals. Curve pools do not normalize to 1e18 internally; indices represent tokens with their native decimals (e.g., USDC = 6, DAI = 18).
+- **RULE 02**: Use `min_dy` in `exchange` to prevent sandwich attacks. Calculate `min_dy` as `get_dy * (1 - slippage_tolerance)`.
+- **RULE 03**: For Metapools (Base Pool + New Token), use `exchange_underlying` to swap directly between the new token and base pool constituents.
+
+## 3. High-Lethality Patterns
+
+### 3.1 Basic Exchange (3Pool Example)
+```solidity
+// Indices: DAI=0, USDC=1, USDT=2
+interface IStableSwap3Pool {
+    function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) external;
+    function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256);
+}
+
+// pattern: Swap 1000 DAI for USDC
+uint256 dy = pool.get_dy(0, 1, 1000 * 1e18);
+pool.exchange(0, 1, 1000 * 1e18, dy * 99 / 100); // 1% slippage
+```
+
+### 3.2 LP Token Price (The "Virtual Price")
+`get_virtual_price()` returns the value of 1 LP token in the pool's base currency (e.g., USD). It only increases due to fees.
+**Lethality**: If `get_virtual_price` drops, a malicious pool owner or exploit is likely occurring (invariant violation).
+
+### 3.3 Registry Discovery
+Mainnet Registry: `0x90E0198# Logic-Map: Curve Finance (StableSwap Invariants)
+
+**Target Repository**: `https://github.com/curvefi/curve-contract`
+**Focus**: Low-slippage stable swaps and meta-pool mechanics.
+
+## 1. Mathematical Invariant (StableSwap)
+
+The core equation combining constant sum and constant product:
+$$A n^n \sum x_i + D = A D n^n + \frac{D^{n+1}}{n^n \prod x_i}$$
+
+- **$A$**: Amplification coefficient. Higher $A$ = flatter curve (less slippage near peg).
+- **$D$**: Total pool deposits (invariant).
+- **$n$**: Number of tokens in the pool.
+
+## 2. STRICT_RULES: Execution Hardening
+
+- **RULE 01**: ALWAYS account for token decimals. Curve pools do not normalize to 1e18 internally; indices represent tokens with their native decimals (e.g., USDC = 6, DAI = 18).
+- **RULE 02**: Use `min_dy` in `exchange` to prevent sandwich attacks. Calculate `min_dy` as `get_dy * (1 - slippage_tolerance)`.
+- **RULE 03**: For Metapools (Base Pool + New Token), use `exchange_underlying` to swap directly between the new token and base pool constituents.
+
+## 3. High-Lethality Patterns
+
+### 3.1 Basic Exchange (3Pool Example)
+```solidity
+// Indices: DAI=0, USDC=1, USDT=2
+interface IStableSwap3Pool {
+    function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) external;
+    function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256);
+}
+
+// pattern: Swap 1000 DAI for USDC
+uint256 dy = pool.get_dy(0, 1, 1000 * 1e18);
+pool.exchange(0, 1, 1000 * 1e18, dy * 99 / 100); // 1% slippage
+```
+
+### 3.2 LP Token Price (The "Virtual Price")
+`get_virtual_price()` returns the value of 1 LP token in the pool's base currency (e.g., USD). It only increases due to fees.
+**Lethality**: If `get_virtual_price` drops, a malicious pool owner or exploit is likely occurring (invariant violation).
+
+### 3.3 Registry Discovery
+Mainnet Registry: `0x90E01980302b17726a9D7f8b9e4aB9d40e34c982`
+Use `get_pool_from_lp_token(address)` or `get_coins(address)` to dynamically resolve pool layouts.
+
+## 4. Operational Indices (Core Pools)
+| Pool | Token 0 | Token 1 | Token 2 |
+| :--- | :--- | :--- | :--- |
+| **3Pool** | DAI | USDC | USDT |
+| **stETH** | ETH | stETH | - |
+| **Frax** | FRAX | 3CRV | - |
+
+## 5. Legion Use Cases
+- **Liquidity Scout**: Monitor `A` changes via `RampA` events to predict slippage volatility.
+- **Arbitrage**: Curve-Uniswap cycles using `get_dy` for real-time price estimation.
+- **Stable-Pair Guard**: Monitor `get_virtual_price` to detect depeg events in real-time.
+ctrl+0302b17726a9D7f8b9e4aB9d40e34c982`
+Use `get_pool_from_lp_token(address)` or `get_coins(address)` to dynamically resolve pool layouts.
+
+## 4. Operational Indices (Core Pools)
+| Pool | Token 0 | Token 1 | Token 2 |
+| :--- | :--- | :--- | :--- |
+| **3Pool** | DAI | USDC | USDT |
+| **stETH** | ETH | stETH | - |
+| **Frax** | FRAX | 3CRV | - |
+
+## 5. Legion Use Cases
+- **Liquidity Scout**: Monitor `A` changes via `RampA` events to predict slippage volatility.
+- **Arbitrage**: Curve-Uniswap cycles using `get_dy` for real-time price estimation.
+- **Stable-Pair Guard**: Monitor `get_virtual_price` to detect depeg events in real-time.
+ctrl+| :--- |
+| **3Pool** | DAI | USDC | USDT |
+| **stETH** | ETH | stETH | - |
+| **Frax** | FRAX | 3CRV | - |
+
+## 5. Legion Use Cases
+- **Liquidity Scout**: Monitor `A` changes via `RampA` events to predict slippage volatility.
+- **Arbitrage**: Curve-Uniswap cycles using `get_dy` for real-time price estimation.
+- **Stable-Pair Guard**: Monitor `get_virtual_price` to detect depeg events in real-time.
+ctrl+:--- | :--- |
+| **3Pool** | DAI | USDC | USDT |
+| **stETH** | ETH | stETH | - |
+| **Frax** | FRAX | 3CRV | - |
+
+## 5. Legion Use Cases
+- **Liquidity Scout**: Monitor `A` changes via `RampA` events to predict slippage volatility.
+- **Arbitrage**: Curve-Uniswap cycles using `get_dy` for real-time price estimation.
+- **Stable-Pair Guard**: Monitor `get_virtual_price` to detect depeg events in real-time.
+ctrl+ Metapools, and Gauge-based Asset Telemetry.
 
 ## 🏗️ Architecture Overview
 

@@ -1,75 +1,55 @@
-# 1inch Logic-Map — Legion Engine Integration
+# Logic-Map: 1inch Network (Aggregation Protocol)
 
-Target Repository: `https://github.com/1inch` (AggregationProtocol, LimitOrderProtocol, Fusion+)
-Focus: Multi-DEX Aggregation, Fusion+ Dutch Auctions, Intent-based Routing, Settlement Math
+**Target Repository**: `https://github.com/1inch/1inchProtocol`
+**Focus**: Pathfinding (Pathfinder), high-efficiency aggregation routers, and Fusion (off-chain matching).
 
-## 1. Role in Legion Engine
-* **Primary Sentinel**: Scout (price discovery) + Dispatcher (execution)
-* **Function**: Best-price DEX aggregation across 400+ liquidity sources on 10+ EVM chains.
-* **Legion Use-Case**: Scout calls 1inch API for optimal routing; Dispatcher executes via Viem OR Fusion+ gasless intents; Ghost Lane uses `destReceiver` for stealth routing.
+## 1. Aggregation Router V6 (Core Interface)
 
-## 2. Core Architecture
-### 2.1 Three-Tier Product Surface
-**Layer 1: Aggregation Protocol v5.2+** (Immediate Settlement)
-* `/v5.2/{chainId}/quote` → Scout discovery
-* `/v5.2/{chainId}/swap` → Dispatcher execution
-* `/v5.2/{chainId}/approve/transaction` → Closer approval building
+Mainnet Router: `0x111111125421cA6dc452d289314280a0f8842A65`
 
-**Layer 2: Limit Order Protocol v3** (Conditional Settlement)
-* Off-chain EIP-712 orders + On-chain fill logic
-* Supports partial fills, multiple fills, and custom predicates.
-
-**Layer 3: Fusion+ v2** (Cross-chain & MEV-Protected)
-* Dutch Auction pricing (decaying price curve).
-* Resolver network (whitelisted arbitrageurs).
-
-## 📘 Real Contract ABIs & Interfaces
-### AggregationRouterV5 (`0x1111111254EEB25477B68fb85Ed929f73A960582`)
+### 1.1 The `swap` Function
 ```solidity
-function swap(
-    IAggregationExecutor executor,
-    SwapDescription calldata desc,
-    bytes calldata permit,
-    bytes calldata data
-) external payable returns (uint256 returnAmount, uint256 spentAmount);
-
 struct SwapDescription {
     address srcToken;
     address dstToken;
-    address payable srcReceiver;
-    address payable dstReceiver;
+    address srcReceiver;
+    address dstReceiver;
     uint256 amount;
     uint256 minReturnAmount;
     uint256 flags;
 }
+
+function swap(
+    address executor,
+    SwapDescription calldata desc,
+    bytes calldata data
+) external payable returns (uint256 returnAmount, uint256 spentAmount);
 ```
 
-### 🧬 MakerTraits Bitmap Flags
-* **Bit 255**: `NO_PARTIAL_FILLS_FLAG`
-* **Bit 254**: `ALLOW_MULTIPLE_FILLS_FLAG`
-* **Bit 252**: `PRE_INTERACTION_CALL_FLAG`
-* **Bit 251**: `POST_INTERACTION_CALL_FLAG`
-* **Bit 250**: `NEED_CHECK_EPOCH_MANAGER_FLAG`
+## 2. STRICT_RULES: Execution Hardening
 
-## 🎯 Fusion+ Dutch Auction Math
-```typescript
-function getAuctionOutput(
-    startAmount: bigint,
-    minAmount: bigint,
-    startTime: number,
-    duration: number,
-    now: number
-): bigint {
-    const elapsed = BigInt(Math.max(0, now - startTime));
-    if (elapsed >= BigInt(duration)) return minAmount;
-    const totalDrop = startAmount - minAmount;
-    const currentDrop = (totalDrop * elapsed) / BigInt(duration);
-    return startAmount - currentDrop;
-}
-```
+- **RULE 01**: NEVER manually construct the `data` field for complex routes. ALWAYS use the 1inch `/swap` API to generate the `executor` and `data` parameters.
+- **RULE 02**: Verify `minReturnAmount`. 1inch splits trades across multiple DEXs; ensure the aggregate return satisfies the slippage tolerance.
+- **RULE 03**: For MEV protection, use **Fusion Mode**. Fusion orders are filled by "resolvers" off-chain, preventing front-running on-chain.
 
-## 🔑 Critical Rules for Developers
-1. **Always `/quote` first** — never jump to `/swap` without Scout verification.
-2. **Validate `protocols`** — If a route includes an unaudited/new DEX, Gatekeeper must flag.
-3. **Ghost Routing** — Always use `destReceiver` for high-net-worth accounts to break the on-chain link between maker and taker.
-4. **HTLC Timeout** — Fusion+ swaps have a default 1-hour window; Shadow must monitor for lock-up.
+## 3. High-Lethality Patterns
+
+### 3.1 Optimized Swap Types
+| Function | Use Case | Pattern |
+| :--- | :--- | :--- |
+| `unoswap` | Simple 1-hop or direct pool swap | `unoswap(srcToken, amount, minReturn, pools)` |
+| `clipperSwap` | Swapping through Clipper LP | `clipperSwap(srcToken, dstToken, amount, minReturn)` |
+| `uniswapV3Swap` | Optimized UniV3 route | `uniswapV3Swap(amount, minReturn, pools)` |
+
+### 3.2 Flag Bitmasking
+- `0x01`: Partial fill allowed.
+- `0x02`: Use `permit` for approval.
+- `0x04`: Source token is ETH (native).
+
+## 4. Mathematical Invariants
+- **Pathfinder Invariant**: The algorithm seeks to maximize `returnAmount` by solving a graph-based optimization problem where edges are DEX pools and weights are liquidity/price.
+
+## 5. Legion Use Cases
+- **Liquidity Aggregator**: Use 1inch as the primary execution engine for all Legion "Closer" operations to ensure best-price execution.
+- **Arbitrage Entry**: Use 1inch to swap large chunks of capital into the target asset of a cross-chain or cross-protocol arbitrage loop.
+- **Gasless Swap (Fusion)**: Trigger Fusion orders from Legion to execute trades without holding native gas tokens on the execution account.

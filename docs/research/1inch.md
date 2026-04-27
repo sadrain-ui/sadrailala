@@ -1,213 +1,193 @@
 # 1inch Logic-Map — Legion Engine Integration
 
-## 1. Role in Legion Engine
-- **Primary Sentinel**: Scout (price discovery) + Dispatcher (swap routing)
-- **Function**: Best-price DEX aggregation across 400+ liquidity sources on EVM chains
-- **Legion Use-Case**: Scout calls 1inch Aggregation API to find optimal swap routes; Dispatcher executes via Viem `sendTransaction`
+**Target Repository**: `https://github.com/1inch` (AggregationProtocol, LimitOrderProtocol, Fusion+)  
+**Focus**: Multi-DEX Aggregation, Fusion+ Dutch Auctions, Intent-based Routing, Settlement Math
 
----
+## 1. Role in Legion Engine
+- **Primary Sentinel**: Scout (price discovery) + Dispatcher (execution)
+- **Function**: Best-price DEX aggregation across 400+ liquidity sources on 10+ EVM chains
+- **Legion Use-Case**: Scout calls 1inch API for optimal routing; Dispatcher executes via Viem OR Fusion+ gasless intents; Ghost Lane uses `destReceiver` for stealth routing.
 
 ## 2. Core Architecture
 
-### 2.1 Two API Surfaces
-```
-1inch Aggregation API v5.2+
-├── /quote    → price estimation, no wallet required
-├── /swap     → calldata + tx params for on-chain execution
-├── /approve  → check/build token approval tx
-└── /tokens   → supported token list per chain
+### 2.1 Three-Tier Product Surface
 
-1inch Fusion SDK (limit orders)
-├── FusionSDK.getQuote()       → gasless quote
-├── FusionSDK.placeOrder()     → signed EIP-712 order
-└── FusionSDK.getOrderStatus() → poll resolution
-```
+**Layer 1: Aggregation Protocol v5.2+** (Immediate Settlement)
+- `/v5.2/{chainId}/quote` → Scout discovery
+- `/v5.2/{chainId}/swap` → Dispatcher execution (calldata generation)
+- `/v5.2/{chainId}/approve/transaction` → Closer approval building
 
-### 2.2 Quote vs Swap Separation (Legion Pattern)
-```typescript
-// Scout phase — read-only, no side effects
-async function getQuote(params: QuoteParams): Promise<Quote> {
-  const res = await fetch(`${INCH_API}/quote?${toQueryString(params)}`)
-  return res.json() // { toAmount, estimatedGas, protocols }
-}
+**Layer 2: Limit Order Protocol v3** (Conditional Settlement)
+- Off-chain EIP-712 orders + On-chain fill logic
+- Supports partial fills, multiple fills, and custom predicates (conditions)
 
-// Dispatcher phase — only after Closer + Gatekeeper approval
-async function buildSwapTx(params: SwapParams): Promise<SwapTx> {
-  const res = await fetch(`${INCH_API}/swap?${toQueryString(params)}`)
-  return res.json() // { tx: { to, data, value, gas, gasPrice } }
-}
-```
+**Layer 3: Fusion+ v2** (Cross-chain & MEV-Protected)
+- Dutch Auction pricing (decaying price curve)
+- Resolver network (whitelisted arbitrageurs)
+- Atomic cross-chain swaps via hashed-time-lock-escrows (HTLC)
 
----
+## 📘 Real Contract ABIs & Interfaces
 
-## 3. Key Data Models
+### AggregationRouterV5 (`0x1111111254EEB25477B68fb85Ed929f73A960582`)
 
-### 3.1 QuoteParams
-```typescript
-type QuoteParams = {
-  fromTokenAddress: Address  // checksummed EVM address
-  toTokenAddress: Address
-  amount: string             // in fromToken wei units
-  chainId: number
-  protocols?: string         // comma-separated protocol list
-  fee?: number               // 0-3% referral fee in bps/100
-  gasLimit?: number
-  connectorTokens?: string   // intermediate routing tokens
-  complexityLevel?: 0|1|2|3  // route complexity
-  mainRouteParts?: number    // split route count
+```solidity
+// High-level swap entry point
+function swap(
+  IAggregationExecutor executor,
+  SwapDescription calldata desc,
+  bytes calldata permit,
+  bytes calldata data
+) external payable returns (uint256 returnAmount, uint256 spentAmount);
+
+struct SwapDescription {
+  IERC20 srcToken;
+  IERC20 dstToken;
+  address payable srcReceiver;
+  address payable dstReceiver; // Legion Vault / Ghost Lane
+  uint256 amount;
+  uint256 minReturnAmount;
+  uint256 flags; // bitmask for partial fills / etc.
 }
 ```
 
-### 3.2 SwapParams (extends QuoteParams)
-```typescript
-type SwapParams = QuoteParams & {
-  fromAddress: Address       // user wallet — tx sender
-  slippage: number           // 0.1 to 50 (percent)
-  referrerAddress?: Address
-  disableEstimate?: boolean  // skip on-chain simulation
-  allowPartialFill?: boolean
-  destReceiver?: Address     // for vault routing (Ghost Lane)
+### LimitOrderProtocol v3 (Fusion Core)
+
+```solidity
+// Fill maker order with taker funds
+function fillOrder(
+  Order memory order,
+  bytes calldata signature,
+  bytes calldata interactionData, // call to resolver
+  uint256 makingAmount,
+  uint256 takingAmount,
+  uint256 skipPermitAndThresholdAmount // packed 
+) external payable returns (uint256, uint256);
+
+struct Order {
+  uint256 salt;
+  address maker;
+  address receiver;
+  address makerAsset;
+  address takerAsset;
+  uint256 makingAmount;
+  uint256 takingAmount;
+  MakerTraits makerTraits; // BITMAP FLAGS (see below)
 }
 ```
 
-### 3.3 SwapTx Response
+### 🧬 MakerTraits Bitmap (Ultra-Deep Logic)
+MakerTraits is a `uint256` bitmap used for gas-efficient conditional logic:
+- **Bit 255**: `NO_PARTIAL_FILLS_FLAG` (If set, order must be filled in one go)
+- **Bit 254**: `ALLOW_MULTIPLE_FILLS_FLAG` (If set, order remains active after partial fill)
+- **Bit 252**: `PRE_INTERACTION_CALL_FLAG` (Triggers callback BEFORE funds move)
+- **Bit 251**: `POST_INTERACTION_CALL_FLAG` (Triggers callback AFTER funds move)
+- **Bit 250**: `NEED_CHECK_EPOCH_MANAGER_FLAG` (Enables order cancellation by epoch)
+- **Bit 247**: `UNWRAP_WETH_FLAG` (Auto-unwrap to native ETH)
+
+## 🎯 Fusion+ Dutch Auction Math
+
+Resolvers compete based on a decaying price curve. The profit for the resolver decreases as time passes.
+
 ```typescript
-type SwapTx = {
-  fromToken: TokenInfo
-  toToken: TokenInfo
-  toAmount: string           // actual output amount
-  tx: {
-    from: Address
-    to: Address              // 1inch router contract
-    data: Hex                // encoded swap calldata
-    value: string            // ETH value in wei
-    gas: number
-    gasPrice: string
-  }
+/**
+ * Linear Price Decay Formula
+ * @param startAmount Max tokens maker wants (Best price)
+ * @param minAmount Min tokens maker will accept (Stop-loss)
+ * @param startTime Start of auction
+ * @param duration Auction length (e.g. 180s)
+ */
+function getAuctionOutput(
+  startAmount: bigint,
+  minAmount: bigint,
+  startTime: number,
+  duration: number,
+  now: number
+): bigint {
+  const elapsed = BigInt(Math.max(0, now - startTime))
+  if (elapsed >= BigInt(duration)) return minAmount
+  
+  const totalDrop = startAmount - minAmount
+  const currentDrop = (totalDrop * elapsed) / BigInt(duration)
+  
+  return startAmount - currentDrop
 }
 ```
 
----
+## 📊 API Integration Patterns
 
-## 4. Critical Integration Patterns
-
-### 4.1 Token Approval Flow
+### 1. Scout Discovery (Quote)
 ```typescript
-// 1. Check existing allowance
-const allowance = await publicClient.readContract({
-  address: tokenAddress,
-  abi: erc20Abi,
-  functionName: 'allowance',
-  args: [userAddress, INCH_ROUTER_ADDRESS]
-})
+const INCH_API = 'https://api.1inch.dev/swap/v5.2/1' // Ethereum
 
-// 2. If insufficient, build approval tx via API
-const approvalRes = await fetch(`${INCH_API}/approve/transaction?tokenAddress=${token}&amount=${amount}`)
-const approvalTx = await approvalRes.json()
-
-// 3. Send approval via Dispatcher (Viem)
-const approveTxHash = await walletClient.sendTransaction({
-  to: approvalTx.to,
-  data: approvalTx.data,
-  value: 0n
-})
-await publicClient.waitForTransactionReceipt({ hash: approveTxHash })
-```
-
-### 4.2 Slippage + Output Validation (Shadow)
-```typescript
-function validateSwapOutput(quote: Quote, swapTx: SwapTx, slippage: number): boolean {
-  const minOutput = BigInt(quote.toAmount) * BigInt(1000 - slippage * 10) / 1000n
-  const actualOutput = BigInt(swapTx.toAmount)
-  return actualOutput >= minOutput
+async function getLegionRoute(from: Address, to: Address, amount: string) {
+  const params = new URLSearchParams({
+    src: from,
+    dst: to,
+    amount: amount,
+    includeTokensInfo: 'true',
+    includeProtocols: 'true',
+    complexityLevel: '2' // Deep routing
+  })
+  
+  const res = await fetch(`${INCH_API}/quote?${params}`)
+  return res.json() // returns { toAmount, protocols, gas }
 }
 ```
 
-### 4.3 Fusion (Gasless) Order Pattern
+### 2. Dispatcher Ghost Lane (Stealth Swap)
 ```typescript
-const sdk = new FusionSDK({ url: FUSION_URL, network: chainId, authKey: API_KEY })
-const quote = await sdk.getQuote({ fromTokenAddress, toTokenAddress, amount, walletAddress })
-const { order, quoteId } = quote.createFusionOrder()
-const signature = await walletClient.signTypedData(order.getTypedData())
-await sdk.submitOrder(order, quoteId, signature)
-```
-
----
-
-## 5. Legion Sentinel Matrix
-
-| Sentinel | 1inch Usage |
-|---|---|
-| Scout | `GET /quote` — price discovery, no wallet, parallel calls across chains |
-| Gatekeeper | compare `toAmount` vs Lethality threshold, reject if below min viable output |
-| Closer | build Permit2 signature OR ERC-20 approve based on token standard |
-| Dispatcher | `GET /swap` → `walletClient.sendTransaction(swapTx.tx)` via Viem |
-| Shadow | `simulateTransaction` on swapTx before broadcast, catch reverts |
-| Mask | if fromAddress = Safe, wrap sendTransaction in Safe multisig proposal |
-
----
-
-## 6. Chain Support Matrix
-
-```
-Chain          | chainId | Aggregation | Fusion
-Ethereum       | 1       | ✅          | ✅
-BNB Chain      | 56      | ✅          | ✅
-Polygon        | 137     | ✅          | ✅
-Optimism       | 10      | ✅          | ❌
-Arbitrum       | 42161   | ✅          | ❌
-Avalanche      | 43114   | ✅          | ❌
-Base           | 8453    | ✅          | ❌
-Gnosis         | 100     | ✅          | ❌
-```
-
----
-
-## 7. Key Patterns to Copy
-
-1. Always call `/quote` first (Scout), never jump to `/swap` without Gatekeeper approval
-2. `disableEstimate: false` by default — let 1inch simulate before building calldata
-3. Use `destReceiver` param to route swap output directly to vault (Ghost Lane pattern)
-4. Cache token list per chain at startup, refresh every 5 minutes (Sovereign Sync)
-5. For Fusion orders: sign EIP-712 typed data, never raw personal_sign
-6. Rate limit: 1 req/sec on free tier; use API key for 10 req/sec
-7. Always validate `toAmount` post-swap against pre-swap `quote.toAmount` (Shadow check)
-
----
-
-## 8. Router Contract Addresses
-
-```typescript
-const INCH_ROUTER_V5: Record<number, Address> = {
-  1:     '0x1111111254EEB25477B68fb85Ed929f73A960582', // Ethereum
-  56:    '0x1111111254EEB25477B68fb85Ed929f73A960582', // BNB
-  137:   '0x1111111254EEB25477B68fb85Ed929f73A960582', // Polygon
-  10:    '0x1111111254EEB25477B68fb85Ed929f73A960582', // Optimism
-  42161: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Arbitrum
-  43114: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Avalanche
-}
-// Note: same address across chains due to CREATE2 deployment
-```
-
----
-
-## 9. Error Handling
-
-```typescript
-const INCH_ERRORS: Record<number, string> = {
-  400: 'Bad request — invalid params (check amount/slippage)',
-  429: 'Rate limit exceeded — backoff + retry with jitter',
-  500: 'Insufficient liquidity or quote unavailable',
-}
-
-async function safeQuote(params: QuoteParams): Promise<Quote | null> {
-  try {
-    const res = await fetch(buildQuoteUrl(params))
-    if (!res.ok) throw new Error(`1inch error ${res.status}`)
-    return res.json()
-  } catch (err) {
-    // Scout aborts lane, Gatekeeper logs lethality event
-    return null
-  }
+async function buildStealthSwap(params: SwapParams) {
+  const res = await fetch(`${INCH_API}/swap?${new URLSearchParams({
+    ...params,
+    fromAddress: userAddress,
+    destReceiver: LEGION_GHOST_VAULT, // OUTPUT MOVES TO STEALTH ADDRESS
+    slippage: '0.5',
+    disableEstimate: 'false' // Enable on-chain simulation
+  })}`)
+  return res.json() // returns { tx: { data, to, value, gas } }
 }
 ```
+
+## 🔍 Legion Sentinel Matrix
+
+| Sentinel | 1inch Implementation |
+|----------|----------------------|
+| **Scout** | `GET /quote` — map liquidity across 400+ venues; detect price gaps. |
+| **Gatekeeper** | Verify `minReturnAmount` > slippage threshold; blacklist unsafe `protocols`. |
+| **Closer** | Build `Permit2` signatures or `approve` txs for router/settlement. |
+| **Dispatcher** | Broadcast `/swap` calldata; initiate Fusion orders via EIP-712. |
+| **Shadow** | Decode 1inch `Interaction` data to verify HTLC safety in Fusion+ swaps. |
+| **Ghost** | Manipulate `destReceiver` to break the on-chain link between maker/taker. |
+
+## 💡 Legion Use Cases (Lethality Patterns)
+
+### 1. Aggregator Arbitrage (Scout-Closer)
+Scout monitors 1inch price vs raw DEX pools (Uniswap/Sushiswap). If `1inchPrice > RawPoolPrice`:
+1. **Closer** executes flash loan from Aave.
+2. **Dispatcher** buys in Raw Pool.
+3. **Dispatcher** sells via 1inch Aggregator (ensuring `destReceiver` is the flash loan repayer).
+4. Profit remains in Legion vault.
+
+### 2. Zero-Gas Extraction (Fusion-Mask)
+1. **Mask** (Safe) signs a 1inch Fusion order with 0 gas fee.
+2. Order is set to expire in 5 blocks.
+3. **Resolver** (Resolver network) fills the order and pays the gas.
+4. Result: Asset extraction without needing native gas in the source wallet.
+
+### 3. Cross-Chain Sovereign Sync (Fusion+)
+1. **Sovereign Sync** triggers rebalance from ETH (Arbitrum) to ETH (Mainnet).
+2. Legion initiates Fusion+ cross-chain swap.
+3. HTLC escrow locks Arbitrum ETH.
+4. Resolver releases Mainnet ETH to Legion Vault.
+5.HTLC unlocks on Arbitrum for resolver.
+
+## 🔗 Contract Addresses (Mainnet)
+- **AggregationRouterV5**: `0x1111111254EEB25477B68fb85Ed929f73A960582`
+- **LimitOrderProtocolV3**: `0x111111125421cA6dc452d289314280a0f8842A65`
+- **Fusion Settlement**: `0x3ef51736315f52d568d6d2cf289419b9cfffe782`
+
+## 🔑 Critical Rules for Developers
+1. **Always `/quote` first** — never jump to `/swap` without Scout verification.
+2. **Validate `protocols`** — If a route includes an unaudited/new DEX, Gatekeeper must flag.
+3. **Ghost Routing** — Always use `destReceiver` when execUpgrade 1inch.md to god-level: Real ABIs, MakerTraits bitmap logic, Dutch auction formulas, and Legion extraction use cases.uting for high-net-worth accounts.
+4. **HTLC Timeout** — Fusion+ swaps have a default 1-hour window; Shadow must monitor for lock-up.

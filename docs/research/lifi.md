@@ -6,190 +6,51 @@
 
 ---
 
-## 1. High-Level Architecture
+## STRICT_RULES
+- **NATIVE_ADDR**: Always use `0x0000000000000000000000000000000000000000` for native gas tokens (ETH, MATIC, etc.).
+- **SLIPPAGE_PRECISION**: Slippage is a decimal float (e.g., `0.005` for 0.5%). Never pass as basis points unless using specific low-level facets.
+- **ATOMIC_UNITS**: `fromAmount` must always be in the token's smallest atomic unit (wei).
+- **DIAMOND_ENTRY**: Primary interaction point is the LiFi Diamond contract: `0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE`.
+- **APPROVAL_TARGET**: Always check the `approvalAddress` field in the quote response. Do not assume it is the Diamond contract (though it usually is).
 
-LI.FI SDK is a cross-chain routing and execution layer. It unifies:
-- Bridges (Stargate, Hop, Across, Connext, etc.)
-- DEX aggregators (1inch, 0x, Paraswap, etc.)
-- Solvers (MEV-aware routes)
+## MENTAL_MODEL
+LI.FI acts as a **Meta-Aggregator**. It doesn't hold liquidity; it orchestrates calls between 14+ bridges and 25+ DEXs. 
+The core flow is: **API Quote (Off-chain)** -> **Route Selection** -> **Calldata Execution (On-chain)**.
+The Diamond Contract uses **Facets** to interact with specific protocols (e.g., `CelerFacet`, `StargateFacet`). Legion uses this to abstract away specific bridge ABIs.
 
-Architecture split:
-- **Route/Quote Layer**: Smart routing API — finds best path across all venues
-- **Execution Layer**: Converts selected route into on-chain tx(s) and tracks completion
+## REAL_API
+### Base URL
+`https://li.quest/v1`
 
-For Legion Engine: use LI.FI patterns for **Dispatcher's cross-chain hop logic** (not direct SDK dependency).
+### Key Endpoints
+1. **GET /quote**: Returns a single transaction to execute a swap/bridge.
+   - Query Params: `fromChain`, `toChain`, `fromToken`, `toToken`, `fromAddress`, `fromAmount`, `slippage`, `integrator`.
+2. **GET /status**: Tracks cross-chain transaction progress.
+   - Query Params: `bridge`, `fromChain`, `toChain`, `transactionId`.
+3. **GET /chains**: List of supported networks and their Diamond addresses.
 
----
-
-## 2. Core Data Models
-
-### Chain
-```
+### Technical Data (JSON/ABI)
+**Transaction Request Schema:**
+```json
 {
-  id: number,           // chainId
-  name: string,
-  nativeToken: Token,
-  rpcUrls: string[],
-  status: 'active' | 'restricted'
-}
-```
-
-### Token
-```
-{
-  chainId: number,
-  address: string,      // '0x0000...0000' for native
-  symbol: string,
-  decimals: number,
-  name: string,
-  priceUSD: string
-}
-```
-
-### Tool (venue/adapter)
-```
-{
-  key: string,          // 'stargate', '1inch', 'across'
-  name: string,
-  type: 'bridge' | 'dex' | 'solver',
-  supportedChains: number[]
-}
-```
-
-### Step (one atomic action)
-```
-{
-  type: 'swap' | 'cross' | 'protocol',
-  tool: string,         // which bridge/dex handles this
-  action: {
-    fromChainId, toChainId,
-    fromToken, toToken,
-    fromAmount, slippage
-  },
-  estimate: {
-    gasCosts, feeCosts,
-    toAmount, executionDuration
-  },
-  transactionRequest: {
-    to, data, value, gasLimit, chainId
+  "transactionRequest": {
+    "from": "0x...",
+    "to": "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+    "data": "0x...",
+    "value": "0x...",
+    "gasLimit": "0x...",
+    "gasPrice": "0x..."
   }
 }
 ```
 
-### Route (full execution plan)
-```
-{
-  id: string,
-  fromChainId, toChainId,
-  fromToken, toToken,
-  fromAmount, toAmount,
-  steps: Step[],        // ordered execution sequence
-  tags: string[],       // 'CHEAPEST', 'FASTEST', 'RECOMMENDED'
-  insurance: { state, feeAmountUsd }
-}
-```
+**Error Codes:**
+- `1001`: `FailedToBuildTransactionError` (Commonly insufficient balance or gas).
+- `1002`: `NoQuoteError` (No liquidity route found).
+- `1003`: `ProviderError`.
 
----
-
-## 3. Main Flow
-
-```
-User intent: move Asset A (Chain X) -> Asset B (Chain Y)
-        |
-        v
-1. QUOTE REQUEST
-   POST /quote with { fromChain, toChain, fromToken, toToken, fromAmount, fromAddress }
-        |
-        v
-2. ROUTE DISCOVERY (LI.FI smart router)
-   - Queries all supported bridges, DEXs, solvers
-   - Computes candidate step sequences
-   - Scores by: gas cost, execution time, success probability
-   - Returns ranked routes array
-        |
-        v
-3. ROUTE SELECTION
-   - Legion Engine picks route by lethality-based criteria:
-     FASTEST for high-value, CHEAPEST for dust
-        |
-        v
-4. STEP COMPILATION
-   - Each step gets a transactionRequest
-   - Pre-flight approvals (ERC20, Permit2) embedded
-   - Supports EIP-5792 batch, ERC-2612, EIP-712, Permit2
-        |
-        v
-5. EXECUTION
-   - Submit steps sequentially via Viem WalletClient
-   - SDK emits events: STARTED, ACTION_REQUIRED, CROSS_CHAIN_INITIATED, DONE, FAILED
-        |
-        v
-6. TRACKING
-   - Poll route status until all steps settled
-   - Handle partial fills, retries, stuck bridges
-```
-
----
-
-## 4. Policy / Filtering System
-
-LI.FI allows per-request filtering:
-- `allowBridges: ['stargate', 'across']` — whitelist bridges
-- `denyBridges: ['hop']` — blacklist
-- `allowChains: [1, 137]` — restrict chains
-- `allowTokens: [...]` — specific tokens only
-
-For Legion Engine: map these to **Gatekeeper policies**:
-- Policy type `bridge_restrict` -> sets allowBridges per extraction lane
-- Policy type `chain_pause` -> adds to denyChains
-
----
-
-## 5. Legion Engine Integration Patterns
-
-### 5.1 Two-Stage Chooser
-```
-Stage 1: Discovery
-  - Call LI.FI /quote (or equivalent)
-  - Get all candidate routes
-  - Filter by Gatekeeper policies
-
-Stage 2: Selection
-  - Score remaining routes by Legion criteria:
-    - lethality_tier === 'high' -> FASTEST route
-    - lethality_tier === 'mid' -> CHEAPEST route
-    - lethality_tier === 'dust' -> skip or batch later
-  - Select top route, serialize steps
-```
-
-### 5.2 Step Graph Model
-Model each route as a typed step sequence:
-```
-ExtractionLane.steps = [
-  { type: 'approve', token, spender, amount },
-  { type: 'swap', fromToken, toToken, dex },
-  { type: 'bridge', fromChain, toChain, bridge },
-  { type: 'swap', fromToken, toToken, dex },   // destination swap
-  { type: 'hop', toVault }                      // anonymity hop
-]
-```
-
-### 5.3 Separation Rule
-- Discovery (quote) = read-only, no side effects
-- Execution = only after Closer consent + Gatekeeper approval
-- Tracking = async, independent of execution thread
-
-### 5.4 Viem Compatibility
-- SDK uses Viem natively — our Viem PublicClient/WalletClient plugs in directly
-- transactionRequest from each Step maps directly to Viem `sendTransaction` params
-
----
-
-## 6. Key Patterns to Copy
-
-1. Separate route discovery from execution — never combine into one function
-2. Model route as ordered typed step array, not a single bridge call
-3. Embed policy filtering at discovery stage, not execution stage
-4. Score routes by operational context (speed vs cost vs lethality tier)
-5. Track execution via events/hooks, not blocking await chains
-6. Support destination chain calls natively (post-bridge actions in same route)
+## LEGION USE CASES
+1. **Cross-Chain Rebalancing**: Dispatcher queries `/quote` to move USDC from Arbitrum to Optimism when strategy requires capital shift.
+2. **Multi-Hop Swap**: Single transaction swap on source -> bridge -> swap on destination.
+3. **Yield Entry**: Using `Composer` endpoint to swap native ETH into a vault token (e.g., `vUSDC`) in one atomic step.
+4. **Gas Refuel**: Bridging native tokens to a new chain where the Legion wallet has zero gas.

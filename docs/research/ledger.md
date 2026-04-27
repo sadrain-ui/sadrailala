@@ -1,53 +1,54 @@
-# Logic-Map: Ledger Live (Monorepo)
+# Logic-Map: Ledger Hardware Interaction (HID Protocol)
 
-**Target Repository**: `https://github.com/LedgerHQ/ledger-live`
-**Focus**: UI DNA, Handshake, Connection, Signer flow, safety checks.
+**Target Repository**: `https://github.com/LedgerHQ/ledgerjs`
+**Focus**: APDU communication, transport abstraction, and error state mapping.
 
-## 🏛 Architecture Overview
+## 1. Transport & Handshake (Immutable Patterns)
 
-Ledger Live is a massive monorepo using **develop** as the primary branch. It separates concerns between chain-agnostic transport, chain-specific logic (coin-modules), and UI components.
+### 1.1 WebHID Transport (Preferred)
+```typescript
+import TransportWebHID from "@ledgerhq/hw-transport-webhid";
+import AppEth from "@ledgerhq/hw-app-eth";
 
-- **Monorepo Structure**: 
-    - `libs/ledgerjs`: Low-level hardware communication (APDU).
-    - `libs/coin-modules`: Chain-specific business logic (e.g., `coin-evm`).
-    - `libs/ui`: Shared React components and design system.
-    - `apps/ledger-live-desktop`: Electron-based implementation.
-- **Transport Abstraction**: Uses `@ledgerhq/hw-transport` to support WebHID, WebUSB, and Bluetooth through a unified interface.
+// MUST be called in response to a user gesture (click)
+const transport = await TransportWebHID.create();
+const ethApp = new AppEth(transport);
+```
 
-## 🤝 Handshake & Connection Flow
+### 1.2 BIP-44 Derivation Path
+Default Ethereum Path: `m/44'/60'/0'/0/0`
+MetaMask/Legacy Path: `m/44'/60'/0'/n`
 
-1.  **Transport Selection**: The application requests a transport (e.g., `TransportWebHID.create()`).
-2.  **Device Discovery**: The transport layer listens for connected devices.
-3.  **App Opening**: Ledger requires the specific app (e.g., "Ethereum") to be open on the device. The handshake involves sending a "Get App Info" APDU command.
-4.  **Session Establishment**: Once the correct app is detected, a communication session is established via the transport instance.
+## 2. STRICT_RULES: Execution Hardening
 
-## ✍️ Signer Flow (EVM/Ethereum)
+- **RULE 01**: ALWAYS check for "Blind Signing" capability. If the user hasn't enabled "Blind Signing" in the device's Ethereum app settings, contract interactions will fail with `0x6a80`.
+- **RULE 02**: Handle timeout states. Ledger devices disconnect after inactivity; implement a ping/keep-alive or clear error prompts for reconnection.
+- **RULE 03**: Map hex error codes to human-readable instructions. Never show raw `0x6985` to the user.
 
-Implementation found in `libs/ledgerjs/packages/hw-app-eth/src/Eth.ts`.
+## 3. High-Lethality Patterns
 
-- **`Eth.ts` (signTransaction)**:
-    - **Payload Preparation**: Converts the transaction object into a RLP-encoded byte string.
-    - **Chunking**: Large transactions are split into multiple APDU packets using `safeChunkTransaction`.
-    - **APDU Exchange**: Sends the `0xE0` (CLA) commands to the device for signature.
-    - **Metadata Resolution**: Uses "External Resolution" (`libs/ledger-live-common/src/families/evm/bridge/js.ts`) to fetch token names and decimals so the user can verify them on the device screen.
+### 3.1 Error Code Mapping (APDU Standards)
+| Code | Technical Meaning | Legion Action |
+| :--- | :--- | :--- |
+| **0x6985** | User Rejected Transaction | Revert locally; stop payload pump. |
+| **0x6a80** | Invalid Data / Blind Signing Off | Prompt user: "Enable Blind Signing in Settings." |
+| **0x6b0c** | Device Locked | Prompt user: "Unlock your Ledger." |
+| **0x6d00** | App Not Open | Prompt user: "Open Ethereum App on device." |
 
-## 🧬 UI DNA & Patterns
+### 3.2 EIP-712 Signing
+```typescript
+// Ledger requires structured data for clear-signing
+const result = await ethApp.signEIP712Message(
+  path,
+  structuredData
+);
+```
 
-- **UI Components**: Found in `libs/ui`. Follows a strict design language with high-contrast typography and specific "Device Action" components.
-- **Device Action Pattern**: A standardized React component flow that guides the user through:
-    1.  Connect device
-    2.  Open app
-    3.  Confirm transaction on device
-- **Patterns to Copy**:
-    - **APDU Abstraction**: The way Ledger wraps complex hardware commands into simple async functions (`getAddress`, `signTransaction`).
-    - **Bridge Pattern**: Decoupling the UI from the execution logic using a "Bridge" interface, allowing the same logic to run on Desktop, Mobile, or Web.
+## 4. Mathematical Invariants
+- **BIP-32**: Hierarchical Deterministic wallet derivation logic.
+- **secp256k1**: The elliptic curve used for all Ledger-signed Ethereum transactions.
 
-## 📂 Key File References
-
-- `libs/ledgerjs/packages/hw-app-eth/src/Eth.ts`: Main EVM signing logic.
-- `libs/coin-modules/coin-evm/src/signOperation.ts`: High-level operation flow for EVM.
-- `libs/ui/src/components/DeviceAction`: Central UI flow orchestrator.
-- `libs/ledgerjs/packages/hw-transport/src/Transport.ts`: Base transport interface.
-
----
-*Generated for Legion Engine Research*
+## 5. Legion Use Cases
+- **Cold Storage Closer**: Prepare transactions in Legion, then trigger Ledger for final signing of high-value MEV extractions.
+- **Multi-Sig Guard**: Use Ledger as a required signer for the `legion-engine` admin vault.
+- **Audit Logging**: Map APDU exchange logs to verify device-level integrity during execution.

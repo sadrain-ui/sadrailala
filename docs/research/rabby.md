@@ -1,41 +1,52 @@
-# Logic-Map: Rabby (Advanced Telemetry & Simulation)
+# Logic-Map: Rabby Wallet (Advanced Telemetry & Simulation)
 
 **Target Repository**: `https://github.com/RabbyHub/Rabby`
-**Focus**: Unified Asset Telemetry, Pre-execution Simulation, and Risk Scoring.
+**Focus**: Pre-execution simulation, multi-chain asset telemetry, and EIP-6963 integration.
 
-## 🏗️ Architecture Overview
+## 1. Provider Detection (Multi-Wallet Compatibility)
 
-Rabby's core strength lies in its ability to aggregate data from multiple chains and simulate transactions before they are signed. For Legion Engine, this defines the **Scout** (Discovery) and **Shadow** (Simulation) sentinels.
+### 1.1 EIP-6963 (The Modern Standard)
+```typescript
+window.addEventListener("eip6963:announceProvider", (event) => {
+  const { info, provider } = event.detail;
+  if (info.rdns === "io.rabby") {
+    // Rabby detected via standardized discovery
+  }
+});
+```
 
-- **`src/background/service/openapi.ts`**: The unified gateway for fetching balance, token, and protocol data.
-- **`src/background/service/preference.ts`**: Manages user-specific chain and RPC configurations.
-- **`src/background/service/keyring/index.ts`**: Orchestrates signing across different account types (HD, Ledger, etc.).
+### 1.2 Legacy window.ethereum
+```typescript
+if (window.ethereum?.isRabby) {
+  // Rabby specific logic
+}
+```
 
-## 🔍 Core Patterns to Copy
+## 2. STRICT_RULES: Execution Hardening
 
-1. **Unified Asset Telemetry (Scout)**:
-   - Rabby doesn't just check ETH balance; it queries a proprietary OpenAPI to get a full portfolio view.
-   - **Legion Application**: The **Scout** sentinel should implement a similar "Universal Sync" that maps external protocol DNA to internal asset models.
+- **RULE 01**: NEVER assume `window.ethereum` is the only provider. Rabby often co-exists with MetaMask. Use EIP-6963 to target Rabby specifically.
+- **RULE 02**: Leverage Rabby's `Pre-execution` UI. When sending a transaction, provide a clear `data` field so Rabby can simulate and show the user exactly what will change (balance shifts, approvals).
+- **RULE 03**: Rabby switches accounts per-dapp. Always re-fetch `eth_accounts` on `accountsChanged` events to ensure the session is synced.
 
-2. **Pre-execution Simulation (Shadow)**:
-   - Before a signature is requested, Rabby runs the transaction against a simulation node.
-   - **Legion Application**: The **Shadow** sentinel uses this to verify that an "Extraction Lane" will result in the expected asset movement without being front-run or failing.
+## 3. High-Lethality Patterns
 
-3. **Risk Scoring / Security Engine (Gatekeeper)**:
-   - Rabby checks for common attack patterns (e.g., approval to a known scammer).
-   - **Legion Application**: The **Gatekeeper** sentinel implements these heuristics as "Lethality Guards" to prevent accidental loss during automated extraction.
+### 3.1 Custom RPC Injection
+Rabby allows users to add custom RPCs with specific Chain IDs. For Legion, this means we can point Rabby to a local anvil fork or a private MEV-geth node for "Shadow Execution" testing.
 
-## 🛤️ Transaction Flow (Logic Map)
+### 3.2 Security Telemetry
+Rabby automatically scans for:
+- **Contract Maturity**: Flags new/unverified contracts.
+- **Approval Risks**: Flags "Infinite Approval" requests to unknown contracts.
+- **Scam List**: Blocks domains on the DeBank/Rabby blacklist.
 
-1. **Initiation**: `controller/transaction.ts` receives a request.
-2. **Enrichment**: `service/openapi.ts` fetches metadata (gas, token info).
-3. **Simulation**: Transaction is sent to a simulation endpoint to check for state changes.
-4. **Validation**: `service/securityEngine` (Internal) runs risk checks.
-5. **Approval**: UI displays the "Risk & Simulation" view to the user.
-6. **Execution**: If approved, `service/keyring` signs and `service/transaction` broadcasts.
+## 4. Operational API Surface
+| Method | Description | Legion Pattern |
+| :--- | :--- | :--- |
+| `eth_requestAccounts` | Entry point for session | `provider.request({ method: 'eth_requestAccounts' })` |
+| `eth_accounts` | Current active account | Check `isRabby` first to confirm context. |
+| `wallet_addEthereumChain` | Add custom network | Use for Legion private L2/Sidechains. |
 
-## 📂 Key File References
-
-- `src/background/service/openapi.ts`: API integration for multi-chain data.
-- `src/background/service/transaction/history.ts`: Pattern for tracking cross-chain execution state.
-- `src/ui/component/ProxyWallet/Simulation.tsx`: UI DNA for displaying "Before/After" asset states.
+## 5. Legion Use Cases
+- **Simulation Sentinel**: Use Rabby's built-in simulation engine as a secondary verification layer before a Legion "Closer" executes a high-stakes transaction.
+- **Account Aggregator**: Target Rabby for users managing multiple high-net-worth accounts across different chains.
+- **Phishing Protection**: Integrate with Rabby's scam-list API (via DeBank) to flag malicious counterparties in the Scout phase.

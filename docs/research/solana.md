@@ -1,196 +1,223 @@
-# Research: solana-labs/solana-web3.js
-
-**Legion Engine DNA Source**: Sentinel-2 (Scout) — Solana telemetry & execution
-**Branch**: latest main (web3.js 2.0 / @solana/web3.js)
-**Viem Standard**: Solana side has its own client model; EVM side stays Viem-only
-
+---
+title: "Solana"
+chain_family: "SVM"
+resource_model: "Compute"
+signing_model: "Ed25519"
+cross_chain_capable: false
+cursor_use: "Logic reference for Scout/Closer/Dispatcher (Solana shard)"
 ---
 
-## 1. High-Level Architecture
+# Solana
 
-Solana web3.js 2.0 is a complete rewrite from 1.x. Key shift:
-- No more monolithic `Connection` class for everything
-- Now uses **factory functions** and **composable clients**
-- Tree-shakeable, modular, functional design
+## Legion Relevance
 
-Core client setup (2.0 style):
-- `createSolanaRpc(rpc_url)` — HTTP RPC client
-- `createSolanaRpcSubscriptions(wss_url)` — WebSocket subscriptions
-- `sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions })` — reusable sender
+Solana is the canonical SVM shard for Legion. Scout subscribes to slot and
+account-change feeds to detect opportunities; Dispatcher selects an RPC and a
+route (often via Jupiter); Closer assembles, signs, and submits the
+versioned transaction; Archivist captures the resulting signature, slot, and
+compute consumption. Because Solana's resource model, signing scheme, and
+finality semantics are all incompatible with EVM, the Solana shard is a
+first-class chain family in `chain_registry`, not an EVM-shaped column
+overload.
 
-For Legion Engine: model Solana access as a **SolanaClient** wrapper that holds:
-- rpc handle
-- rpcSubscriptions handle
-- sendAndConfirm factory
+The performance envelope is also fundamentally different. A Solana strike is
+expected to land in 400–800 ms with sub-cent fees in the common case, but
+landing under congestion requires correct compute-unit pricing, fresh
+blockhashes, and an Address Lookup Table strategy. Mistakes in any of those
+silently shift a strike from "lands" to "expires," which the Closer must
+distinguish from a true revert.
 
----
+## Account Model
 
-## 2. Core Concepts
+Solana has no smart-contract storage in the EVM sense. **Every piece of
+state lives in an account**, identified by a 32-byte Ed25519 public key
+(displayed as base58). An account has:
 
-| Concept | Role in Legion Engine |
-|---|---|
-| `createSolanaRpc(url)` | RPC read/write client (replaces Connection for reads) |
-| `createSolanaRpcSubscriptions(url)` | WebSocket: tx confirmation, slot updates |
-| `PublicKey` | All addresses: wallet, token accounts, programs |
-| `Transaction` | Legacy tx format (1.x compat) |
-| `VersionedTransaction` | Modern tx with Address Lookup Tables (preferred) |
-| `TransactionMessage` / `MessageV0` | Message building for VersionedTransaction |
-| `AccountInfo` | Raw account data: lamports, owner, executable, data |
-| `ParsedAccountData` | Human-readable parsed token/program data |
-| `TokenAmount` | SPL token balance: amount, decimals, uiAmount |
-| `SignatureInfo` | Transaction history record |
-| `TransactionResponse` | Full confirmed tx details |
-| `LAMPORTS_PER_SOL` | Conversion constant: 1 SOL = 1,000,000,000 lamports |
+- `lamports` — balance in lamports (1 SOL = 10^9 lamports).
+- `owner` — the program (32-byte pubkey) that may mutate this account's
+  data. A user's "wallet" is owned by the System Program; an SPL token
+  account is owned by the Token Program.
+- `data` — opaque byte array; layout is defined by the owning program.
+- `executable` — true if the account is a program.
+- `rent_epoch` — legacy; modern accounts are rent-exempt by holding a
+  minimum lamport balance.
 
----
+Programs are stateless. They read and write the accounts passed into each
+instruction. This makes transactions explicit about every account they
+touch — there is no implicit state lookup mid-execution.
 
-## 3. Minimal API Set for Legion Engine
+**SPL token accounts** are separate from the wallet that owns them. A user's
+USDC balance lives in an *associated token account* derived deterministically
+from `(owner_pubkey, mint_pubkey)`. The Closer must derive and (if missing)
+create the destination ATA before any token transfer; this is a non-trivial
+extra instruction that EVM does not have.
 
-### 3.1 Get SOL Balance
-```
-rpc.getBalance(publicKey, { commitment: 'confirmed' })
-// Returns: { value: lamports (bigint) }
-// Normalize: lamports / LAMPORTS_PER_SOL = SOL
-```
+## Versioned Transactions
 
-### 3.2 List Token Accounts (SPL)
-```
-rpc.getTokenAccountsByOwner(
-  walletPubkey,
-  { programId: TOKEN_PROGRAM_ID },
-  { encoding: 'jsonParsed', commitment: 'confirmed' }
-)
-// Returns: array of { pubkey, account: { data: { parsed: { info: { mint, owner, tokenAmount } } } } }
-// Prefer jsonParsed encoding — no manual deserialization
-```
+A Solana transaction is `(signatures, message)`. Legion uses **versioned
+transactions** (V0) exclusively; legacy transactions cannot reference Address
+Lookup Tables and are unsuitable for any non-trivial DEX route.
 
-### 3.3 Get Token Balance
-```
-rpc.getTokenAccountBalance(tokenAccountPubkey, { commitment: 'confirmed' })
-// Returns: { value: { amount, decimals, uiAmount, uiAmountString } }
-```
+A V0 message contains:
 
-### 3.4 Send Transaction (2.0 style)
-```
-// 1. Get latest blockhash (just-in-time, not cached)
-const { blockhash, lastValidBlockHeight } = await rpc.getLatestBlockhash().send()
-// 2. Build VersionedTransaction
-// 3. Sign
-// 4. Send
-await sendAndConfirmTransaction(signedTx, { commitment: 'confirmed' })
-// Never cache blockhash — freshness is mandatory for signing window
-```
+- `version` — `0`.
+- `header` — counts of (required signers, readonly signers, readonly
+  non-signers).
+- `staticAccountKeys` — explicit pubkeys, one of which is the fee payer
+  (index 0 is always the fee payer).
+- `recentBlockhash` — see below.
+- `compiledInstructions` — each is `(programIdIndex, accountKeyIndexes,
+  data)`. Indexes refer into the combined static + lookup-table key list.
+- `addressTableLookups` — references to ALTs and the indexes within them.
 
-### 3.5 Simulate Transaction
-```
-rpc.simulateTransaction(encodedTx, { encoding: 'base64', commitment: 'confirmed' })
-// Returns: { err, logs, unitsConsumed }
-// Use BEFORE broadcasting — Legion Engine Simulation Service
-```
+Maximum serialized size is **1232 bytes** (the MTU minus headers). This is
+the binding constraint on route complexity; ALT usage and account-key reuse
+are the primary levers for staying under it.
 
-### 3.6 Confirm Transaction
-```
-await rpcSubscriptions.signatureNotifications(signature, { commitment: 'finalized' })
-// Or: rpc.getSignatureStatuses([signature])
-// Use subscription over polling for speed
-```
+## Message Structure & Account Indexing
 
-### 3.7 Transaction History
-```
-rpc.getSignaturesForAddress(pubkey, { limit: 100, commitment: 'confirmed' })
-// Returns: SignatureInfo[] with slot, blockTime, err, memo
-```
+The order in `staticAccountKeys` (and in the merged static+ALT key set) is
+load-bearing: every instruction's `accountKeyIndexes` is interpreted against
+this combined order. The Closer never hand-rolls the index — Jupiter or the
+program SDK emits the instruction with full pubkeys, and the
+`MessageV0.compile()` step assigns indexes. Manually rewriting an
+instruction's account list after compilation desynchronizes the indexes and
+produces a transaction that signs cleanly but executes against the wrong
+accounts.
 
----
+## Blockhash & Replay
 
-## 4. Data Models for Legion Engine
+`recentBlockhash` is the transaction's freshness anchor and replay guard. A
+blockhash is valid for **150 slots** (~60 s on mainnet). After expiry, the
+transaction is rejected with `BlockhashNotFound` — it does not land late, it
+disappears.
 
-### SolanaAssetSnapshot
-```
-{
-  wallet: string,           // base58 pubkey
-  chain: 'solana',
-  sol_balance_lamports: bigint,
-  sol_balance_usd: number,  // convert via price feed
-  token_accounts: [
-    {
-      pubkey: string,       // token account address
-      mint: string,         // token mint address
-      amount_raw: string,   // raw amount (no decimals)
-      decimals: number,
-      ui_amount: number,
-      balance_usd: number   // via DefiLlama price
-    }
-  ],
-  scanned_at: string        // ISO timestamp
-}
-```
+The Dispatcher fetches `getLatestBlockhash` with the `processed` or
+`confirmed` commitment immediately before the Closer signs. Strategies the
+Closer applies:
 
-### SolanaExecution
-```
-{
-  tx_signature: string,
-  blockhash: string,
-  last_valid_block_height: number,
-  status: 'pending' | 'confirmed' | 'finalized' | 'expired',
-  slot: number | null,
-  error: string | null
-}
-```
+- **Pre-flight skip + retry** for low-latency strikes: skip simulation, send
+  immediately, re-fetch blockhash + re-sign + re-send if the network drops
+  the tx before landing.
+- **Durable nonce** for strikes that may sit in a queue longer than 60 s
+  (cross-chain settlement, scheduled rebalance). A nonce account decouples
+  freshness from wall-clock and is the only way to sign-now-send-later
+  safely.
 
----
+Replay protection is implicit in the (blockhash, signature) pair: a
+transaction with the same blockhash and signature is rejected as a
+duplicate. There is no nonce-per-account in the EVM sense.
 
-## 5. Backend Patterns for Legion Engine
+## Compute Units & Priority Fees
 
-### 5.1 RPC Adapter Pattern
-Wrap `createSolanaRpc` behind a `SolanaRpcAdapter` interface:
-- `getBalance(wallet): Promise<bigint>`
-- `getTokenAccounts(wallet): Promise<TokenAccount[]>`
-- `simulate(tx): Promise<SimResult>`
-- `send(tx): Promise<string>` — returns signature
-- `confirm(sig): Promise<ConfirmResult>`
+Every Solana transaction has two fee components:
 
-This lets Legion Engine swap RPC providers (Helius, QuickNode, etc.) without touching Scout logic.
+1. **Base fee** — 5000 lamports per signature, fixed.
+2. **Priority fee** — `compute_unit_price` (microlamports per CU) ×
+   `compute_unit_limit` (CUs requested), set via
+   `ComputeBudgetProgram.setComputeUnitPrice` and `setComputeUnitLimit`
+   instructions.
 
-### 5.2 Chain Shard
-Solana worker pool is ISOLATED from EVM pool:
-- Blocktime ~400ms vs Ethereum 12s
-- Use Solana-specific queue with 400ms tick budget
-- Never route Solana ExtractionLanes to EVM workers
+Default CU limit per transaction is 200k; default per-block per-account
+write-lock CU is 12M. Complex Jupiter routes routinely need 600k–1.4M CUs
+and **must** call `setComputeUnitLimit` explicitly — without it, the tx
+runs out of CUs mid-execution and the strike fails wasting the priority fee.
 
-### 5.3 Money Normalization
-- Always store `lamports` (bigint) internally
-- Convert to SOL/USD only at presentation layer or price engine
-- For token amounts: store `amount_raw` (string) + `decimals` separately
+The Dispatcher's priority fee model:
 
-### 5.4 Blockhash Freshness Rule
-- Fetch `getLatestBlockhash` immediately before signing
-- NEVER cache blockhash as long-lived state
-- `lastValidBlockHeight` defines the signing window — align with Closer's block_deadline
+- Sample `getRecentPrioritizationFees` over the writable accounts the tx
+  touches (the *write-lock contention* dimension that matters, not a global
+  median).
+- Pick a percentile based on Scout's urgency tag (p50 for opportunistic,
+  p90+ for time-critical).
+- Cap the absolute fee in lamports against the strike's expected profit so
+  a runaway congestion event can't burn the trade.
 
-### 5.5 Simulation First
-- Always call `simulateTransaction` before `sendAndConfirmTransaction`
-- If simulation returns `err`, abort lane — do not broadcast
-- Log `unitsConsumed` for gas estimation
+## RPC
 
----
+Solana RPC is JSON-RPC over HTTP and a parallel WebSocket interface
+(`createSolanaRpcSubscriptions`). Operations Scout and Dispatcher rely on:
 
-## 6. Legion Engine Integration Points
+- `getSlot`, `getLatestBlockhash`, `getEpochInfo` — clock and freshness.
+- `getAccountInfo`, `getMultipleAccounts`, `getProgramAccounts` — state.
+  `getProgramAccounts` is expensive and must be used with `dataSlice` and
+  `filters`; many providers gate it.
+- `simulateTransaction` — pre-flight; returns CU consumed, logs, and any
+  program error. Closer uses this to set the CU limit and to catch
+  "InsufficientFundsForRent" before broadcast.
+- `sendTransaction` — submit. With `skipPreflight: true` for hot paths.
+- `getSignatureStatuses` and the `signatureSubscribe` WebSocket — landing
+  confirmation. Polling without WS adds 100–400 ms of latency.
+- `getRecentPrioritizationFees` — priority-fee oracle scoped to a set of
+  writable accounts.
 
-| Legion Layer | Solana API Used |
-|---|---|
-| Scout (telemetry scan) | getBalance, getTokenAccountsByOwner, getSignaturesForAddress |
-| Closer (consent payload) | getLatestBlockhash, simulateTransaction |
-| Dispatcher (execution) | sendAndConfirmTransaction, signatureNotifications |
-| Shadow (simulation defense) | simulateTransaction (dry run only) |
-| Gatekeeper (lethality score) | token balances + DefiLlama price feed |
+Commitment levels: `processed` (single confirmation, fastest, may revert),
+`confirmed` (supermajority vote, ~1–2 s, safe for trade decisions),
+`finalized` (max lockout, ~13 s, archival). Closer reports at `confirmed`
+and re-confirms at `finalized` for the Archivist record.
 
----
+## Address Lookup Tables (ALT)
 
-## 7. Key Patterns to Copy
+ALTs are on-chain accounts holding up to 256 pubkeys each. A V0 transaction
+references ALT entries by `(table_pubkey, [indexes])`, costing 1 byte per
+index in the message versus 32 bytes per pubkey in `staticAccountKeys`. For
+a Jupiter route touching 30+ pools, ALTs are the only way to fit under the
+1232-byte limit.
 
-1. Factory function model — no global singleton; inject rpc/rpcSubscriptions per service
-2. Parsed encoding preferred — avoid manual binary deserialization
-3. Commitment levels: use `confirmed` for reads, `finalized` for critical confirmations
-4. Separation: build tx intent → simulate → sign → send → confirm (never combined)
-5. Subscription-based confirmation (not polling) for speed on 400ms chains
+Two ALT sources:
+
+- **Aggregator-provided** — Jupiter's `/swap-instructions` returns a list of
+  `addressLookupTableAddresses` to use. The Closer fetches each ALT account,
+  decodes it, and passes them to `MessageV0.compile()`. **Always extend ALT
+  accounts via `getMultipleAccounts`, not via stale cached deserializations
+  — ALTs can have entries appended.**
+- **Engine-owned** — Legion may publish its own ALT for hot accounts (e.g.
+  the engine's strike wallets, common SPL mints) to shave bytes on every
+  internal flow. Owned ALTs must be `extend`-ed and `freeze`-d; a frozen
+  ALT cannot be deactivated (deactivation has a 512-slot cooldown).
+
+ALT account state is not instantaneously visible. After `extend`, wait at
+least one slot before referencing the new entries, or the tx will fail with
+`InvalidLookupIndex`.
+
+## Jito / Jupiter Relevance
+
+- **Jupiter** is the dominant Solana DEX aggregator; for any swap the
+  Dispatcher calls Jupiter to get a route plan, then receives ready-to-sign
+  instructions. See `docs/research/jupiter.md` for the API contract.
+- **Jito** provides the bundle relay (`block-engine.jito.wtf`) and tip
+  accounts. A Jito bundle is an atomic group of up to 5 transactions that
+  either all land in the same slot or none do. For MEV-sensitive strikes
+  (sandwich-resistant exits, cross-DEX arb), the Closer routes through Jito
+  with a tip transfer to a Jito tip account. Standard non-bundle sends go
+  through the regular RPC. Jito tips are *separate from* compute-unit
+  priority fees and stack on top.
+
+## Pitfalls
+
+- **Static blockhash in a long-lived signing pipeline.** If signing takes
+  > 60 s the blockhash is stale on send. Always fetch immediately before
+  signing or use a durable nonce.
+- **Default CU limit on a Jupiter route.** Will exhaust mid-route. Always
+  call `setComputeUnitLimit` and set it from the simulation result + 10%
+  headroom.
+- **Skipping ATA creation.** Sending SPL tokens to an address whose ATA
+  doesn't exist fails. The Closer derives the ATA and prepends a
+  `createAssociatedTokenAccount` instruction when needed.
+- **Mistaking `processed` confirmation for landed.** A `processed` tx can be
+  rolled back if the leader is forked out. Trade accounting must use
+  `confirmed` minimum.
+- **Pre-flight on hot paths.** `simulateTransaction` adds a round trip and
+  the simulator may use a different blockhash than the leader.
+  `skipPreflight: true` is correct for time-critical strikes; the Closer
+  accepts the trade-off of paying the base fee on a doomed tx.
+- **Mixing legacy and V0 transactions.** Legacy transactions cannot use
+  ALTs, so they cannot fit a Jupiter route. Legion's Closer rejects any
+  legacy build path.
+- **Treating SOL like an SPL token.** The native SOL balance is on the
+  System-Program-owned account, not on an ATA. Wrapped SOL (`So11...112`)
+  is its own SPL mint and must be wrapped/unwrapped explicitly.
+- **Single-RPC dependency.** Public RPCs throttle aggressively; a strike
+  pipeline pinned to one endpoint will drop bursts. Dispatcher rotates
+  across at least three independent providers (see `alchemy.md` for the
+  failover model).

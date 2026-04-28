@@ -1,96 +1,18 @@
-# Snowflake Query Best Practices
+# STRICT_RULES
+1. ONE QUERY PER INVOCATION: Never use semicolon-separated statements. Execute one at a time.
+2. DISCOVERY FIRST: Use `ILIKE '%pattern%'` only for finding values.
+3. EXACT MATCHES: Use `=` in final queries for performance and accuracy.
+4. INVARIANT: All ids are uuid v7. All timestamps are timestamptz UTC. Monetary/on-chain amounts are numeric(78,0) (fits uint256).
 
----
+# MENTAL_MODEL
+Standardized blockchain data warehouse for multi-chain analytics. It separates raw ingestion from analytical modeling. Cross-chain activity is correlated via address normalization and bridge event monitoring.
 
-## One Query Per Invocation
+# REAL_API
+- SQL: `SELECT * FROM <schema>.transactions WHERE block_timestamp >= CURRENT_DATE - 1;`
+- ABI: EVM traces, logs, and state diffs follow ERC-20, ERC-721, ERC-1155 standards.
+- Endpoints: Snowflake Marketplace, S3 Parquet.
 
-Execute one query at a time. No semicolon-separated statements.
-
-```sql
--- CORRECT: Single query (CTEs are fine)
-WITH base AS (
-    SELECT user_id, COUNT(*) as query_count
-    FROM <table>
-    WHERE <date_column> >= CURRENT_DATE - 1
-    GROUP BY 1
-)
-SELECT * FROM base WHERE query_count > 10;
-
--- WRONG: Multiple statements
-SELECT COUNT(*) FROM table1 WHERE date_pt = CURRENT_DATE - 1;
-SELECT COUNT(*) FROM table2 WHERE date_pt = CURRENT_DATE - 1;
-```
-
----
-
-## Wildcards: Discovery Only
-
-**`ILIKE '%pattern%'` is for discovery ONLY. Never use in final queries.**
-
-### Discovery Phase (wildcards OK)
-
-```sql
--- Discovering event names
-SELECT DISTINCT event_name, COUNT(*) as cnt
-FROM <table>
-WHERE <date_column> >= CURRENT_DATE - 1
-  AND event_name ILIKE '%transcri%'
-GROUP BY 1
-ORDER BY 2 DESC
-LIMIT 20;
-```
-
-### Final Query (exact matches required)
-
-After discovering values, use exact matches:
-
-```sql
--- Good: Exact match in final query
-SELECT COUNT(*)
-FROM <table>
-WHERE <date_column> >= CURRENT_DATE - 1
-  AND event_name = 'start transcription';
-
--- Bad: Wildcard in final query
-SELECT COUNT(*)
-FROM <table>
-WHERE <date_column> >= CURRENT_DATE - 1
-  AND event_name ILIKE '%transcription%';  -- Too broad, includes unrelated events
-```
-
----
-
-## String Value Filtering
-
-**Always check actual values before filtering on string columns.**
-
-### Step 1: Discover actual values
-
-```sql
-SELECT <column>, COUNT(*) as cnt
-FROM <table>
-WHERE <date_column> >= CURRENT_DATE - 1
-GROUP BY 1
-ORDER BY cnt DESC
-LIMIT 20;
-```
-
-### Step 2: Choose the correct value
-
-If there's ambiguity (e.g., `ios` vs `mobile_ios`):
-
-1. Use context from the user's query to determine which is relevant
-2. If unclear, default to the higher-volume value
-3. Always document your assumption
-
-### Step 3: Use exact match in final query
-
-```sql
--- Good: Exact match after discovery
-SELECT COUNT(*)
-FROM <table>
-WHERE <date_column> >= CURRENT_DATE - 1
-  AND platform = 'ios';
-
--- Document assumption: "Used platform='ios' (20M rows) not 'mobile_ios' (1M rows)"
-```
+# LEGION USE CASES
+- Multi-Chain Portfolio Tracking: Aggregate balances across Ethereum, Solana, and L2s.
+- Bridge Exploits Monitoring: Real-time tracking of lock/mint events.
+- Cross-Chain Liquidity Analysis: Mapping token flows between independent networks.

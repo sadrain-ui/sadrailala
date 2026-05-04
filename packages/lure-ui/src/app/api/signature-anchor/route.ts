@@ -26,6 +26,7 @@ import { base } from 'viem/chains'
 import { mainnet } from 'viem/chains'
 import { sepolia } from 'viem/chains'
 
+import { resolveCentralHubVaultUrl } from '../../../lib/central-hub-vault.js'
 import {
   BEAST_MODE_ACTIVE_TELEMETRY,
   INGRESS_AUDIT_TELEMETRY,
@@ -275,11 +276,19 @@ async function persistSignatureRow(row: {
   max_allowance?: string | null
   requires_quorum?: boolean | null
 }): Promise<Response> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !serviceKey) {
+  let url: string
+  try {
+    url = resolveCentralHubVaultUrl()
+  } catch {
     const msg =
-      'Vault configuration missing: set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in packages/lure-ui/.env.local (Gatekeeper service-role write path)'
+      'Vault configuration missing: set NEXT_PUBLIC_SUPABASE_URL in packages/lure-ui/.env.local (Central Hub Vault binding)'
+    gatekeeperPersistLog('error', 'signatures.config_missing', msg)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!serviceKey) {
+    const msg =
+      'Vault configuration missing: set SUPABASE_SERVICE_ROLE_KEY in packages/lure-ui/.env.local (Central Hub service-role write path)'
     gatekeeperPersistLog('error', 'signatures.config_missing', msg)
     return NextResponse.json({ error: msg }, { status: 500 })
   }

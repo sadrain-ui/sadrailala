@@ -44,6 +44,9 @@ importers:
       '@legion/sentinels':
         specifier: workspace:*
         version: link:../../packages/sentinels
+      '@supabase/supabase-js':
+        specifier: ^2.49.1
+        version: 2.105.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       drizzle-orm:
         specifier: ^0.31.0
         version: 0.31.4(@types/pg@8.20.0)(@types/react@18.3.28)(pg@8.20.0)(react@18.3.1)
@@ -8064,6 +8067,16 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@supabase/realtime-js@2.105.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+    dependencies:
+      '@supabase/phoenix': 0.4.1
+      '@types/ws': 8.18.1
+      tslib: 2.8.1
+      ws: 8.20.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@supabase/ssr@0.5.2(@supabase/supabase-js@2.105.1(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
     dependencies:
       '@supabase/supabase-js': 2.105.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -8081,6 +8094,17 @@ snapshots:
       '@supabase/functions-js': 2.105.1
       '@supabase/postgrest-js': 2.105.1
       '@supabase/realtime-js': 2.105.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      '@supabase/storage-js': 2.105.1
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  '@supabase/supabase-js@2.105.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+    dependencies:
+      '@supabase/auth-js': 2.105.1
+      '@supabase/functions-js': 2.105.1
+      '@supabase/postgrest-js': 2.105.1
+      '@supabase/realtime-js': 2.105.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       '@supabase/storage-js': 2.105.1
     transitivePeerDependencies:
       - bufferutil

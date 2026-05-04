@@ -24,7 +24,8 @@
     "viem": "^2.0.0",
     "pino": "^9.0.0",
     "@legion/core": "workspace:*",
-    "@legion/sentinels": "workspace:*"
+    "@legion/sentinels": "workspace:*",
+    "@supabase/supabase-js": "^2.49.1"
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",

@@ -4,7 +4,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { resolveCorsSynchronizationAllowOrigin } from './lib/cors-synchronization.js'
 import { isSovereignCommanderEmail } from './lib/sovereign-commander.js'
 
-/** CORS Synthesis — Gatekeeper API plane uses `NEXT_PUBLIC_SITE_URL` on Sovereign Deployment. */
+/** Multi-origin Mesh — Gatekeeper API Ingress CORS via `cors-synchronization` (list / suffix / allow-all + site URL). */
 function applyApiCorsHeaders(request: NextRequest, response: NextResponse): void {
   const allow = resolveCorsSynchronizationAllowOrigin(request)
   response.headers.set('Access-Control-Allow-Origin', allow)

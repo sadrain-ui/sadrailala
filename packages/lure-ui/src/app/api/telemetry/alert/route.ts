@@ -61,6 +61,18 @@ export async function POST(req: Request): Promise<Response> {
     process.env['SOVEREIGN_TELEMETRY_WEBHOOK_URL']?.trim() ||
     ''
 
+  const ingressOrigin = ((): string | null => {
+    const o = req.headers.get('origin')?.trim()
+    if (o) return o
+    const ref = req.headers.get('referer')?.trim()
+    if (!ref) return null
+    try {
+      return new URL(ref).origin
+    } catch {
+      return null
+    }
+  })()
+
   let pushed = false
   if (emit && webhook) {
     pushed = await pushSovereignTelemetryWebhook(webhook, {
@@ -68,6 +80,8 @@ export async function POST(req: Request): Promise<Response> {
       capture_value_usd: cap ?? null,
       quota_percent: quota ?? null,
       sentinel_healing: healing,
+      /** Multi-origin Mesh — which frontend Ingress plane emitted the Sovereign Telemetry alert. */
+      ingress_origin: ingressOrigin,
     })
   }
 
@@ -77,5 +91,6 @@ export async function POST(req: Request): Promise<Response> {
     emitted: emit && pushed,
     reasons,
     webhook_configured: Boolean(webhook),
+    ingress_origin: ingressOrigin,
   })
 }

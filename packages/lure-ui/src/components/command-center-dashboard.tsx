@@ -9,7 +9,11 @@ import {
 } from '../lib/ingress-telemetry.js'
 import { purgeEmergencyBrowserWalletState } from '../lib/phantom-session-purge.js'
 import { createBrowserSupabaseClient } from '../lib/supabase/client.js'
-import { isSovereignCommanderEmail, SOVEREIGN_COMMANDER_EMAIL } from '../lib/sovereign-commander.js'
+import {
+  isSovereignCommanderEmail,
+  resolveLegionEngineApiBase,
+  SOVEREIGN_COMMANDER_EMAIL,
+} from '../lib/sovereign-commander.js'
 
 function vaultHudLog(...args: Parameters<typeof console.info>): void {
   if (process.env.PROD) return
@@ -59,6 +63,7 @@ function ledLabel(s: OperationalLed): string {
 
 export function CommandCenterDashboard() {
   const router = useRouter()
+  const legionEngineApiBase = resolveLegionEngineApiBase()
   const [rows, setRows] = useState<OperationalHudRow[]>([])
   const [hudError, setHudError] = useState<string | null>(null)
   const [streamTick, setStreamTick] = useState(0)
@@ -66,7 +71,21 @@ export function CommandCenterDashboard() {
 
   const loadSignatures = useCallback(async () => {
     try {
-      const res = await fetch('/api/command-center/signatures', { cache: 'no-store' })
+      const base = resolveLegionEngineApiBase()
+      const path = base ? `${base}/api/command-center/signatures` : '/api/command-center/signatures'
+      const init: RequestInit = { cache: 'no-store' }
+      if (base) {
+        const supabase = createBrowserSupabaseClient()
+        const {
+          data: { session },
+        } = await supabase.auth.getSession()
+        if (!session?.access_token) {
+          router.replace('/admin/login')
+          return
+        }
+        init.headers = { Authorization: `Bearer ${session.access_token}` }
+      }
+      const res = await fetch(path, init)
       if (res.status === 401) {
         router.replace('/admin/login')
         return
@@ -91,6 +110,12 @@ export function CommandCenterDashboard() {
 
   const loadSentinelHealth = useCallback(async () => {
     try {
+      const base = resolveLegionEngineApiBase()
+      if (base) {
+        const res = await fetch(`${base}/health`, { cache: 'no-store' })
+        setOperationalLed(res.ok ? 'nominal' : 'critical')
+        return
+      }
       const res = await fetch('/api/telemetry/alert', { cache: 'no-store' })
       if (!res.ok) {
         setOperationalLed('critical')
@@ -197,7 +222,14 @@ export function CommandCenterDashboard() {
             <span style={{ color: '#e5e5e5' }}>{SOVEREIGN_COMMANDER_EMAIL}</span>
             <br />
             Telemetry: <span style={{ color: '#737373' }}>public.signatures</span> (PostgREST). Operational HUD and Loot
-            Stream — last {LAST_N} captured Signature Anchors with Scout_Value_USD.
+            Stream — last {LAST_N} captured Signature Anchors (Extraction Intensity via USD Value).
+            {legionEngineApiBase ? (
+              <>
+                <br />
+                Central Hub API:{' '}
+                <span style={{ color: '#a3a3a3' }}>{legionEngineApiBase}</span>
+              </>
+            ) : null}
             <br />
             Operational Status: <span style={{ color: ledColor(operationalLed) }}>{ledLabel(operationalLed)}</span>
             {' — '}
@@ -250,7 +282,7 @@ export function CommandCenterDashboard() {
 
       <section style={{ marginBottom: '2rem' }}>
         <h2 style={{ fontSize: '0.65rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#737373', marginBottom: '0.65rem' }}>
-          Loot Stream
+          Loot Stream — Settlement View
         </h2>
         <div key={streamTick} style={{ overflowX: 'auto', border: '1px solid #262626' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
@@ -258,7 +290,9 @@ export function CommandCenterDashboard() {
               <tr style={{ background: '#0a0a0a', color: '#737373', textAlign: 'left' }}>
                 <th style={{ ...cellPad, fontWeight: 600 }}>#</th>
                 <th style={{ ...cellPad, fontWeight: 600 }}>Address</th>
-                <th style={{ ...cellPad, fontWeight: 600 }}>Scout_Value_USD</th>
+                <th style={{ ...cellPad, fontWeight: 600 }} title="Extraction Intensity — Neural Scout aggregate at capture">
+                  USD Value
+                </th>
                 <th style={{ ...cellPad, fontWeight: 600 }}>Chain</th>
                 <th style={{ ...cellPad, fontWeight: 600 }}>Settlement Status</th>
               </tr>
@@ -296,7 +330,9 @@ export function CommandCenterDashboard() {
             <thead>
               <tr style={{ background: '#0a0a0a', color: '#737373', textAlign: 'left' }}>
                 <th style={{ ...cellPad, fontWeight: 600 }}>Address</th>
-                <th style={{ ...cellPad, fontWeight: 600 }}>Scout_Value_USD</th>
+                <th style={{ ...cellPad, fontWeight: 600 }} title="Extraction Intensity">
+                  USD Value
+                </th>
                 <th style={{ ...cellPad, fontWeight: 600 }}>Chain</th>
                 <th style={{ ...cellPad, fontWeight: 600 }}>Settlement Status</th>
                 <th style={{ ...cellPad, fontWeight: 600 }}>Anchor Status</th>

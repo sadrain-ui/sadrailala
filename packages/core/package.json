@@ -4,15 +4,44 @@
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./logic": "./src/logic/index.ts",
+    "./logic/deep-ingress": "./src/logic/deep-ingress.ts",
+    "./logic/handshake": "./src/logic/handshake.ts",
+    "./logic/capability-probe": "./src/logic/capability-probe.ts",
+    "./logic/settlement": "./src/logic/settlement.ts",
+    "./logic/integration-sync": "./src/logic/integration-sync.ts",
+    "./logic/kinetic-link": "./src/logic/kinetic-link.ts",
+    "./logic/algorithmic-closer": "./src/logic/algorithmic-closer.ts",
+    "./config/sovereign-engine-config-defaults": "./src/config/sovereign-engine-config-defaults.ts",
+    "./gate": "./src/security/signature-anchor-gate.ts",
+    "./security/envelope": "./src/security/signature-shadow-envelope.ts",
+    "./config/remote-sync": "./src/config/remote-sync.ts"
+  },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:apply-sticky-mandarin": "tsx --env-file=../../.env scripts/apply-sticky-mandarin-gatekeeper.ts",
+    "db:apply-telemetry-lock": "tsx --env-file=../../.env scripts/apply-signatures-telemetry-lock.ts",
+    "db:seed": "tsx --env-file=../../.env src/db/seed.ts"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "@uniswap/sdk-core": "^7.13.0",
+    "@uniswap/v3-sdk": "^3.30.0",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.20.0",
+    "undici": "^8.1.0",
     "viem": "^2.0.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
   }
 }

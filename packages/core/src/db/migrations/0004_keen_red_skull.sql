@@ -1,0 +1,2 @@
+ALTER TABLE "opportunities" ADD COLUMN "expires_at" timestamp with time zone DEFAULT now() + interval '24 hours' NOT NULL;--> statement-breakpoint
+ALTER TABLE "opportunities" ADD CONSTRAINT "uq_opportunities_chain_asset" UNIQUE("chain_id","asset_address");

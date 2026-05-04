@@ -2,7 +2,7 @@ import Fastify from 'fastify'
 
 const app = Fastify({
   logger: {
-    level: process.env.LOG_LEVEL ?? 'info',
+    level: process.env['LOG_LEVEL'] ?? 'info',
   },
 })
 
@@ -21,7 +21,7 @@ app.get('/health', async () => ({
 const start = async () => {
   try {
     await app.listen({
-      port: Number(process.env.PORT ?? 4000),
+      port: Number(process.env['PORT'] ?? 4000),
       host: '0.0.0.0',
     })
   } catch (err) {

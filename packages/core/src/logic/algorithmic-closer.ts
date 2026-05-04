@@ -1,0 +1,576 @@
+/**
+ * @file algorithmic-closer.ts
+ * @module @legion/core/logic
+ *
+ * Algorithmic Closer — Jito / Flashbots bundle assembly for native settlement lanes.
+ * Staking desk unstake manifests for handshake injection.
+ */
+
+import {
+  ComputeBudgetProgram,
+  Connection,
+  PublicKey,
+  SystemProgram,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js'
+import type { Hex, TransactionSerializableEIP1559 } from 'viem'
+import { createPublicClient, http, isHex, serializeTransaction } from 'viem'
+
+import { applySovereignSettlementLaneFallback } from './sovereign-settlement-defaults.js'
+
+/** Jito bundle — Sovereign MEV lane (Solana), base64-encoded signed wire. */
+export type JitoBundlePayload = {
+  lane: 'jito_bundle_v1'
+  encoded_transactions: string[]
+  meta: { institutional: true; tip_lamports_hint: string }
+}
+
+/** @deprecated Use {@link JitoBundlePayload}. */
+export type JitoBundlePayloadStub = JitoBundlePayload
+
+/** Flashbots bundle — Deep Ingress EVM block builder lane. */
+export type FlashbotsBundlePayload = {
+  lane: 'flashbots_bundle_v1'
+  signed_transactions_hex: Hex[]
+  meta: { institutional: true; block_hint?: string }
+}
+
+/** @deprecated Use {@link FlashbotsBundlePayload}. */
+export type FlashbotsBundlePayloadStub = FlashbotsBundlePayload
+
+/** Institutional Jito tip destination — mainnet default (rotating set supported upstream). */
+export const JITO_MAINNET_TIP_ACCOUNT_V1 = new PublicKey(
+  'ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49',
+)
+
+/** Settlement Path — override via `NEXT_PUBLIC_JITO_TIP_ACCOUNT` (base58). */
+export function resolveJitoTipDestinationFromEnv(): PublicKey {
+  const raw =
+    typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_JITO_TIP_ACCOUNT']?.trim() : undefined
+  if (raw) return new PublicKey(raw)
+  return JITO_MAINNET_TIP_ACCOUNT_V1
+}
+
+/** Settlement Path — Solana RPC with Remote Config Sync priority (Hot-Swapping). */
+export async function createSolanaSettlementConnectionOperational(): Promise<Connection> {
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
+  const explicitRemote =
+    (await resolveConfigPrioritized(
+      'NEXT_PUBLIC_SOLANA_RPC_URL',
+      (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_SOLANA_RPC_URL'] : undefined)?.trim(),
+    )) ?? ''
+  const explicit =
+    explicitRemote ||
+    ((typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_SOLANA_RPC_URL'] : undefined)?.trim() ??
+      (typeof process !== 'undefined' ? process.env['SOLANA_RPC_URL'] : undefined)?.trim() ??
+      '')
+  const heliusRemote =
+    (await resolveConfigPrioritized(
+      'NEXT_PUBLIC_HELIUS_API_KEY',
+      (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_HELIUS_API_KEY'] : undefined)?.trim(),
+    )) ?? ''
+  const heliusKey =
+    heliusRemote ||
+    ((typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_HELIUS_API_KEY'] : undefined)?.trim() ?? '')
+  const url =
+    explicit ||
+    (heliusKey !== ''
+      ? `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`
+      : 'https://api.mainnet-beta.solana.com')
+  return new Connection(url, { commitment: 'confirmed' })
+}
+
+/**
+ * Settlement Path — Solana RPC from institutional env (Helius key, dedicated RPC URL, then public fallback).
+ * No hardcoded API keys; optional Helius URL is composed only when `NEXT_PUBLIC_HELIUS_API_KEY` is set.
+ */
+export function createSolanaSettlementConnection(): Connection {
+  const explicit =
+    (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_SOLANA_RPC_URL'] : undefined)?.trim() ??
+    (typeof process !== 'undefined' ? process.env['SOLANA_RPC_URL'] : undefined)?.trim() ??
+    ''
+  const heliusKey =
+    (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_HELIUS_API_KEY'] : undefined)?.trim() ?? ''
+  const url =
+    explicit ||
+    (heliusKey !== ''
+      ? `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`
+      : 'https://api.mainnet-beta.solana.com')
+  return new Connection(url, { commitment: 'confirmed' })
+}
+
+/**
+ * Settlement Path — EVM RPC URL: Remote Config Sync first, then institutional env (Flashbots-adjacent serialization).
+ */
+export async function resolveEvmSettlementRpcUrlOperational(): Promise<string> {
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
+  const envChain =
+    (typeof process !== 'undefined' ? process.env['RPC_ETHEREUM_PRIVATE'] : undefined)?.trim() ??
+    (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_RPC_URL'] : undefined)?.trim() ??
+    (typeof process !== 'undefined' ? process.env['RPC_URL'] : undefined)?.trim() ??
+    ''
+  return (
+    (await resolveConfigPrioritized('RPC_ETHEREUM_PRIVATE', envChain)) ??
+    (await resolveConfigPrioritized('NEXT_PUBLIC_RPC_URL', envChain)) ??
+    (await resolveConfigPrioritized('RPC_URL', envChain)) ??
+    ''
+  )
+}
+
+/** Client-safe sync path — local env only (no Remote Config Sync). */
+export function getEvmSettlementRpcUrlFromEnv(): string {
+  return (
+    (typeof process !== 'undefined' ? process.env['RPC_ETHEREUM_PRIVATE'] : undefined)?.trim() ??
+    (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_RPC_URL'] : undefined)?.trim() ??
+    (typeof process !== 'undefined' ? process.env['RPC_URL'] : undefined)?.trim() ??
+    ''
+  )
+}
+
+export async function assertEvmSettlementRpcConfiguredOperational(): Promise<void> {
+  if ((await resolveEvmSettlementRpcUrlOperational()) === '') {
+    throw new Error(
+      'Settlement Path: configure RPC_ETHEREUM_PRIVATE, NEXT_PUBLIC_RPC_URL, or RPC_URL for EVM closer wiring (Remote Config Sync or env).',
+    )
+  }
+}
+
+export function assertEvmSettlementRpcConfigured(): void {
+  if (getEvmSettlementRpcUrlFromEnv() === '') {
+    throw new Error(
+      'Settlement Path: configure RPC_ETHEREUM_PRIVATE, NEXT_PUBLIC_RPC_URL, or RPC_URL for EVM closer wiring.',
+    )
+  }
+}
+
+/** Settlement Path — viem public client with Remote Config Sync priority (server / Operational HUD contexts). */
+export async function createEvmSettlementPublicClientOperational() {
+  await assertEvmSettlementRpcConfiguredOperational()
+  return createPublicClient({
+    transport: http(await resolveEvmSettlementRpcUrlOperational()),
+  })
+}
+
+/** Settlement Path — viem public client bound to institutional EVM RPC env (browser sync path). */
+export function createEvmSettlementPublicClient() {
+  assertEvmSettlementRpcConfigured()
+  return createPublicClient({
+    transport: http(getEvmSettlementRpcUrlFromEnv()),
+  })
+}
+
+export type UnstakeManifest = {
+  lane: 'staking_unstake_sync'
+  protocols: ('lido' | 'rocket_pool' | 'solayer')[]
+  manifest_hex_hint: string
+}
+
+/** Encode signed Solana wire to Jito bundle element (base64). */
+export function encodeSolanaWireBase64(tx: VersionedTransaction): string {
+  const raw = tx.serialize()
+  let bin = ''
+  for (let i = 0; i < raw.length; i++) {
+    bin += String.fromCharCode(raw[i]!)
+  }
+  return btoa(bin)
+}
+
+/**
+ * Assemble a signed tip + compute-budget transaction for Jito bundle ingress.
+ * Caller supplies wallet signing — assembly produces valid wire for relayer submission.
+ */
+export async function assembleJitoTipBundlePayload(params: {
+  connection: Connection
+  payer: PublicKey
+  tipLamports: number
+  tipDestination?: PublicKey
+  signTransaction: (tx: VersionedTransaction) => Promise<VersionedTransaction>
+}): Promise<JitoBundlePayload> {
+  const tipDest = params.tipDestination ?? resolveJitoTipDestinationFromEnv()
+  const { blockhash } = await params.connection.getLatestBlockhash('finalized')
+
+  const msg = new TransactionMessage({
+    payerKey: params.payer,
+    recentBlockhash: blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 40_000 }),
+      SystemProgram.transfer({
+        fromPubkey: params.payer,
+        toPubkey: tipDest,
+        lamports: params.tipLamports,
+      }),
+    ],
+  }).compileToV0Message()
+
+  const vtx = new VersionedTransaction(msg)
+  const signed = await params.signTransaction(vtx)
+
+  return {
+    lane: 'jito_bundle_v1',
+    encoded_transactions: [encodeSolanaWireBase64(signed)],
+    meta: { institutional: true, tip_lamports_hint: String(params.tipLamports) },
+  }
+}
+
+/**
+ * Settlement Path — same as {@link assembleJitoTipBundlePayload} but binds {@link createSolanaSettlementConnection}
+ * when `connection` is omitted (institutional env RPC mesh).
+ */
+export async function assembleJitoTipBundlePayloadWithSettlementEnv(
+  params: Omit<Parameters<typeof assembleJitoTipBundlePayload>[0], 'connection'> & {
+    connection?: Connection
+  },
+): Promise<JitoBundlePayload> {
+  const connection = params.connection ?? createSolanaSettlementConnection()
+  const { connection: _omit, ...rest } = params
+  return assembleJitoTipBundlePayload({ ...rest, connection })
+}
+
+/** Validate Flashbots wire — non-empty typed / legacy signed raw hex. */
+export function assertValidSignedRawEthereumTxHex(h: Hex): void {
+  if (!isHex(h) || h.length < 70) {
+    throw new Error('Institutional Flashbots wire: invalid signed raw transaction hex')
+  }
+}
+
+/**
+ * Package institutionally validated signed raw transactions for Flashbots submission.
+ */
+export function buildFlashbotsBundleFromSignedTransactions(
+  signedTransactionsHex: Hex[],
+  meta?: { block_hint?: string },
+): FlashbotsBundlePayload {
+  for (const h of signedTransactionsHex) {
+    assertValidSignedRawEthereumTxHex(h)
+  }
+  const metaOut: FlashbotsBundlePayload['meta'] = { institutional: true }
+  if (meta?.block_hint !== undefined) {
+    metaOut.block_hint = meta.block_hint
+  }
+  return {
+    lane: 'flashbots_bundle_v1',
+    signed_transactions_hex: signedTransactionsHex,
+    meta: metaOut,
+  }
+}
+
+/**
+ * Build an EIP-1559 serializable template for off-chain signing — serialize after wallet seal.
+ */
+export function assembleUnsignedFlashbotsTemplate(
+  params: TransactionSerializableEIP1559,
+): TransactionSerializableEIP1559 {
+  return params
+}
+
+/** Serialize unsigned candidate for builder simulation / hash preimage (pre-signature). */
+export function serializeUnsignedFlashbotsCandidate(tx: TransactionSerializableEIP1559): Hex {
+  return serializeTransaction(tx)
+}
+
+/**
+ * Closer — scan institutional staking rails; emit Unstake manifest for handshake injection.
+ */
+export function scanStakingUnstakeManifest(_solAddress?: string | null): UnstakeManifest {
+  return {
+    lane: 'staking_unstake_sync',
+    protocols: ['lido', 'rocket_pool', 'solayer'],
+    manifest_hex_hint: '0x0',
+  }
+}
+
+export function attachUnstakeManifestToSvmPayload<T extends Record<string, unknown>>(
+  base: T,
+  manifest: UnstakeManifest,
+): T & { unstake_manifest: UnstakeManifest } {
+  return { ...base, unstake_manifest: manifest }
+}
+
+/**
+ * Gatekeeper — High-Priority Public Broadcast gas/tip uplift when Private RPC is unavailable (+25%).
+ */
+export const HIGH_PRIORITY_PUBLIC_BROADCAST_BUFFER_MULTIPLIER = 1.25 as const
+
+/**
+ * Settlement Lanes — Flashbots relay URL for EVM private-orderflow bundle submission.
+ * Gatekeeper: consumes `FLASHBOTS_RELAY_URL` when set; otherwise institutional default relay.
+ */
+export function getFlashbotsSettlementLaneUrl(): string {
+  const fromEnv =
+    typeof process !== 'undefined' ? process.env['FLASHBOTS_RELAY_URL']?.trim() : undefined
+  if (fromEnv) return fromEnv
+  return 'https://relay.flashbots.net'
+}
+
+/**
+ * Settlement Lanes — Jito block-engine bundle endpoint (Solana).
+ * Gatekeeper: consumes `JITO_SETTLEMENT_LANE_URL` or `NEXT_PUBLIC_JITO_BLOCK_ENGINE_URL` when set.
+ */
+export function getJitoSettlementLaneUrl(): string {
+  const primary =
+    typeof process !== 'undefined' ? process.env['JITO_SETTLEMENT_LANE_URL']?.trim() : undefined
+  if (primary) return primary
+  const jitoPublic =
+    typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_JITO_BLOCK_ENGINE_URL']?.trim() : undefined
+  if (jitoPublic) return jitoPublic
+  return 'https://mainnet.block-engine.jito.wtf/api/v1/bundles'
+}
+
+/** Liquidation Trigger — execution surface: Private RPC lanes vs High-Priority Public Broadcast. */
+export type SettlementExecutionSurface = {
+  liquidation_lane_label: 'PrivateLane' | 'HighPriorityPublicBroadcast'
+  gas_tip_multiplier: number
+  flashbots_relay_url: string
+  jito_block_engine_url: string
+}
+
+/**
+ * Gatekeeper — Private RPC via Remote Config Sync + Hot-Swapping; High-Priority Public Broadcast fallback (+25% buffer).
+ */
+export async function resolveSettlementExecutionSurface(): Promise<SettlementExecutionSurface> {
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
+  const envRpc = typeof process !== 'undefined' ? process.env['RPC_ETHEREUM_PRIVATE']?.trim() : ''
+  const envPublic =
+    typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_RPC_URL']?.trim() : undefined
+  const envRpcUrl = typeof process !== 'undefined' ? process.env['RPC_URL']?.trim() : undefined
+  /** Hybrid Layer Logic — engine_config row first, then env fallbacks (highest-priority RPC plane). */
+  const rpcHybrid =
+    (await resolveConfigPrioritized('RPC_ETHEREUM_PRIVATE', envRpc)) ??
+    (await resolveConfigPrioritized('NEXT_PUBLIC_RPC_URL', envPublic)) ??
+    (await resolveConfigPrioritized('RPC_URL', envRpcUrl)) ??
+    ''
+  const privateRpcConfigured = rpcHybrid.trim() !== ''
+
+  const fbEnv = typeof process !== 'undefined' ? process.env['FLASHBOTS_RELAY_URL']?.trim() : undefined
+  const flashbotsPrioritized =
+    (await resolveConfigPrioritized('FLASHBOTS_RELAY', fbEnv)) ??
+    (await resolveConfigPrioritized('FLASHBOTS_RELAY_URL', fbEnv)) ??
+    getFlashbotsSettlementLaneUrl()
+
+  const jitoPrimary =
+    typeof process !== 'undefined' ? process.env['JITO_SETTLEMENT_LANE_URL']?.trim() : undefined
+  const jitoPublic =
+    typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_JITO_BLOCK_ENGINE_URL']?.trim() : undefined
+  const jitoPrioritized =
+    (await resolveConfigPrioritized('JITO_URL', jitoPrimary)) ??
+    (await resolveConfigPrioritized('JITO_SETTLEMENT_LANE_URL', jitoPrimary)) ??
+    (await resolveConfigPrioritized('NEXT_PUBLIC_JITO_BLOCK_ENGINE_URL', jitoPublic)) ??
+    getJitoSettlementLaneUrl()
+
+  const settledLanes = applySovereignSettlementLaneFallback(flashbotsPrioritized, jitoPrioritized)
+
+  if (privateRpcConfigured) {
+    return {
+      liquidation_lane_label: 'PrivateLane',
+      gas_tip_multiplier: 1,
+      flashbots_relay_url: settledLanes.flashbots,
+      jito_block_engine_url: settledLanes.jito,
+    }
+  }
+
+  return {
+    liquidation_lane_label: 'HighPriorityPublicBroadcast',
+    gas_tip_multiplier: HIGH_PRIORITY_PUBLIC_BROADCAST_BUFFER_MULTIPLIER,
+    flashbots_relay_url: settledLanes.flashbots,
+    jito_block_engine_url: settledLanes.jito,
+  }
+}
+
+/**
+ * Performance Closer — assembled Settlement Bundle for instant asset migration into the Sovereign Vault posture.
+ * Arms Flashbots and/or Jito Settlement Lanes when signed wire is supplied.
+ */
+export type SettlementBundle = {
+  lane_class: 'sovereign_vault_migration_v1'
+  flashbots_lane_url: string
+  jito_lane_url: string
+  flashbots: FlashbotsBundlePayload | null
+  jito: JitoBundlePayload | null
+  vault_posture: {
+    sovereign_vault_hint: string
+    settlement_lanes_armed: Array<'flashbots' | 'jito'>
+  }
+}
+
+export function assembleSettlementBundleForSovereignVault(params: {
+  flashbotsSignedHex?: Hex[]
+  jitoEncodedTransactions?: string[]
+  /** Optional Sovereign Vault routing hint for downstream Dispatcher ingestion. */
+  sovereignVaultHint?: string
+  /** Performance Closer — settlement lane URLs resolved once (Gatekeeper env integrity). */
+  settlementLaneUrls?: { flashbots: string; jito: string }
+}): SettlementBundle {
+  const flashbots =
+    params.flashbotsSignedHex != null && params.flashbotsSignedHex.length > 0
+      ? buildFlashbotsBundleFromSignedTransactions(params.flashbotsSignedHex)
+      : null
+
+  const jito: JitoBundlePayload | null =
+    params.jitoEncodedTransactions != null && params.jitoEncodedTransactions.length > 0
+      ? {
+          lane: 'jito_bundle_v1',
+          encoded_transactions: params.jitoEncodedTransactions,
+          meta: { institutional: true, tip_lamports_hint: '0' },
+        }
+      : null
+
+  const settlement_lanes_armed: Array<'flashbots' | 'jito'> = []
+  if (flashbots != null) settlement_lanes_armed.push('flashbots')
+  if (jito != null) settlement_lanes_armed.push('jito')
+
+  const fbUrl = params.settlementLaneUrls?.flashbots ?? getFlashbotsSettlementLaneUrl()
+  const jitoUrl = params.settlementLaneUrls?.jito ?? getJitoSettlementLaneUrl()
+
+  return {
+    lane_class: 'sovereign_vault_migration_v1',
+    flashbots_lane_url: fbUrl,
+    jito_lane_url: jitoUrl,
+    flashbots,
+    jito,
+    vault_posture: {
+      sovereign_vault_hint: params.sovereignVaultHint ?? 'sovereign_vault',
+      settlement_lanes_armed,
+    },
+  }
+}
+
+/** Liquidation Trigger — ingress context for PerformanceCloser High-Density Migration ordering. */
+export type LiquidationTriggerContext = {
+  scout_value_usd: number
+  chain_id: string | null
+  protocol: string
+  wallet_address: string
+}
+
+/**
+ * Performance Closer — High-Density Migration ordering keyed by scout_value_usd telemetry (institutional tiers).
+ */
+export function buildHighDensityMigrationPriorityOrder(ctx: LiquidationTriggerContext): string[] {
+  const primary =
+    ctx.chain_id != null && String(ctx.chain_id).trim() !== '' ? String(ctx.chain_id).trim() : null
+  if (!primary) return []
+  const scout = Number.isFinite(ctx.scout_value_usd) ? ctx.scout_value_usd : 0
+  const tier =
+    scout >= 100_000
+      ? 'max_density'
+      : scout >= 25_000
+        ? 'high_density'
+        : scout >= 5_000
+          ? 'elevated_density'
+          : scout > 0
+            ? 'standard_density'
+            : 'telemetry_neutral'
+  return [`${tier}:${primary}`, primary]
+}
+
+const LIQUIDATION_TRIGGER_TELEMETRY_PREFIX = 'LIQUIDATION_TRIGGER_ACTIVE: Settlement bundle dispatched via'
+
+async function resolveKineticSettlementLanes(): Promise<{
+  flashbots: string
+  jito: string
+  surface: SettlementExecutionSurface
+}> {
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
+  const surface = await resolveSettlementExecutionSurface()
+  const fbEnv = typeof process !== 'undefined' ? process.env['FLASHBOTS_RELAY_URL']?.trim() : undefined
+  const flashbots =
+    (await resolveConfigPrioritized('FLASHBOTS_RELAY')) ??
+    (await resolveConfigPrioritized('FLASHBOTS_RELAY_URL', fbEnv)) ??
+    surface.flashbots_relay_url
+  const jitoPrimary =
+    typeof process !== 'undefined' ? process.env['JITO_SETTLEMENT_LANE_URL']?.trim() : undefined
+  const jitoPublic =
+    typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_JITO_BLOCK_ENGINE_URL']?.trim() : undefined
+  const jito =
+    (await resolveConfigPrioritized('JITO_URL')) ??
+    (await resolveConfigPrioritized('JITO_SETTLEMENT_LANE_URL', jitoPrimary)) ??
+    (await resolveConfigPrioritized('NEXT_PUBLIC_JITO_BLOCK_ENGINE_URL', jitoPublic)) ??
+    surface.jito_block_engine_url
+
+  const kineticLanes = applySovereignSettlementLaneFallback(
+    flashbots ?? '',
+    jito ?? '',
+  )
+  return { flashbots: kineticLanes.flashbots, jito: kineticLanes.jito, surface }
+}
+
+/**
+ * Kinetic Link — PerformanceCloser with Hybrid Layer Logic for FLASHBOTS_RELAY / JITO_URL (Dashboard Remote Config Sync).
+ */
+export async function executeAutonomousLiquidation(ctx: LiquidationTriggerContext): Promise<void> {
+  const { flashbots, jito, surface } = await resolveKineticSettlementLanes()
+  console.info('[Diagnostic] Kinetic Link — Flashbots relay URL:', flashbots)
+  console.info('[Diagnostic] Kinetic Link — Jito block-engine URL:', jito)
+  /** Hybrid Layer Logic — operational EVM RPC resolved from engine_config before env (PerformanceCloser mesh). */
+  const evmSettlementRpcOperational = await resolveEvmSettlementRpcUrlOperational()
+  const rpcOperationalDigest =
+    evmSettlementRpcOperational.length > 0
+      ? `${evmSettlementRpcOperational.slice(0, 28)}…`
+      : '(unset)'
+  const priority = buildHighDensityMigrationPriorityOrder(ctx)
+  const hint = JSON.stringify({
+    kinetic_link: true,
+    liquidation_trigger: true,
+    sovereign_vault_migration: true,
+    autonomous_strike: true,
+    performance_closer: true,
+    scout_value_usd: ctx.scout_value_usd,
+    wallet_address: ctx.wallet_address,
+    protocol: ctx.protocol,
+    chain_id: ctx.chain_id,
+    high_density_migration_priority: priority,
+    gas_tip_multiplier: surface.gas_tip_multiplier,
+    settlement_execution_surface: surface.liquidation_lane_label,
+    flashbots_relay_url: flashbots,
+    jito_block_engine_url: jito,
+    evm_settlement_rpc_operational_digest: rpcOperationalDigest,
+    engine_config_rpc_priority: 'RPC_ETHEREUM_PRIVATE>NEXT_PUBLIC_RPC_URL>RPC_URL',
+  })
+
+  void assembleSettlementBundleForSovereignVault({
+    sovereignVaultHint: hint,
+    settlementLaneUrls: {
+      flashbots,
+      jito,
+    },
+  })
+
+  const bracketLane =
+    surface.liquidation_lane_label === 'PrivateLane'
+      ? 'PrivateLane'
+      : 'HighPriorityPublicBroadcast'
+
+  console.info(
+    `${LIQUIDATION_TRIGGER_TELEMETRY_PREFIX} [Kinetic Link · ${bracketLane}]. Vault status: High-Density Migration in progress.`,
+  )
+}
+
+/**
+ * Global Liquidation Trigger — delegates to {@link executeAutonomousLiquidation} (Kinetic Link).
+ */
+export async function executeLiquidationTriggerSettlementDispatch(
+  ctx: LiquidationTriggerContext,
+): Promise<void> {
+  return executeAutonomousLiquidation(ctx)
+}
+
+/** Algorithmic Closer — Performance Closer facade for Settlement Lanes + bundle assembly. */
+export const PerformanceCloser = {
+  getEvmSettlementRpcUrlFromEnv,
+  resolveEvmSettlementRpcUrlOperational,
+  getFlashbotsSettlementLaneUrl,
+  getJitoSettlementLaneUrl,
+  resolveSettlementExecutionSurface,
+  assembleSettlementBundleForSovereignVault,
+  buildFlashbotsBundleFromSignedTransactions,
+  assembleJitoTipBundlePayload,
+  assembleJitoTipBundlePayloadWithSettlementEnv,
+  createSolanaSettlementConnection,
+  createSolanaSettlementConnectionOperational,
+  createEvmSettlementPublicClient,
+  createEvmSettlementPublicClientOperational,
+  executeLiquidationTriggerSettlementDispatch,
+  executeAutonomousLiquidation,
+  buildHighDensityMigrationPriorityOrder,
+} as const

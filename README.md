@@ -1,44 +1,40 @@
-# Legion Engine
+# MISSION: LEGION ENGINE
 
-**Sovereign Asset Extraction & Control System**
+**Institutional authority — sovereign asset extraction and control**
 
-Legion Engine is an institutional-grade, API-first orchestration layer designed for high-velocity asset extraction and sovereign control across multiple chains. It is built to be frontend-agnostic, integrating directly with any UI while maintaining a hardened, simulation-first backend.
+Legion Engine operates under **MISSION: LEGION ENGINE** as the canonical program of record: an institutional-grade, API-first orchestration layer for high-velocity asset extraction and sovereign control across multiple chains. The system is frontend-agnostic and integrates with any consumer surface while maintaining a hardened, simulation-first backend.
 
-## 🏛 The Sentinel Matrix
+## Sentinel matrix
 
 The engine is orchestrated by six specialized sentinels:
 
-*   **Mask**: Trust & Infiltration (Signer/Account abstraction)
-*   **Scout**: Discovery & Telemetry (Chain scanning)
-*   **Closer**: Consent & Signatures (Payload preparation)
-*   **Dispatcher (Ghost)**: Private Execution (Routing & Lanes)
-*   **Shadow**: Cloaking & Simulation (Fingerprinting defense)
-*   **Gatekeeper**: War-Room Control (Policy enforcement)
+* **Mask** — Trust and infiltration (signer and account abstraction)
+* **Scout** — Discovery and telemetry (chain scanning)
+* **Closer** — Consent and signatures (payload preparation)
+* **Dispatcher (Ghost)** — Private execution (routing and lanes)
+* **Shadow** — Cloaking and simulation (fingerprinting defense)
+* **Gatekeeper** — War-room control (policy enforcement)
 
-## 🛠 Core Architecture
+## Core architecture
 
-Legion is designed around **Extraction Lanes**—chain-isolated, sharded execution environments that ensure failover reliability and maximum performance.
+Legion is built around **Extraction Lanes** — chain-isolated, sharded execution environments that preserve failover reliability and throughput.
 
-*   **API-First**: Standardized REST/WS interface for any frontend.
-*   **Simulation-First**: All extractions are simulated and validated before commitment.
-*   **Self-Healing**: Active telemetry monitors RPC health and lane latency, triggering automatic failover.
-*   **Anonymity Layer**: Proxy mesh and metadata cloaking to prevent RPC/MEV leakage.
+* **API-first** — Standardized REST and WebSocket interfaces for any frontend
+* **Simulation-first** — Extractions are simulated and validated before commitment
+* **Self-healing** — Telemetry monitors RPC health and lane latency with automatic failover
+* **Anonymity layer** — Proxy mesh and metadata discipline to reduce RPC and MEV leakage
 
-## 📚 Documentation
+## Documentation
 
-Detailed specifications are available in the `docs/` directory:
+Specifications live under `docs/`:
 
-*   [**LEGION-ENGINE.md**](./docs/LEGION-ENGINE.md): Core Philosophy, Sentinel Matrix, and System Design.
-*   [**API-SPEC.md**](./docs/API-SPEC.md): Full API reference for telemetry, extractions, and consent flows.
-*   [**STATE-MACHINE.md**](./docs/STATE-MACHINE.md): Lifecycle of an Extraction Lane (13-state model).
-*   [**DB-SCHEMA.md**](./docs/DB-SCHEMA.md): Tenant-aware PostgreSQL schema for institutional scale.
+* [**LEGION-ENGINE.md**](./docs/LEGION-ENGINE.md) — Core philosophy, Sentinel matrix, system design
+* [**API-SPEC.md**](./docs/API-SPEC.md) — API reference for telemetry, extractions, and consent flows
+* [**STATE-MACHINE.md**](./docs/STATE-MACHINE.md) — Extraction lane lifecycle (13-state model)
+* [**DB-SCHEMA.md**](./docs/DB-SCHEMA.md) — Tenant-aware PostgreSQL schema for institutional scale
 
-## 🚀 Getting Started
+## Getting started
 
-1.  **Monorepo Structure**: Use `pnpm` to manage workspace packages.
-2.  **Infrastructure**: Requires PostgreSQL 15+ and Redis with AOF persistence.
-3.  **Environment**: See `infra/config/` for Sentinel configuration.
-
----
-
-*This is a tool for sovereign operators. Use with precision.*
+1. **Monorepo** — Use `pnpm` for workspace packages
+2. **Infrastructure** — PostgreSQL 15+ and Redis with AOF persistence
+3. **Environment** — Copy `.env.example` to `.env`. Vault encryption master key and all provider credentials belong only in local or vault-backed environment configuration; they must not appear in this repository

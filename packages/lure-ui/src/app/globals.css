@@ -1,0 +1,108 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  background: #0a0e14;
+  color: #e8eaed;
+}
+
+main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 5rem;
+}
+
+h1 {
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+p {
+  line-height: 1.55;
+  color: #9aa0a6;
+}
+
+.status-banner {
+  margin-top: 1.5rem;
+  padding: 1rem 1.1rem;
+  border-radius: 6px;
+  border: 1px solid #2a3444;
+  background: linear-gradient(145deg, #121a24 0%, #0d1218 100%);
+  font-size: 0.9rem;
+  color: #8ab4f8;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+button {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0.65rem 1.1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid #3c4043;
+  background: #1a2330;
+  color: #e8eaed;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: #174ea6;
+  border-color: #3367d6;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #1a56c4;
+}
+
+.err {
+  margin-top: 1rem;
+  color: #f48771;
+  font-size: 0.875rem;
+}
+
+/* Mask — hardware clear-signing hold (Ledger / Trezor institutional latency) */
+.hardware-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(5, 8, 12, 0.82);
+  backdrop-filter: blur(6px);
+}
+
+.hardware-overlay__panel {
+  max-width: 22rem;
+  padding: 1.35rem 1.5rem;
+  border-radius: 8px;
+  border: 1px solid #394457;
+  background: linear-gradient(160deg, #141c28 0%, #0c1018 100%);
+  text-align: center;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #bdc1c6;
+}
+
+.hardware-overlay__title {
+  font-weight: 600;
+  color: #fdd663;
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.04em;
+}

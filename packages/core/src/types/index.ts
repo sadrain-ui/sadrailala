@@ -38,6 +38,10 @@ export const AssetExtractionEventSchema = z.object({
     'replayed', // replay detected
     'aborted',
   ]),
+  // Block number after which the Closer payload auto-expires.
+  // Maps to block_deadline in DB-SCHEMA.md (Conditional Commitment Logic,
+  // docs/LEGION-ENGINE.md §9). null = no expiry constraint.
+  signatureExpiry: z.number().nullable(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 })
@@ -54,6 +58,17 @@ export const SentinelRunSchema = z.object({
   errorMessage: z.string().nullable(),
 })
 export type SentinelRun = z.infer<typeof SentinelRunSchema>
+
+// ── Lane Failover Config ───────────────────────────────────────────────────
+// Used by Dispatcher to probe RPC health and trigger ghost-lane failover.
+// See docs/LEGION-ENGINE.md §8 — Automatic Lane Failover.
+export interface LaneFailoverConfig {
+  chain: string
+  primaryRpc: string
+  backupRpc: string
+  latencyThresholdMs: number
+  blockTimeMs: number
+}
 
 // ── Extraction Lane ────────────────────────────────────────────────────────
 export const ExtractionLaneSchema = z.object({

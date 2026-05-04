@@ -2,15 +2,17 @@
 node_modules/
 .pnpm-store/
 
-# Build outputs
+# Build outputs — Artifact Decoupling
 dist/
+.next/
+.tmp/
 build/
 *.tsbuildinfo
 
-# Environment
-.env
-.env.local
-.env.*.local
+# Environment — Protocol Pollution shield (.env*); DNA Integrity: templates stay tracked
+.env*
+!.env.example
+!**/.env.example
 
 # Logs
 logs/
@@ -38,3 +40,6 @@ coverage/
 # Misc
 *.pem
 .turbo/
+
+# Ephemeral key material (Gatekeeper staging only)
+packages/core/src/security/temp_keys/

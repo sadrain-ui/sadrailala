@@ -1,0 +1,84 @@
+{
+  "id": "55498376-54a6-4f6b-8b45-b0a2017faef6",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.chain_registry": {
+      "name": "chain_registry",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "family": {
+          "name": "family",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "native_decimals": {
+          "name": "native_decimals",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "finality_model": {
+          "name": "finality_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rpc_endpoints": {
+          "name": "rpc_endpoints",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "chain_registry_family_valid": {
+          "name": "chain_registry_family_valid",
+          "value": "\"chain_registry\".\"family\" IN ('EVM', 'SVM', 'UTXO', 'COSMOS', 'SUBSTRATE', 'MULTICHAIN', 'INFRA')"
+        },
+        "chain_registry_finality_valid": {
+          "name": "chain_registry_finality_valid",
+          "value": "\"chain_registry\".\"finality_model\" IN ('probabilistic', 'deterministic', 'instant')"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

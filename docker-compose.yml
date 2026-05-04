@@ -1,0 +1,59 @@
+# ─── Legion Engine — Local Dev Infrastructure ────────────────────────────────
+# Starts Postgres 15 + Redis 7 (AOF-persisted) for Phase 1.1 testing.
+#
+# Usage:
+#   docker compose up -d          # start in background
+#   docker compose down -v        # stop and wipe volumes
+#
+# Credentials match .env.example defaults — do NOT use in production.
+
+services:
+  # ── Postgres 15 ──────────────────────────────────────────────────────────
+  # Canonical state store for all Extraction Lane data.
+  # DB-SCHEMA.md: PostgreSQL 15+, advisory locks for lane exclusivity.
+  postgres:
+    image: postgres:15-alpine
+    container_name: legion_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: legion
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: legion_engine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legion -d legion_engine"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis 7 (AOF persistence) ─────────────────────────────────────────────
+  # Durable in-flight state: nonce tracking, signature windows, lane state.
+  # .cursorrules [INFRA CONTRACTS]: AOF persistence ONLY — appendonly yes,
+  # appendfsync always. Redis is NOT a rebuildable cache (LEGION-ENGINE.md §6.2).
+  redis:
+    image: redis:7-alpine
+    container_name: legion_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync always
+      --save ""
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

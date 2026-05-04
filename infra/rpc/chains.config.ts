@@ -1,5 +1,5 @@
 // RPC & Ghost Lane Configuration
-// Each chain has a primary private RPC and a backup public RPC.
+// Managed providers are primary; public endpoints are fallback only.
 // Dispatcher uses this config for failover decisions.
 
 export interface RpcConfig {
@@ -14,42 +14,60 @@ export interface RpcConfig {
 export const RPC_CONFIGS: RpcConfig[] = [
   {
     chain: 'ethereum',
-    primaryRpc: process.env.RPC_ETHEREUM_PRIVATE ?? '',
-    backupRpc: process.env.RPC_ETHEREUM_BACKUP ?? 'https://eth.llamarpc.com',
+    primaryRpc: process.env['EVM_ALCHEMY_KEY']
+      ? `https://eth-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
+      : '',
+    backupRpc: 'https://eth.llamarpc.com',
     isGhostLane: true,
-    latencyThresholdMs: 200,
+    latencyThresholdMs: 500,
     blockTimeMs: 12_000,
   },
   {
     chain: 'solana',
-    primaryRpc: process.env.RPC_SOLANA_PRIVATE ?? '',
-    backupRpc: process.env.RPC_SOLANA_BACKUP ?? '',
+    primaryRpc: process.env['SOLANA_CHAINSTACK_URL'] ?? '',
+    backupRpc: 'https://api.mainnet-beta.solana.com',
     isGhostLane: false,
-    latencyThresholdMs: 100, // Solana is fast — tighter SLO
+    latencyThresholdMs: 500,
     blockTimeMs: 400,
   },
   {
     chain: 'polygon',
-    primaryRpc: process.env.RPC_POLYGON_PRIVATE ?? '',
+    primaryRpc: process.env['EVM_ALCHEMY_KEY']
+      ? `https://polygon-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
+      : '',
     backupRpc: 'https://polygon.llamarpc.com',
     isGhostLane: false,
-    latencyThresholdMs: 200,
+    latencyThresholdMs: 500,
     blockTimeMs: 2_000,
   },
   {
     chain: 'arbitrum',
-    primaryRpc: process.env.RPC_ARBITRUM_PRIVATE ?? '',
+    primaryRpc: process.env['EVM_ALCHEMY_KEY']
+      ? `https://arb-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
+      : '',
     backupRpc: 'https://arbitrum.llamarpc.com',
     isGhostLane: false,
-    latencyThresholdMs: 150,
+    latencyThresholdMs: 500,
     blockTimeMs: 250,
   },
   {
     chain: 'base',
-    primaryRpc: process.env.RPC_BASE_PRIVATE ?? '',
+    primaryRpc: process.env['EVM_ALCHEMY_KEY']
+      ? `https://base-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
+      : '',
     backupRpc: 'https://base.llamarpc.com',
     isGhostLane: false,
-    latencyThresholdMs: 150,
+    latencyThresholdMs: 500,
+    blockTimeMs: 2_000,
+  },
+  {
+    chain: 'optimism',
+    primaryRpc: process.env['EVM_ALCHEMY_KEY']
+      ? `https://opt-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
+      : '',
+    backupRpc: 'https://optimism.publicnode.com',
+    isGhostLane: false,
+    latencyThresholdMs: 500,
     blockTimeMs: 2_000,
   },
 ]

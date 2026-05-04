@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @legion/api dev",
+    "dev:lure": "pnpm --filter @legion/lure-ui dev",
     "build": "pnpm --filter './packages/**' build && pnpm --filter './apps/**' build",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",

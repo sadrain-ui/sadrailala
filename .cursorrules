@@ -1,214 +1,513 @@
+---
+description: 
+alwaysApply: true
+---
+
 # ============================================================
-# LEGION ENGINE — CURSOR GLOBAL RULEBOOK
-# Version: 1.0 | Classification: ELITE NEURAL NETWORK
-# ============================================================
-# This file is the SUPREME LAW for all code generation in this repo.
-# Every rule below OVERRIDES any default Cursor/AI behavior.
-# If a rule conflicts with a "common pattern", THIS FILE WINS.
+# LEGION ENGINE — MASTER .cursorrules
+# Semantic compression of 49 skills. DO NOT re-read docs/skills/
+# unless explicitly requested. Operate from this memory.
 # ============================================================
 
-## [IDENTITY]
-You are the Legion Engine AI Architect.
-You build a "Universal Asset Vacuum" — an institutional-grade,
-API-first, frontend-agnostic asset extraction engine.
-You think in Sentinels, Extraction Lanes, Ghost Lanes, and Lethality scores.
-You NEVER produce generic code. Every function has a purpose mapped to
-a Sentinel from @docs/research/ and a skill from @docs/skills/.
+# ════════════════════════════════════════════════════════════
+# [GLOBAL DIRECTIVES] — from SKILL-00: MASTER RULES
+# ════════════════════════════════════════════════════════════
 
----
+RULE-GLOBAL-A: STRICT SEQUENCE MANDATORY. Before writing ANY function:
+  1. Identify Sentinel owner: Scout | Gatekeeper | Mask | Closer | Shadow | Dispatcher
+  2. Load FILE OWNERSHIP MAP (below) — identify applicable skill numbers
+  3. Apply constraints in PRIORITY ORDER (Ghost-Fail first, Concurrency last)
+  4. Write function ONLY after steps 1-3 complete
+  5. Run Resilience & Stealth Audit (10 checkboxes below) — ALL must pass
 
-## [ABSOLUTE PROHIBITIONS] — NEVER DO THESE
+RULE-GLOBAL-B: VERIFICATION GATE. Every function must pass:
+  [ ] No floating-point in financial math (BigInt only)
+  [ ] Simulation before ANY broadcast (Shadow.simulate → Tenderly fallback)
+  [ ] Proxy mesh routing on ALL outbound HTTP (no bare IP)
+  [ ] Jitter on ALL retries (no fixed-interval)
+  [ ] Rate limit checked via Redis before RPC burst
+  [ ] Nonce fetched fresh per tx (getTransactionCount 'pending')
+  [ ] Empty catch blocks: BANNED — must emit LegionError
+  [ ] Post-strike balance verify before marking lane Settled
+  [ ] No axios/node-fetch — undici.Pool only
+  [ ] CPU-bound work in Piscina workers, never main thread
 
-1. NEVER use `ethers.js` or `web3.js` — Viem is the ONLY EVM standard
-2. NEVER use global singletons — factory function pattern ONLY
-3. NEVER `console.log` in production paths — use structured logger only
-4. NEVER commit secrets, private keys, or API keys in code
-5. NEVER skip Shadow simulation before Dispatcher broadcast
-6. NEVER mark an Extraction Lane as "Settled" without post-strike balance verification
-7. NEVER use a single account for multiple concurrent lanes without Nonce-Manager
-8. NEVER catch errors silently — every catch MUST log + emit LegionError typed event
-9. NEVER use `any` TypeScript type in @packages/core — strict types only
-10. NEVER write synchronous blocking code in hot paths — async/await or Piscina workers
-11. NEVER use generic HTTP clients (axios/node-fetch) in @packages/core — use `undici`
-12. NEVER implement liquidity routing without checking honeypot status first
-13. NEVER process Fee-on-Transfer or Rebase tokens with standard ERC-20 transfer logic
-14. NEVER submit a Flashbots bundle without `eth_callBundle` simulation first
-15. NEVER accept a swap quote older than 30 seconds — always re-fetch
+RULE-GLOBAL-C: CLOAKING. Skills = CONSTRAINTS not suggestions.
+  If a skill says "use undici" → using fetch is a VIOLATION.
+  If a skill says "simulate first" → skip = VIOLATION.
+  Priority hierarchy: SKILL-09 (Ghost-Fail) > SKILL-08 (TX Resilience) >
+    SKILL-05 (Honeypot) > SKILL-02 (Stealth) > SKILL-04 (MEV) >
+    SKILL-06 (Pathfinding) > SKILL-03 (EVM Math) > SKILL-01 (Concurrency)
 
----
+RULE-GLOBAL-D: CREDIT SHIELD (SKILL-30 compressed). DEFAULT output mode:
+  - Answer first, explanation after (if needed)
+  - Drop filler phrases: "In order to", "It's important to", "As you can see"
+  - Write scripts to answer codebase questions; NEVER read 5+ files for one query
+  - DNA files (04, 11, 12, 13, 14, 19, 21) = HIGH FIDELITY always, never compress
 
-## [MANDATORY PATTERNS] — ALWAYS DO THESE
+ANTI-PATTERNS (BANNED):
+  axios.get(rpcUrl)              → undici.Pool + connection reuse
+  await Promise.all(heavyWork)   → Piscina worker pool
+  new ethers.providers.JsonRpc   → createPublicClient (Viem)
+  broadcast without simulate     → Shadow.simulate() first
+  token.transfer(to, amount)     → delta-check + SafeTransferLib
+  nonce = await getNonce() inline → NonceManager.acquire()
+  catch(e) { }                   → LegionError emit + log
+  JSON.stringify(bigData) in loop → fast-json-stringify compiled
+  direct IP RPC call             → proxy mesh + TLS rotation
+  mark lane Settled after txHash → post-strike balance verify
 
-### Architecture
-- Every module exports a factory function: `createXxx(config)` — no `new Xxx()`
-- Every async function returns `Promise<Result<T, LegionError>>` — never throws raw
-- Every Sentinel function maps to exactly one entry in the Sentinel Matrix table
-- Read `@docs/research/<relevant>.md` BEFORE writing any integration code
-- Read `@docs/skills/<relevant>.md` BEFORE writing any performance/stealth/resilience code
+# ════════════════════════════════════════════════════════════
+# [THE 6-ROLE ARCHITECTURE]
+# ════════════════════════════════════════════════════════════
 
-### Performance (Skill: 01-concurrency)
-- CPU-bound work → Piscina worker pool, never in main thread
-- HTTP calls → `undici` with connection pooling, never one-shot fetch
-- JSON serialization in hot paths → `fast-json-stringify` with compiled schema
-- Telemetry batch processing → worker threads, target <50ms p99
+## ── MASK (UI/UX Aesthetic & Wallet Abstraction) ───────────
+# Skills: 34 (WalletConnect/Rabby), 35 (Ledger/Trezor), 43 (Viem Standard)
 
-### Stealth (Skill: 02-stealth)
-- All RPC calls through proxy mesh — never direct IP
-- TLS fingerprint rotation on every session using `tls-client` patterns
-- User-Agent and header randomization on every request
-- Rate limiting: respect per-chain RPC limits, add jitter to all retry delays
+MASK-01: WalletConnect v2 — Use @walletconnect/ethereum-provider (EIP-1193).
+  NEVER use @walletconnect/sign-client directly. EthereumProvider.init() MUST
+  have projectId + chains + metadata. Session persistence: check provider.session
+  on startup; call connect() only if null. Bridge to Viem: createWalletClient({
+  transport: custom(provider) }) — ONLY valid WC→Viem bridge.
+  Rabby detection: window.ethereum.isRabby === true → prefer over MetaMask.
+  Event handlers REQUIRED: accountsChanged → re-fetch positions; disconnect → clear session.
 
-### EVM Simulation (Skill: 03-evm-math)
-- Tenderly `eth_callBundle` OR Viem `publicClient.call()` MANDATORY before any broadcast
-- Gas estimation: use simulation result + 20% buffer, never `estimateGas` alone
-- solady-style math for all BigInt arithmetic — no floating point in wei calculations
+MASK-02: Hardware Signing — Ledger: hw-transport-webhid + hw-app-eth.
+  Call Eth.getAddress(path) FIRST to verify connectivity. Derivation path MUST
+  be m/44'/60'/0'/0/n. signTransaction() requires RLP via serializeTransaction().
+  Trezor: TrezorConnect.init() ONCE at startup. Returns {r,v,s} → assemble with
+  Viem serializeTransaction. Timeout floor: 60s — user must physically confirm.
+  Hardware = auth signer only. Hot wallet = execution signer. NEVER merge these.
+  NEVER store private key in memory — hardware prevents this by design.
 
-### MEV & Bundles (Skill: 04-mev-bundles)
-- Flashbots: always auth signer ≠ execution signer
-- Bundle retry: max 5 blocks, re-sign with updated nonce each retry
-- Jito (Solana): use tip account + bundle, never raw sendTransaction for MEV
+MASK-03: Viem Standard — createPublicClient for reads, createWalletClient for writes.
+  Use modular actions (getBalance(client, {address})) for tree-shaking.
+  client.extend(scoutActions) pattern for sentinel-specific capabilities.
+  Transport resilience: http(rpcUrl, { retryCount: 3, retryDelay: 1000 }).
+  NEVER use ethers.providers.JsonRpcProvider anywhere in @packages/core.
 
-### Token Safety (Skill: 05-honeypot + 07-nonstandard)
-- EVERY token must pass honeypot check BEFORE Gatekeeper approval
-- Fee-on-Transfer: use `balanceOf` delta check, not transfer return value
-- ERC-777: register receiver hook OR use SafeERC20 wrapper
-- Rebase tokens: snapshot share price before and after transfer
+MASK-04: Restraint rules — Mask NEVER mutates state. Mask only presents / routes.
+  TLS JA3 stealth (SKILL-16): use tls-client profiles for DEX price feeds / REST APIs
+  that fingerprint TLS. NEVER for Ethereum JSON-RPC (not needed). Rotate between
+  Chrome_144, Firefox_135, Safari_18_0 per session — UA MUST match profile exactly.
+  HTTP/3 (QUIC) fingerprint must also match — ua + tls + http2 settings = one browser.
 
-### Liquidity (Skill: 06-liquidity-pathfinding)
-- Dual-quote: 1inch + ParaSwap → pick better `destAmount`
-- Max price impact: 3% hard cap — Gatekeeper rejects above this
-- Route must be validated on-chain via simulation, not just API response
+## ── SCOUT (Asset Discovery & Rabby-Style Probing) ─────────
+# Skills: 01 (Concurrency), 02 (Stealth), 06 (Pathfinding), 10 (Sentinel Monitor),
+#         24 (Multicall3), 31 (Aave Scout), 32 (Curve Scout), 43 (Viem), 44 (UniV3),
+#         48 (UniV3 Deep), 47 (Compound), 46 (Morpho)
 
-### TX Resilience (Skill: 08-tx-resilience)
-- Stuck tx detection: monitor mempool, auto-RBF after 30 seconds
-- Nonce management: ALWAYS use centralized NonceManager from `@packages/core/nonce`
-- Idempotency: every Extraction Lane has a unique `laneId` — check Redis before re-run
-- Circuit breaker: if error rate >5% in 60s window → freeze all lanes
+SCOUT-01: Concurrency contract — ALL I/O parallel via Promise.all() + undici.Pool.
+  Never sequential awaits for multi-chain quotes. Worker pool:
+  maxThreads = Math.max(2, cpus().length - 1). Quote timeout = 2000ms with
+  Promise.race(). Use Promise.allSettled() — filter fulfilled only, pass to Gatekeeper.
+  fast-json-stringify: compile schema ONCE at startup; use for all >1KB serialization.
 
-### Ghost-Fail Prevention (Skill: 09-ghost-fail-hardening)
-- After EVERY sendTransaction: verify balance changed via `publicClient.getBalance`
-- If balance unchanged after 2 confirmations → emit `GHOST_FAIL` event, abort lane
-- Post-strike verification is NOT optional — it is the final gate
+SCOUT-02: Dual-quote mandatory — call 1inch AND ParaSwap simultaneously.
+  Pick higher destAmount. Quote freshness window = 30s. Reject if older.
+  Max price impact = 3% hard cap. For $1M+: split into 3-5 tranches, 1 block delay each.
+  LI.FI for cross-chain: allowBridges whitelist = ['stargate', 'across', 'connext'].
+  slippage cap = 0.03 (3%). Routes expire — never cache >30s.
 
----
+SCOUT-03: Multicall3 batch reads — address 0xcA11bde05977b3631167028862bE2a173976CA11
+  (same on 250+ chains). ALWAYS use aggregate3 (allowFailure per call), never aggregate v1.
+  Include getBlockNumber() as first call for atomic block-height snapshot.
+  NEVER use multicall for state-changing writes — reads only via eth_call.
+  Reduces N sequential eth_call to 1 RPC call — 99% latency reduction for pool scanning.
 
-## [RESILIENCE & STEALTH AUDIT]
-Every function in @packages/core MUST pass this audit before completion:
+SCOUT-04: Uniswap V3 telemetry — parse slot0 directly for sub-ms price reads
+  (sqrtPriceX96, tick, observationCardinality). If observationCardinality < 10 →
+  call increaseObservationCardinalityNext before relying on TWAP.
+  QuoterV2.quoteExactInputSingle for exact output with tick-cross gas.
+  Fee tier discovery: check 0.01%, 0.05%, 0.3%, 1% — liquidity varies per tier.
 
-```
-AUDIT CHECKLIST — run mentally before marking any function complete:
-[ ] 1. Is Viem used as sole EVM standard? (no ethers/web3)
-[ ] 2. Is factory pattern used? (no global singleton)
-[ ] 3. Is Shadow simulation called before broadcast?
-[ ] 4. Is NonceManager used for all tx submissions?
-[ ] 5. Is honeypot check done before Gatekeeper approval?
-[ ] 6. Is post-strike balance verification implemented?
-[ ] 7. Is circuit breaker wired to error rate monitor?
-[ ] 8. Is undici used for HTTP (not axios/fetch)?
-[ ] 9. Are all errors typed LegionError with Sentinel context?
-[ ] 10. Is Fee-on-Transfer handled with delta check?
-```
-If ANY checkbox is unchecked → DO NOT mark function complete. Fix it first.
+SCOUT-05: Protocol-specific health scanning —
+  Aave: getUserAccountData() → healthFactor < 1e18 = liquidatable. Use PoolAddressesProvider.getPool()
+    — NEVER hardcode Pool address. Batch 100 addresses per multicall3 call.
+  Morpho: call accrueInterest() BEFORE math on totalSupplyAssets/totalBorrowAssets — stale otherwise.
+    Market ID = keccak256(loanToken, collateralToken, oracle, irm, lltv).
+  Compound v3 (Comet): isBorrowCollateralized() for binary check. Use proxy addresses only.
+  Curve: Registry.find_pool_for_coins(a,b) for pool discovery. get_dy(i,j,dx) for simulation.
+    get_coin_indices() to get i,j from token addresses. NEVER hardcode pool addresses.
 
----
+SCOUT-06: Sentinel Monitor (SKILL-10) — runs on EVERY block (no polling intervals).
+  5 threat categories: liquidity drop, oracle deviation, contract pause, whale movement, gas spike.
+  Thresholds: oracle deviation warn=3%, critical=8%. Gas warn=200gwei, critical=500gwei.
+  Liquidity drop warn=15%, critical=30%. Alert levels: INFO (log), WARN (continue), CRITICAL (halt).
+  Sentinel = read-only observer. NEVER acts. Decoupled from execution state.
+  On CRITICAL: ALL pending ops MUST pause. Halt first, investigate second.
 
-## [PRIORITY HIERARCHY]
-When skills conflict, apply in this order:
-1. Ghost-Fail Prevention (09) — data integrity is supreme
-2. TX Resilience (08) — no orphaned transactions
-3. Stealth (02) — no detection
-4. Token Safety (05 + 07) — no trap tokens
-5. MEV/Bundles (04) — inclusion guarantee
-6. Liquidity (06) — best route
-7. EVM Math (03) — gas efficiency
-8. Concurrency (01) — performance
+SCOUT-07: Cross-Chain Correlation Monitor — track wrapped asset dependencies every block.
+  Monitored peg pairs (checked in parallel via Multicall3 + dual-source price feeds):
+    wETH  → peg ref: ETH spot (Chainlink ETH/USD vs wETH/ETH pool TWAP)
+    stETH → peg ref: ETH spot (stETH/ETH Curve pool get_dy + Chainlink)
+    wBTC  → peg ref: BTC spot (Chainlink BTC/USD vs wBTC/BTC pool TWAP)
+    cbETH, rETH, weETH → same pattern, respective Curve/Balancer pools
+  Depeg detection thresholds:
+    warn:     |pegRatio - 1.0| > 0.003  (0.3% deviation from 1:1)
+    critical: |pegRatio - 1.0| > 0.010  (1.0% deviation)
+  Bridge liquidity shift detection:
+    warn:     bridgeTVL drops >10% in single block window
+    critical: bridgeTVL drops >25% or bridge contract paused event emitted
+  On depeg WARN: reduce lethality score for all lanes using that wrapped asset by 20%.
+    Emit pino WARN + OTel span attribute: { 'depeg.asset': 'stETH', 'depeg.bps': 35 }.
+  On depeg CRITICAL or bridge liquidity critical:
+    Set globalLethalityScore[asset] = 0 — no new lanes opened for that asset.
+    Abort all pending extraction lanes denominated in or routing through that asset.
+    Emit CRITICAL alert. Halt first, investigate second (same protocol as SCOUT-06).
+  lethality score formula: baseScore * pegRatio * bridgeLiquidityFactor
+    where pegRatio = clamp(1 - |deviation|, 0, 1) and bridgeLiquidityFactor = tvl / tvl_baseline.
+  Quote routing: if wrapped asset has active depeg warn → dual-source quote REQUIRED.
+    Reject route if destAmount derived from depegged price; use underlying asset price as floor.
+  Recovery: reset lethalityScore to baseline only after pegRatio returns within 0.1% for 3
+    consecutive blocks AND bridge TVL recovers above 90% of baseline.
 
----
+## ── CLOSER (Execution Strikes, MEV-Protection, Atomic Extraction) ──
+# Skills: 03 (EVM Math), 04 (MEV Bundles), 09 (Execution Engine), 12 (Permit2),
+#         13 (Fusion), 17 (Solady), 20 (Solidity Patterns), 21 (UniV4 Hooks),
+#         22 (Solmate), 38 (Bundle Pricing), 40 (1inch), 41 (Flashbots), 42 (Tenderly)
 
-## [LEGION TERMINOLOGY — USE EXACTLY THESE NAMES]
-- AssetExtraction event (NOT "job" or "task")
-- Extraction Lane (NOT "queue" or "pipeline")
-- Ghost Lane (NOT "private tx" or "hidden route")
-- Sovereign Sync (NOT "cron" or "scheduler")
-- Lethality Score (NOT "risk score" or "profit threshold")
-- Sentinel (NOT "service" or "module" or "handler")
-- Strike (NOT "execute" or "run")
-- Settled (NOT "complete" or "done") — only after post-strike verification
+CLOSER-01: EVM math contracts — ALL wei arithmetic = BigInt. ZERO floating point.
+  parseEther('0.1') → 100000000000000000n. Never 0.1 * 1e18.
+  WAD = 10n**18n. RAY = 10n**27n. Percentage: (amount * WAD) / total.
+  Slippage: (amount * (10_000n - slippageBps)) / 10_000n.
+  Gas buffer: (simulatedGas * 120n) / 100n. Never divide before multiply.
 
----
+CLOSER-02: Simulation gate — MANDATORY before ANY broadcast. No exceptions.
+  Gate 1: Tenderly simulation_type='full', save_if_fails=true.
+  Gate 2: If Tenderly unavailable → publicClient.call() (Viem eth_call).
+  Gate 3: Gas with 20% buffer. Gate 4: Broadcast only if sim.success === true.
+  Shadow sentinel returns success=true → only then Dispatcher permitted to broadcast.
 
-## [FILE OWNERSHIP MAP]
-Before writing code for any feature, read the mapped files:
+CLOSER-03: MEV bundle execution (SKILL-04, SKILL-41) — Flashbots auth signer MUST be
+  different from execution signer. Auth = zero-fund EOA. NEVER merge.
+  eth_callBundle simulation BEFORE eth_sendBundle. firstRevert → abort, no submit.
+  Bundle retry: max 5 blocks. Re-sign with updated nonce per retry. Never reuse stale signed tx.
+  Flashbots Protect RPC = 'https://rpc.flashbots.net'. Bundle API = 'https://relay.flashbots.net'.
+  Use X-Flashbots-Signature: {authAddr}:{sig} header.
 
-| Feature | Read Research | Read Skills |
-|---|---|---|
-| EVM tx broadcast | viem.md | 03, 08, 09 |
-| Price discovery | 1inch.md, paraswap.md | 06 |
-| Token approval | permit2.md | 07 |
-| Wallet connect | walletconnect.md, rabby.md | 02 |
-| Safe multisig | safe.md | 08 |
-| Hardware wallet | ledger.md, trezor.md | 02 |
-| Flashbots | flashbots.md, mev-share.md | 04 |
-| Cross-chain | lifi.md | 06, 08 |
-| Solana | solana.md | 04 |
-| Simulation | tenderly.md | 03, 09 |
-| DeFi protocol | aave-v3.md, curve.md, uniswap-v3.md | 05, 06 |
-| Token scan | — | 05, 07 |
-| Concurrency | — | 01 |
-| HTTP/RPC calls | — | 01, 02 |
+CLOSER-04: Bundle pricing math (SKILL-38) — mevGasPrice = (ethSentToCoinbase +
+  sum(gasUsed[i] * priorityFee[i])) / totalGasUsed. Ranks builder inclusion.
+  ALWAYS compute maxFeePerGas from getBaseFeeInNextBlock() — NEVER hardcode.
+  replacementUuid MUST be set when replacing a pending bundle — prevents double-inclusion.
+  coinbaseDiff > 0 from simulation required before submission. BigNumber for all fee math.
 
----
+CLOSER-05: Permit2 batch approvals (SKILL-12) — universal address:
+  0x000000000022D473030F116dDEE9F6B43aC78BA3 (same ALL EVM chains).
+  ALWAYS prefer permitBatchTransferFrom() over individual approve() calls.
+  Nonce = bitmap-based. Re-used nonce → InvalidNonce revert.
+  Deadline = block.timestamp + max 30 minutes for MEV ops.
+  Witness: permitWitnessTransferFrom() for atomic order + transfer in 1 sig.
 
-## [ERROR TYPE CONTRACT]
-All errors in @packages/core MUST use this structure:
-```typescript
-type LegionError = {
-  code: LegionErrorCode     // enum — never magic strings
-  sentinel: SentinelName    // which sentinel owns this error
-  laneId?: string           // active Extraction Lane ID
-  chainId?: number
-  cause?: unknown           // original error
-  recoverable: boolean      // can circuit breaker retry?
-  timestamp: number
-}
+CLOSER-06: 1inch Fusion Dutch Auction (SKILL-13) — ALWAYS use FusionOrder.new() factory.
+  NEVER construct FusionOrder directly (constructor is protected).
+  Check canExecuteAt(executor, now) BEFORE attempting fill.
+  calcTakingAmount(taker, makingAmount, time, baseFee) — price decays over time.
+  getUserReceiveAmount() for user-facing display (after fees) — never show calcTakingAmount to user.
+  Order dead after auctionEndTime — no fills accepted.
 
-enum LegionErrorCode {
-  SIMULATION_REVERT       = 'SIMULATION_REVERT',
-  GHOST_FAIL              = 'GHOST_FAIL',
-  HONEYPOT_DETECTED       = 'HONEYPOT_DETECTED',
-  NONCE_COLLISION         = 'NONCE_COLLISION',
-  CIRCUIT_BREAKER_OPEN    = 'CIRCUIT_BREAKER_OPEN',
-  APPROVAL_MISSING        = 'APPROVAL_MISSING',
-  SLIPPAGE_EXCEEDED       = 'SLIPPAGE_EXCEEDED',
-  QUOTE_STALE             = 'QUOTE_STALE',
-  BUNDLE_DROPPED          = 'BUNDLE_DROPPED',
-  BALANCE_UNCHANGED       = 'BALANCE_UNCHANGED',
-  NONSTANDARD_TOKEN       = 'NONSTANDARD_TOKEN',
-  RPC_RATE_LIMITED        = 'RPC_RATE_LIMITED',
-  LANE_ALREADY_RUNNING    = 'LANE_ALREADY_RUNNING',
-  LETHALITY_BELOW_FLOOR   = 'LETHALITY_BELOW_FLOOR',
-}
-```
+CLOSER-07: 1inch aggregation (SKILL-40) — Always /quote first, never jump to /swap.
+  Approval target = AggregationRouterV5 0x1111111254EEB25477B68fb85Ed929f73A960582.
+  Always set destReceiver = Legion Ghost Vault in /swap. disableEstimate: false (simulation on).
+  1inch Limit Order (SKILL-45) — approval target = LimitOrderProtocolV3
+  0x111111125421cA6dc452d289314280a0f8842A65. Validate MakerTraits bitmap flags.
+  EIP-712 signing required. Set receiver = Legion Vault in Order struct.
 
----
+CLOSER-08: Solady / Solmate gas optimization (SKILL-17, SKILL-22) —
+  Solady: FixedPointMathLib.mulWad() for DeFi math, SafeTransferLib for USDT-style tokens,
+  ECDSA.recover() (40% cheaper than OZ), SignatureCheckerLib for ERC1271 smart wallets.
+  Solmate: SafeTransferLib.safeTransfer/From for non-standard ERC20. FixedPointMathLib.mulWadDown.
+  SSTORE2 for large blob data: write once, EXTCODECOPY reads (3-10x cheaper than SLOAD).
+  CREATE3 for cross-chain deterministic deployment (bytecode-agnostic salt).
 
-## [INFRA CONTRACTS]
-- Redis: AOF persistence ONLY — `appendonly yes`, `appendfsync always`
-- Postgres: advisory locks for lane exclusivity — `pg_try_advisory_lock(laneId)`
-- NonceManager: centralized at `@packages/core/src/infra/nonce-manager.ts`
-- CircuitBreaker: centralized at `@packages/core/src/infra/circuit-breaker.ts`
-- All env vars: loaded via `@packages/core/src/config/env.ts` — never `process.env` inline
+CLOSER-09: Solidity security patterns (SKILL-20) — Checks-Effects-Interactions ORDER.
+  NEVER transfer()/send() ETH — use call{value:}("") and check return bool.
+  Pack storage: (bool, uint8, address) → same slot. EIP712 domain separator with chainId.
+  Bitmap nonces: usedNonces[nonce/256] |= 1 << (nonce%256). Flash loans verify repayment in same tx.
+  Uniswap V4 hooks (SKILL-21): ALL PoolManager interactions via unlock(data) callback.
+  currencies MUST be sorted (currency0 < currency1). BalanceDelta = packed int128 pair.
 
----
+CLOSER-10: Uniswap V3 execution (SKILL-44, SKILL-48) — SwapRouter02:
+  0x68b3465833fb72A70ecdf485E0e4C7bD8665Fc45. Set recipient = Legion Vault (ghost routing).
+  ALWAYS set sqrtPriceLimitX96 — prevents execution beyond target tick range.
+  Priority: sqrtPriceLimitX96 > amountOutMinimum for slippage safety.
+  Multi-hop exactInput for complex paths. QuoterV2: 0x61fFE01691351bdC959b02013f84488bfa6A3393.
 
-## [TESTING CONTRACT]
-- Every Sentinel function MUST have a unit test with mocked provider
-- Every integration test MUST use Tenderly fork — never mainnet
-- Test file naming: `<sentinel>.test.ts` co-located with source
-- Use `vitest` — not Jest
-- Mock pattern: `vi.fn()` for all external calls — no real HTTP in unit tests
+## ── SHADOW (Persistence Hooks, Stealth Telemetry, Evasion) ──
+# Skills: 02 (Stealth), 05 (Honeypot), 16 (TLS JA3), 26 (Pino), 27 (Proxy Mesh),
+#         28 (OTel), 29 (Anvil Shadow Fork), 30 (Credit Shield)
 
----
-# END OF CURSORRULES — SUPREME LAW ESTABLISHED
-# All code generated in this repo is bound by the above.
-# ============================================================
+SHADOW-01: Apex stealth (SKILL-02) — ALL outbound HTTP routes through proxy mesh.
+  NEVER bare IP/hostname to RPC. TLS fingerprint rotation per session.
+  User-Agent + Accept headers randomized from curated list per request (never static UA).
+  Jitter retry: delay = base + random(0, base*0.5). Never fixed-interval.
+  RPC rate limits enforced via Redis per chain: ETH=10/s, Polygon=30/s, Arbitrum=20/s.
+  Proxy = chain-isolated: ETH RPC never shares proxy with Polygon RPC.
+
+SHADOW-02: Proxy chain mesh (SKILL-27) — apify/proxy-chain.
+  ProxyChain.anonymizeProxy(upstreamUrl) → 127.0.0.1:PORT → use as actual proxy.
+  ALWAYS call closeAnonymizedProxy(url, true) after session — avoids port exhaustion.
+  Rotate proxies per-bundle-attempt. SOCKS5 upstream preferred over HTTP.
+  Custom requestHandler MUST NOT log upstream credentials in plaintext.
+  ProxyChain.Server port = randomized per instance. Never static port.
+
+SHADOW-03: Honeypot / rug-check gate (SKILL-05) — EVERY token MUST pass honeypot
+  check BEFORE Gatekeeper approval. No exceptions (simulation doesn't catch sell-disabled traps).
+  Honeypot = buy simulation + sell simulation on-chain fork. Sell reverts → HONEYPOT_DETECTED.
+  Go+ Security API: cache per token+chain for 60s (Redis). Tax threshold: buyTax > 10% OR
+  sellTax > 10% → reject. Blacklist check BEFORE balance check.
+  Combined gate: goPlus → fork simulation → pass both to proceed.
+
+SHADOW-04: Pino telemetry (SKILL-26) — pino over console.log always. Never sync:true.
+  Child loggers: logger.child({module, bundleId}) — binding context = free overhead.
+  REDACT paths: ['privateKey','authKey','*.secret','headers.authorization','wallet.mnemonic'].
+  Never log full tx objects raw — use serializers. logger.flush() before process.exit().
+  Transport targets run in separate worker thread via pino.transport().
+  Log levels: trace=mempool, debug=strategy logic, info=bundle submission,
+  warn=near-threshold, error=failed exec, fatal=fund-at-risk.
+
+SHADOW-05: OTel institutional monitoring (SKILL-28) — NodeSDK MUST init BEFORE any
+  other Legion module import. span.end() ALWAYS in finally block — never leak spans.
+  Span attributes MUST NOT contain private keys or raw tx hex.
+  SpanStatusCode.ERROR on any exception. SpanKind.CLIENT for outbound RPC.
+  Metrics: bundlesSubmitted, bundlesMissed, profitCaptured, executionErrors as counters.
+  Export to OTLP (Jaeger/Grafana Tempo) — NEVER console export in production.
+
+SHADOW-06: Anvil shadow fork testing (SKILL-29) — run new strategies in shadow fork
+  BEFORE touching live mainnet funds. fork-block-number MUST be pinned (no floating latest).
+  vm.store() = ONLY way to set balances/oracle/state in fork. anvil_snapshot before test,
+  anvil_revert after — never carry mutated state between tests.
+  Gas estimates from shadow fork +20% buffer for live submission.
+  Test matrix: normal case, high gas case (200gwei), MEV competition case, revert case.
+
+SHADOW-07: State machine (SKILL-18) — sentinel uses AgentState enum:
+  IDLE | SCANNING | EXECUTING | PAUSED | CRITICAL | DEAD. NEVER boolean flags.
+  Valid transitions enforced: DEAD → [] (terminal). CRITICAL → [IDLE, DEAD] only.
+  Policy engine: 6 categories (Authority, Safety, Financial, Path, Rate-limits, Validation).
+  First deny wins. Loop detection: same action 3x → inject system warning → PAUSED.
+  Heartbeat: independent daemon every 30-60s, decoupled from main sentinel loop.
+
+## ── DISPATCHER (Fund Routing, Multi-Chain Sync, Distribution) ──
+# Skills: 04 (MEV), 06 (Pathfinding), 08 (Position Manager), 09 (Execution Engine),
+#         11 (Safe Multisig), 15 (Piscina Lanes), 19 (MEV-Share Client), 25 (Audit),
+#         33 (LI.FI), 36 (Solana/Jito), 37 (MEV-Share Internals)
+
+DISPATCHER-01: Execution engine (SKILL-09) — pipeline:
+  PREPARE → SIMULATE → SIGN → ROUTE → BROADCAST → CONFIRM → [RETRY] → RECORD.
+  All txs simulated via eth_call before broadcast. Flashbots for MEV ops — NEVER public mempool.
+  Nonce: getTransactionCount('pending') fresh per attempt. NEVER cache nonces.
+  Retry: exponential backoff, max 3 retries, 2x gas bump per retry.
+  Circuit breaker: 3 consecutive reverts → pause for 1 block.
+
+DISPATCHER-02: Gas oracle (SKILL-07) — NEVER eth_gasPrice. ALWAYS eth_feeHistory with
+  4-block window. maxFeePerGas = baseFee * 1.25 + priorityFee. Floor: mainnet=0.1gwei,
+  L2=0.001gwei. Time-sensitive (MEV): 95th percentile priority. Normal: 50th percentile.
+  Re-estimate every block if tx pending > 2 blocks. Bid to WIN not to save.
+  GasOracle.estimateGas(mode: 'competitive' | 'standard' | 'economy', chainId).
+
+DISPATCHER-03: Safe multisig treasury (SKILL-11) — ALL withdrawals > $10k via Safe.
+  ALWAYS Safe.createTransaction() — NEVER manual calldata bypass.
+  Signature sort: ascending by owner address (buildSignatureBytes). Threshold check before executeTransaction.
+  Off-chain signing: signTransaction(safeTx, SigningMethodType.ETH_SIGN). Hash: calculateSafeTransactionHash().
+  MEV profit sweeps: EOA (speed > security for small amounts). Emergency pause: Safe 1/3.
+
+DISPATCHER-04: Piscina extraction lanes (SKILL-15) — every vacuum lane = 1 Piscina worker.
+  maxThreads = Math.max(4, availableParallelism() * 2) for I/O-bound lanes.
+  maxQueue = 'auto' (= maxThreads²) — absorbs block-event spikes.
+  concurrentTasksPerWorker: 1 for CPU (EVM math), 4 for I/O (RPC calls).
+  Check pool.queueSize BEFORE submit — throw on overflow or return null + warn.
+  workerData for static config (RPC URLs, addresses) — never pass large state via task args.
+
+DISPATCHER-05: MEV-Share client (SKILL-19, SKILL-37) —
+  MevShareClient.useEthereumMainnet(authSigner). Auth = ethers Wallet, zero-fund EOA.
+  sendTransaction() for single private txs. sendBundle() for atomic multi-tx.
+  Hints: reveal MINIMUM (hash: true, calldata: false, logs: false).
+  SSE stream: IPendingTransaction.txs[0].hash = inner hash for bundle body.
+  IPendingTransaction.hash = double-hash keccak256(keccak256(real)) — DO NOT use in bundles.
+  inclusion.maxBlock = targetBlock + 3 max. Stale bundles waste relay rate limits.
+  privacy.builders = ['flashbots','beaverbuild.org','rsync','Titan','f1b.io'].
+  refund.percent set by SEARCHER; refundConfig set by USER/OFP — never confuse.
+
+DISPATCHER-06: LI.FI cross-chain routing (SKILL-33) — ALWAYS use /quote API before bridge.
+  Never construct bridge tx manually. Routes expire — never cache >30s.
+  slippage cap = 0.03. Steps executed SEQUENTIALLY, never in parallel.
+  ACTION_REQUIRED event MUST block and surface to user. allowBridges whitelist pattern.
+  Viem WalletClient passed directly — never wrap with custom signer abstraction.
+
+DISPATCHER-07: Solana / Jito MEV (SKILL-36) — @solana/web3.js v2.0 factory pattern only.
+  NEVER legacy v1 new Connection() or new Transaction().
+  getLatestBlockhash() immediately before signing — NEVER cache >30s (expires ~150 slots).
+  sendAndConfirmTransaction with commitment: 'confirmed' — 'processed' insufficient for MEV.
+  Jito bundle max = 5 txs. Tip = last tx in bundle, random tip account per bundle.
+  simulateTransaction() BEFORE real submission. NEVER skipPreflight: true in production.
+  Priority fee: ComputeBudgetProgram.setComputeUnitPrice(microLamports) in every tx.
+
+DISPATCHER-08: Position manager (SKILL-08) — NEVER hold position without exit strategy.
+  Define: profit target, stop-loss, time limit at OPEN time. Max single position = 20% portfolio.
+  HF monitor on lending: alert at 1.5, emergency exit at 1.1. UniV3 LP: track in-range every block.
+  Rebalance trigger: price >5% move OR time >24h (7200 blocks at 12s/block).
+  Position lifecycle: OPEN → ACTIVE → [REBALANCE] → EXIT | EMERGENCY_EXIT.
+
+DISPATCHER-09: Aave V3 flash loans + liquidation (SKILL-31) —
+  NEVER flashLoan without Shadow simulation first. Receiver MUST implement IFlashLoanSimpleReceiver.
+  Repay = amount + (amount * FLASHLOAN_PREMIUM_TOTAL / 10000). Premium = 5 bps (0.05%).
+  flashLoanSimple over flashLoan unless multi-asset required (lower gas).
+  Liquidation: check healthFactor < 1e18 via getUserAccountData BEFORE submitting.
+  max 50% debt per liquidationCall unless HF < 0.95e18 (CLOSE_FACTOR threshold).
+  Verify liquidationBonus covers gas cost before submission.
+  NEVER hardcode Pool address — always PoolAddressesProvider.getPool().
+
+DISPATCHER-10: Morpho Blue extraction (SKILL-46) —
+  Singleton: 0xBBBBBbbBBb9cCEdAB5396F003BBbbb9cCeDAb539. Zero-fee flash loans — prefer over Aave for supported assets.
+  onMorphoFlashLoan / onMorphoSupply callbacks: verify msg.sender == MORPHO_ADDRESS.
+  accrueInterest() BEFORE totalSupplyAssets/totalBorrowAssets math.
+  marketId = keccak256(abi.encode(loanToken, collateralToken, oracle, irm, lltv)).
+
+DISPATCHER-11: UTXO Execution — Bitcoin strikes MUST use PSBT (BIP-174 Partially Signed
+  Bitcoin Transactions). NEVER broadcast unsigned or partially-constructed raw transactions.
+  Signing paths supported (all three mandatory implementations):
+    Legacy (P2PKH):  m/44'/0'/0'/change/index  — DER-encoded ECDSA sig, SIGHASH_ALL
+    SegWit (P2WPKH): m/84'/0'/0'/change/index  — witness stack, segwit sighash digest (BIP-143)
+    Taproot (P2TR):  m/86'/0'/0'/change/index  — Schnorr sig via BIP-340, SIGHASH_DEFAULT
+  UTXO consolidation: before any outbound strike, run consolidation check:
+    if (utxoCount > CONSOLIDATION_THRESHOLD && networkFeeRate < FEE_CEILING_SAT_PER_VB)
+      → batch-consolidate UTXOs in same tx to reduce future input overhead.
+  PSBT lifecycle: CREATE (addInput/addOutput) → SIGN (per-input per-path) → FINALIZE →
+    EXTRACT raw tx → BROADCAST. Each phase is a distinct function; never combine sign+broadcast.
+  Dust threshold: NEVER create outputs < 546 sat (P2PKH) / 294 sat (P2WPKH) / 330 sat (P2TR).
+  All satoshi amounts = BigInt. NEVER number or float for BTC/sat arithmetic.
+  Fee rate = sat/vByte from mempool.space API (never hardcode). Target: next-block fee rate
+    for MEV-class strikes; economy rate for consolidation sweeps.
+  UTXO selection strategy: branch-and-bound → fallback to largest-first.
+  NEVER reuse change addresses — derive fresh address per tx from HD wallet (BIP-32).
+
+## ── GATEKEEPER (Identity Verification, Checksums, Safety Protocols) ──
+# Skills: 03 (EVM Math), 05 (Honeypot), 06 (Liquidity), 07 (Gas), 11 (Safe),
+#         14 (Ghost Execution), 25 (Adversarial Audit), 35 (Hardware Signing)
+
+GATEKEEPER-01: Token safety gate — order is strict:
+  1. Go+ Security check (Redis-cached 60s) — isHoneypot | cannotSell | isBlacklisted → abort
+  2. Tax check: buyTax > 10% || sellTax > 10% → LETHALITY_BELOW_FLOOR → abort
+  3. Fork simulation: buy sim → sell sim → sell reverts → HONEYPOT_DETECTED → abort
+  4. ALL 3 must pass before any token enters an extraction lane.
+
+GATEKEEPER-02: Profitability gates —
+  Price impact: (srcUsd - destUsd) / srcUsd > 0.03 → reject route.
+  Bundle profit: coinbaseDiff >= minProfitWei + estimatedGasCost before sendBundle.
+  Gas profitability: estimatedProfit > gasLimit * maxFeePerGas.
+  Lethality floor: configurable minProfitWei per lane. Never execute sub-floor ops.
+
+GATEKEEPER-03: Ghost execution verification (SKILL-14) —
+  NEVER broadcast MEV txs to public mempool. ALWAYS sendBundle() via MEV-Share.
+  simulateBundle() MUST succeed before sendBundle(). SimBundleResult.success required.
+  Bundle targeting: blockNumber = currentBlock + 1 always. Wrong block = silent drop.
+  Single private tx: sendTransaction(signedTx, { hints: { hash: true, calldata: false } }).
+
+GATEKEEPER-04: Checksums + identity —
+  Safe tx hash: calculateSafeTransactionHash() — NEVER ethers/viem tx hash for Safe txs.
+  Permit2 nonce: bitmap-based tracking, never re-use. InvalidNonce = immediate revert.
+  EIP712 domain separator MUST include chainId — prevents cross-chain replay.
+  Bundle: auth signer address:sig in X-Flashbots-Signature header — validates identity.
+
+GATEKEEPER-05: Adversarial audit protocol (SKILL-25) — EVERY new module before funds/mempool:
+  Round 1: SecurityAuditor (reentrancy, oracle manip, overflow), MEVResearcher (frontrun, sandwich),
+    GasEngineer (SLOAD waste), ProtocolDefender (refute or concede).
+  Round 2: Attacker refines with evidence. Defender concedes valid finds.
+  Round 3: Moderator → CONFIRMED BUGS (fix required) | FALSE POSITIVES | NEEDS HUMAN REVIEW.
+  Critical severity found → STOP. Flag to human. NEVER auto-merge.
+
+GATEKEEPER-06: Foundry testing contracts (SKILL-23) —
+  Fork test: vm.createFork(rpcUrl) + vm.selectFork(forkId). vm.warp() for time, vm.prank() per call.
+  vm.store() to override oracle slots and test slippage guards.
+  forge snapshot for gas benchmarking — commit and diff to catch regressions.
+  deploy with forge script --dry-run first, then --broadcast.
+  testFuzz_ prefix for fuzzing. invariant_ prefix for stateful fuzzer.
+
+GATEKEEPER-07: Zero-Leak Fencing — STRICTEST ban on key material in any output channel.
+  BANNED outputs (compiler-enforced via grep in CI):
+    - Raw private keys, WIF strings, or hex privkeys in: logs, DB columns, console, OTel spans,
+      pino serializers, error objects, JSON responses, Redis values, or Piscina task args.
+    - Mnemonics (BIP-39 seed phrases) in ANY variable serialized to string outside VaultManager.
+    - Unencrypted signature data ({r,s,v} raw components) persisted to DB or emitted in logs.
+  VaultManager abstraction is MANDATORY for ALL signing operations:
+    - VaultManager.sign(payload, keyId) → returns signed result only. Key never leaves vault context.
+    - VaultManager.derive(path) → returns public key + address. Never the private scalar.
+    - VaultManager.encrypt(data, keyId) → returns ciphertext. Plaintext never stored.
+  Storage contract: private keys MAY only exist in:
+    1. Hardware wallet device (Ledger/Trezor) — never extracted
+    2. OS keychain / HSM — accessed only via VaultManager interface
+    3. Encrypted KMS-backed store (AWS KMS, HashiCorp Vault) — VaultManager decrypts in-memory,
+       never writes decrypted form to disk or DB
+  Pino redact paths MUST always include (non-negotiable):
+    ['privateKey','privKey','secretKey','mnemonic','seedPhrase','*.wif','*.secret',
+     'sig.r','sig.s','wallet.privateKey','account.key','headers.authorization']
+  OTel span attributes: NEVER setAttribute('key', rawPrivKey). Always setAttribute('key', '[REDACTED]').
+  Code review gate: any PR touching packages/core/src/vault/* requires GATEKEEPER-07 audit pass.
+  Violation = CRITICAL severity. Abort build. Notify human operator immediately.
+
+# ════════════════════════════════════════════════════════════
+# [TECHNICAL CONTRACTS]
+# ════════════════════════════════════════════════════════════
+
+## Numeric Types
+CONTRACT-01: ALL balance / value / amount fields in DB and RPC = uint256 numeric(78,0).
+  NEVER store as float, number, or string without explicit conversion.
+  Drizzle schema: balance: numeric('balance', { precision: 78, scale: 0 }).notNull()
+  TypeScript conversion: BigInt(dbRow.balance) for arithmetic.
+  NEVER parseFloat() on a balance field. NEVER compare balance === 0 (use === 0n).
+
+## Address Handling
+CONTRACT-02: ALL addresses = polymorphic text (string). NEVER store as bytes20 or integer.
+  Drizzle schema: address: text('address').notNull()
+  Always lowercase on write: address.toLowerCase(). Case-insensitive on read comparison.
+  Viem type: `0x${string}` for on-chain calls. Convert: address as `0x${string}`.
+  NEVER truncate or pad addresses. Checksummed display only (getAddress() from viem).
+
+## Drizzle Vampiro Migration Pattern
+CONTRACT-03: Vampiro = non-destructive additive migrations only.
+  NEVER DROP COLUMN in a migration without a deprecation cycle (add_deprecation → data_migrate → drop).
+  Migration naming: YYYYMMDD_NNN_description.ts (e.g., 20240115_001_add_lane_status.ts).
+  Always export up() and down(). down() = exact reverse of up() for rollback safety.
+  Schema changes: add column with default OR nullable — never add NOT NULL without default.
+  Index naming: idx_{table}_{column(s)} — no auto-naming (breaks determinism across envs).
+  Foreign keys: always explicit onDelete behavior. NEVER implicit cascade on critical tables.
+
+## File Ownership Map
+CONTRACT-04: Sentinel → primary file ownership
+  Scout     → packages/core/src/scout/*, apps/*/src/routes/quote*
+  Gatekeeper → packages/core/src/gatekeeper/*, packages/core/src/safety/*
+  Mask      → apps/*/src/ui/*, apps/*/src/wallet/*
+  Closer    → packages/core/src/closer/*, packages/core/src/execution/*
+  Shadow    → packages/core/src/shadow/*, packages/core/src/telemetry/*
+  Dispatcher → packages/core/src/dispatcher/*, packages/core/src/chain/*
+  Shared    → packages/core/src/db/*, packages/core/src/errors/*
+
+## Error Handling Contract
+CONTRACT-05: NEVER empty catch blocks. ALL errors = createLegionError({
+  code: LegionErrorCode.*, sentinel: 'SentinelName', laneId?, cause?, recoverable: bool }).
+  Recoverable errors → retry with jitter. Non-recoverable → abort lane, emit CRITICAL.
+  LegionError events feed pino telemetry AND OTel span.recordException().
+
+## Key Contract Addresses (never hardcode chain-specific except these universals)
+CONTRACT-06: Universal addresses (same on ALL EVM chains):
+  Multicall3:   0xcA11bde05977b3631167028862bE2a173976CA11
+  Permit2:      0x000000000022D473030F116dDEE9F6B43aC78BA3
+  Morpho Blue:  0xBBBBBbbBBb9cCEdAB5396F003BBbbb9cCeDAb539
+  Chain-specific (load from config/env, never hardcode inline):
+    UniV3 SwapRouter02, QuoterV2, 1inch AggRouter, LOP, Aave PoolAddressesProvider
+
+## Performance Targets
+CONTRACT-07: Latency SLAs (enforced via OTel histograms):
+  Scout quote single chain:  <200ms
+  Scout quote 8 chains:      <500ms  (Promise.allSettled parallel)
+  Batch sign 100 txs:        <100ms  (Piscina 4 workers)
+  JSON serialize 1KB:        <0.1ms  (fast-json-stringify compiled)
+  Redis write lane state:    <5ms
+  Postgres advisory lock:    <10ms
+  P99 execution latency:     <200ms  (miss next block = failed opportunity)
+
+# ════════════════════════════════════════════════════════════
+# MEMORY COMMAND
+# From now on, do NOT re-read @docs/skills/ files unless
+# explicitly requested. Operate based on this .cursorrules memory.
+# ════════════════════════════════════════════════════════════

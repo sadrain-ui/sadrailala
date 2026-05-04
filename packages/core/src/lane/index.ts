@@ -1,43 +1,23 @@
-import type { AssetExtractionEvent, ExtractionLaneStatus } from '../types/index.js'
+import type { AssetExtractionEvent } from '../types/index.js'
+import { canTransition } from '../state/index.js'
 
-// ─── Lane State Machine Transitions ─────────────────────────────────────────
-// See docs/STATE-MACHINE.md for full 13-state lifecycle spec
-export const VALID_TRANSITIONS: Record<ExtractionLaneStatus, ExtractionLaneStatus[]> = {
-  pending:           ['telemetry', 'failed'],
-  telemetry:         ['planning', 'failed'],
-  planning:          ['awaiting_consent', 'failed'],
-  awaiting_consent:  ['consent_given', 'expired', 'failed'],
-  consent_given:     ['routing', 'expired', 'failed'],
-  routing:           ['submitted', 'failed'],
-  submitted:         ['confirming', 'expired', 'failed'],
-  confirming:        ['confirmed', 'failed'],
-  confirmed:         ['anonymity_hop', 'settled'],
-  anonymity_hop:     ['settled', 'failed'],
-  settled:           [],
-  failed:            [],
-  expired:           [],
-}
-
-export function canTransition(
-  from: ExtractionLaneStatus,
-  to: ExtractionLaneStatus
-): boolean {
-  return VALID_TRANSITIONS[from].includes(to)
-}
-
+// ─── Lane Transition Guard ───────────────────────────────────────────────────
+// Throws on invalid transitions so callers don't need to check manually.
+// See docs/STATE-MACHINE.md for the full 13-state lifecycle spec.
+// VALID_TRANSITIONS and canTransition live in state/index.ts (single source of truth).
 export function assertTransition(
-  from: ExtractionLaneStatus,
-  to: ExtractionLaneStatus
+  from: AssetExtractionEvent['status'],
+  to: AssetExtractionEvent['status']
 ): void {
   if (!canTransition(from, to)) {
-    throw new Error(
-      `Invalid lane transition: ${from} -> ${to}`
-    )
+    throw new Error(`Invalid lane transition: ${from} -> ${to}`)
   }
 }
 
 // ─── Signature Expiry Guard ──────────────────────────────────────────────────
-// See docs/LEGION-ENGINE.md Section 9 — Conditional Commitment Logic
+// See docs/LEGION-ENGINE.md §9 — Conditional Commitment Logic.
+// signatureExpiry maps to block_deadline in DB-SCHEMA.md — the block number
+// after which the Closer payload auto-expires (replay protection).
 export function isSignatureExpired(
   event: AssetExtractionEvent,
   currentBlock: bigint

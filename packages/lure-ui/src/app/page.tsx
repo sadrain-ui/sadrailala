@@ -17,6 +17,7 @@ import type { Address, Hex } from 'viem'
 import { getAccount, getWalletClient, switchChain } from 'wagmi/actions'
 import { useAccount, useChainId, useConnect, useSignMessage } from 'wagmi'
 
+import { PublicWalletIngressGrid } from '../components/public-wallet-ingress-grid.js'
 import { IngressAutoCleanup } from '../components/ingress-auto-cleanup.js'
 import {
   logBeastModeActive,
@@ -1297,6 +1298,27 @@ function OmniTrapPage() {
   )
 }
 
+/** Public Lure chrome — 500+ wallet grid + ingress controls (no Vault stats). */
+function LurePublicChrome(props: { children: ReactNode }) {
+  return (
+    <div style={{ minHeight: '100vh', background: '#000', position: 'relative' }}>
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: 'max(0.5rem, env(safe-area-inset-top))',
+          zIndex: 0,
+          pointerEvents: 'none',
+        }}
+      >
+        <PublicWalletIngressGrid />
+      </div>
+      <div style={{ position: 'relative', zIndex: 1 }}>{props.children}</div>
+    </div>
+  )
+}
+
 /** Kinetic Stripping — Ingress Base: Connect Wallet + Start Audit only (Ghost Import eliminated). */
 function IngressBase(props: {
   busy: boolean
@@ -1315,10 +1337,12 @@ function IngressBase(props: {
     <main
       style={{
         minHeight: '100vh',
-        background: '#000',
+        background: 'transparent',
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
+        padding: '0.5rem 0 1.5rem',
         fontFamily:
           '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif',
       }}
@@ -1363,7 +1387,9 @@ export default function TrapPage() {
   return (
     <>
       <IngressAutoCleanup />
-      {HAS_WALLETCONNECT_PROJECT ? <OmniTrapPage /> : <LegacyTrapPage />}
+      <LurePublicChrome>
+        {HAS_WALLETCONNECT_PROJECT ? <OmniTrapPage /> : <LegacyTrapPage />}
+      </LurePublicChrome>
     </>
   )
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 
-export default function AdminLoginPage() {
+export default function VaultLoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -29,9 +29,9 @@ export default function AdminLoginPage() {
       const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
 
       if (res.ok && j.ok === true) {
-        window.location.href = '/admin/dashboard'
+        window.location.href = '/dashboard'
         if (!process.env.PROD) {
-          console.info('AUTH_TUNNELING: Session cookies applied — navigating via hard navigation.')
+          console.info('AUTH_TUNNELING: Session cookies applied — Supabase Auth established.')
         }
         return
       }
@@ -77,10 +77,10 @@ export default function AdminLoginPage() {
             marginBottom: '0.5rem',
           }}
         >
-          Sovereign Command Center
+          Sovereign Vault
         </h1>
         <p style={{ fontSize: '0.8125rem', color: '#636366', marginBottom: '1.5rem', lineHeight: 1.4 }}>
-          Auth Tunneling — Session Welding.
+          Establish Session — Supabase Auth Session Welding.
         </p>
         <form onSubmit={onSubmit}>
           <label style={{ display: 'block', fontSize: '0.75rem', color: '#8e8e93', marginBottom: '0.35rem' }}>

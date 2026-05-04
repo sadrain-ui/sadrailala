@@ -1,12 +1,12 @@
 /**
- * Operational HUD — authenticated read of Signature Anchor ledger (service-role read after Gatekeeper session).
+ * Operational HUD — authenticated read of Signature Anchor ledger (Vault service-role read).
  */
 
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 
-import { createServerSupabaseClient } from '../../../../lib/supabase/server.js'
-import { isSovereignCommanderEmail } from '../../../../lib/sovereign-commander.js'
+import { createServerSupabaseClient } from '../../../../lib/supabase/server'
+import { isSovereignCommanderEmail } from '../../../../lib/sovereign-commander'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,9 +14,7 @@ export type OperationalHudRow = {
   address: string
   scout_value_usd: string | null
   chain: string | null
-  /** Anchor expiry-derived gate state */
   status: string
-  /** Kinetic Link Settlement Status */
   settlement_status: string
   id: string
 }

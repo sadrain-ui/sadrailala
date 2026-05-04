@@ -209,6 +209,37 @@ importers:
         specifier: ^5.4.0
         version: 5.9.3
 
+  packages/sovereign-admin:
+    dependencies:
+      '@legion/core':
+        specifier: workspace:*
+        version: link:../core
+      '@supabase/ssr':
+        specifier: ^0.5.2
+        version: 0.5.2(@supabase/supabase-js@2.105.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))
+      '@supabase/supabase-js':
+        specifier: ^2.49.1
+        version: 2.105.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      next:
+        specifier: ^14.2.18
+        version: 14.2.35(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+    devDependencies:
+      '@types/react':
+        specifier: ^18.3.12
+        version: 18.3.28
+      '@types/react-dom':
+        specifier: ^18.3.1
+        version: 18.3.7(@types/react@18.3.28)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
 packages:
 
   '@adraffy/ens-normalize@1.11.1':
@@ -8080,6 +8111,12 @@ snapshots:
   '@supabase/ssr@0.5.2(@supabase/supabase-js@2.105.1(bufferutil@4.1.0)(utf-8-validate@5.0.10))':
     dependencies:
       '@supabase/supabase-js': 2.105.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      '@types/cookie': 0.6.0
+      cookie: 0.7.2
+
+  '@supabase/ssr@0.5.2(@supabase/supabase-js@2.105.1(bufferutil@4.1.0)(utf-8-validate@6.0.6))':
+    dependencies:
+      '@supabase/supabase-js': 2.105.1(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       '@types/cookie': 0.6.0
       cookie: 0.7.2
 

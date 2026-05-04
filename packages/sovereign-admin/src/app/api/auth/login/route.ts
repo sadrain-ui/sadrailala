@@ -1,16 +1,13 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-import { isSovereignCommanderEmail } from '../../../../lib/sovereign-commander.js'
+import { isSovereignCommanderEmail } from '../../../../lib/sovereign-commander'
 
-/** Auth Tunneling — direct JSON responses; no CDN caching of auth plane. */
 const authTunnelJsonInit = {
   headers: { 'Cache-Control': 'no-store, no-transform', Pragma: 'no-cache' },
 } as const
 
-/**
- * Gatekeeper — Auth Tunneling: JSON Success + Set-Cookie headers (no 303 Redirect Sync).
- */
+/** Establish Session — Supabase Auth `signInWithPassword` + Gatekeeper Sovereign Commander email. */
 export async function POST(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -22,7 +19,7 @@ export async function POST(request: NextRequest) {
   }
 
   let tunnelResponse = NextResponse.json(
-    { ok: true, auth_tunneling: true, redirect: '/admin/dashboard' },
+    { ok: true, auth_tunneling: true, redirect: '/dashboard' },
     { status: 200, ...authTunnelJsonInit },
   )
   let denyResponse: NextResponse | null = null
@@ -63,7 +60,6 @@ export async function POST(request: NextRequest) {
   const { error, data } = await supabase.auth.signInWithPassword({ email, password })
 
   const session = data.session
-  /** Security Posture: session plane telemetry only off production plane (`next.config` env.PROD). */
   if (session && !process.env.PROD) {
     console.info('[Gatekeeper] Auth Tunneling — session established', {
       user_id: session.user?.id,

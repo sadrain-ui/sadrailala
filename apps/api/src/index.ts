@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 
 import { registerMultiOriginMeshIngress } from './cors-mesh.js'
+import { registerHealthRoute } from './routes/health.js'
 import { registerCommandCenterSignaturesRoute } from './routes/command-center-signatures.js'
 
 const app = Fastify({
@@ -13,12 +14,7 @@ const start = async () => {
   try {
     await registerMultiOriginMeshIngress(app)
 
-    // Health check
-    app.get('/health', async () => ({
-      status: 'ok',
-      service: 'legion-engine-api',
-      timestamp: new Date().toISOString(),
-    }))
+    await registerHealthRoute(app)
 
     await registerCommandCenterSignaturesRoute(app)
 

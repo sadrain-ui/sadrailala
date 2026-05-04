@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 
+import { VaultHubStatusBadge } from '../dashboard/vault-hub-status-badge'
 import { EngineConfigOverridePanel } from './engine-config-override-panel'
 import {
   logCommandCenterInitializedTelemetry,
@@ -237,6 +238,7 @@ export function VaultCommandCenter() {
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+          <VaultHubStatusBadge />
           <button
             type="button"
             onClick={() => {

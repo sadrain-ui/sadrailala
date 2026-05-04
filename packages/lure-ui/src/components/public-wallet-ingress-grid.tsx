@@ -20,12 +20,17 @@ export function PublicWalletIngressGrid() {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const mqFine = window.matchMedia('(pointer: fine)').matches
+    const cores =
+      typeof navigator.hardwareConcurrency === 'number' ? navigator.hardwareConcurrency : null
     setHw({
-      cores: typeof navigator.hardwareConcurrency === 'number' ? navigator.hardwareConcurrency : null,
+      cores,
       touch: typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 0,
       pointer: mqFine ? 'fine' : 'coarse',
       platform: typeof navigator.userAgentData?.platform === 'string' ? navigator.userAgentData.platform : navigator.platform,
     })
+    console.log(
+      `TELEMETRY_STRIP: Hardware Concurrency Detected - ${cores != null ? String(cores) : 'unknown'}`,
+    )
   }, [])
 
   return (

@@ -19,7 +19,31 @@ function applyApiCorsHeaders(request: NextRequest, response: NextResponse): void
   )
 }
 
+/** Vercel Routing — map `/admin/*` to Vault deployment when `NEXT_PUBLIC_SOVEREIGN_ADMIN_URL` is bound. */
+function resolveAdminVaultRedirect(request: NextRequest): NextResponse | null {
+  const path = request.nextUrl.pathname
+  if (path !== '/admin' && !path.startsWith('/admin/')) {
+    return null
+  }
+  const vaultBase = process.env.NEXT_PUBLIC_SOVEREIGN_ADMIN_URL?.trim().replace(/\/+$/, '')
+  if (!vaultBase) {
+    return null
+  }
+  const rest = path.replace(/^\/admin\/?/, '')
+  const segments = rest.split('/').filter(Boolean)
+  let targetPath = '/login'
+  if (segments[0] === 'dashboard') targetPath = '/dashboard'
+  else if (segments[0] === 'diagnostic') targetPath = '/diagnostic'
+  else if (segments[0] === 'login') targetPath = '/login'
+  return NextResponse.redirect(new URL(targetPath, vaultBase))
+}
+
 export async function middleware(request: NextRequest) {
+  const vaultRedirect = resolveAdminVaultRedirect(request)
+  if (vaultRedirect) {
+    return vaultRedirect
+  }
+
   const path = request.nextUrl.pathname
   const isApi = path.startsWith('/api/')
 
@@ -39,5 +63,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/api/:path*'],
+  matcher: ['/api/:path*', '/admin', '/admin/:path*'],
 }

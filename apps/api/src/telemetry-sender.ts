@@ -16,13 +16,20 @@ export async function sendSovereignTelemetryPayload(
     return null
   }
   try {
+    const messageText = `🛰️ [LEGION ENGINE ALERT]\n<b>Status:</b> ${body['ping'] ? 'HEARTBEAT_PING' : 'SYSTEM_SIGNAL'}\n<b>Time:</b> ${new Date().toISOString()}`
+    const payload = {
+      text: messageText,
+      parse_mode: 'HTML',
+      ...body,
+    }
+    console.info(">>> INITIATING TELEMETRY SYNC...")
     const response = (await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sovereign_telemetry: true, ...body }),
+      body: JSON.stringify({ sovereign_telemetry: true, ...payload }),
       signal: AbortSignal.timeout(12_000),
     })) as unknown as TelegramResponse
-    console.log("TELEMETRY_LOG:", response.status)
+    console.warn("TELEMETRY_STATUS_CODE:", response.status)
     return response as Response
   } catch {
     console.log("TELEMETRY_LOG:", -1)
@@ -36,5 +43,6 @@ export async function sendHeartbeatTrigger(): Promise<void> {
     message: 'HEARTBEAT: legion-engine-api manual Sovereign Audit (/health?ping=true)',
     heartbeat_trigger: true,
     mesh_sync: true,
+    ping: true,
   })
 }

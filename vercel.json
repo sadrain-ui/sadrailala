@@ -1,0 +1,4 @@
+{
+  "buildCommand": "pnpm build",
+  "outputDirectory": "packages/lure-ui/.next"
+}

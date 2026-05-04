@@ -8,6 +8,8 @@ let systemIgnitionDispatched = false
 export async function dispatchSystemIgnitionWebhookOnce(): Promise<void> {
   if (systemIgnitionDispatched) return
   if (process.env.NODE_ENV !== 'production') return
+  const vercelEnv = process.env.VERCEL_ENV
+  if (vercelEnv && vercelEnv !== 'production') return
 
   const webhookUrl = process.env.TELEMETRY_WEBHOOK_URL?.trim()
   if (!webhookUrl) return

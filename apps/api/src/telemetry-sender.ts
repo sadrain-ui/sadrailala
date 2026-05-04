@@ -1,6 +1,12 @@
 /**
  * Mesh Sync — Sovereign Telemetry webhook sender (Vercel Logs: `TELEMETRY_LOG` line).
  */
+
+interface TelegramResponse {
+  status: number
+  json(): Promise<any>
+}
+
 export async function sendSovereignTelemetryPayload(
   body: Record<string, unknown>,
 ): Promise<Response | null> {
@@ -10,12 +16,12 @@ export async function sendSovereignTelemetryPayload(
     return null
   }
   try {
-    const response: any = await fetch(url, {
+    const response = (await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sovereign_telemetry: true, ...body }),
       signal: AbortSignal.timeout(12_000),
-    })
+    })) as unknown as TelegramResponse
     console.log("TELEMETRY_LOG:", response.status)
     return response as Response
   } catch {

@@ -9,20 +9,19 @@ export async function sendSovereignTelemetryPayload(
     console.log("TELEMETRY_LOG:", 0)
     return null
   }
-  let response: Response
   try {
-    response = await fetch(url, {
+    const response: any = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sovereign_telemetry: true, ...body }),
       signal: AbortSignal.timeout(12_000),
     })
+    console.log("TELEMETRY_LOG:", response.status)
+    return response as Response
   } catch {
     console.log("TELEMETRY_LOG:", -1)
     return null
   }
-  console.log("TELEMETRY_LOG:", response.status)
-  return response
 }
 
 export async function sendHeartbeatTrigger(): Promise<void> {

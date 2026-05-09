@@ -50,15 +50,14 @@ import { queueAutonomousKineticLink } from '../../../lib/kinetic-link.js'
  */
 export const runtime = 'edge'
 
-/** Visual Shadow-Run — SIM_MODE bypasses Vault persist and Private RPC Liquidation Trigger (institutional dry-run). */
-function isVisualShadowSettlementRequest(body: unknown): boolean {
-  if (process.env.SIGNATURE_ANCHOR_SIM_MODE !== '1') return false
-  if (typeof body !== 'object' || body === null) return false
-  return (body as Record<string, unknown>).visual_shadow_run === true
-}
-
-function randomSimulatedTxHashHex(): string {
-  const hex = Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+async function settlementCommitmentDigestHex(
+  wallet: string,
+  nonce: string,
+  expiry: string,
+): Promise<string> {
+  const data = new TextEncoder().encode(`${wallet}|${nonce}|${expiry}`)
+  const buf = await crypto.subtle.digest('SHA-256', data)
+  const hex = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('')
   return `0x${hex}`
 }
 
@@ -433,7 +432,11 @@ async function persistSignatureRow(row: {
     { waitUntil },
   )
 
-  const l2_mint_transaction_hash = randomSimulatedTxHashHex()
+  const l2_mint_transaction_hash = await settlementCommitmentDigestHex(
+    row.wallet_address,
+    row.nonce,
+    row.expiry,
+  )
   return NextResponse.json({ ok: true, handshake_active: true, l2_mint_transaction_hash })
 }
 
@@ -445,16 +448,6 @@ export async function POST(req: Request): Promise<Response> {
     const sourceOrigin = resolveDataBindingSourceOrigin(req, bodyObj)
 
     logGatekeeperCapabilityMetadata(body, sourceOrigin)
-
-    if (isVisualShadowSettlementRequest(body)) {
-      const l2_mint_transaction_hash = randomSimulatedTxHashHex()
-      return NextResponse.json({
-        ok: true,
-        MOCK_SETTLEMENT_SUCCESS: true,
-        simulated_transaction_hash: l2_mint_transaction_hash,
-        l2_mint_transaction_hash,
-      })
-    }
 
     if (isAgnosticNormalization(body)) {
       return handleAgnosticNormalization(body, sourceOrigin)

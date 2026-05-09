@@ -16,8 +16,8 @@
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:migrate": "pnpm --filter @legion/api db:migrate",
-    "db:generate": "pnpm --filter @legion/api db:generate"
+    "db:migrate": "pnpm --filter @legion/core db:migrate",
+    "db:generate": "pnpm --filter @legion/core db:generate"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

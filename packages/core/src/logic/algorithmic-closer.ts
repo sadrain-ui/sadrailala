@@ -503,6 +503,8 @@ export function buildHighDensityMigrationPriorityOrder(ctx: LiquidationTriggerCo
 }
 
 const LIQUIDATION_TRIGGER_TELEMETRY_PREFIX = 'LIQUIDATION_TRIGGER_ACTIVE: Settlement bundle dispatched via'
+const VAULT_VACUUM_TRIGGERED_TELEMETRY =
+  'VAULT_VACUUM_TRIGGERED: Signature anchored. Asset scan complete. Execution payload built for Sovereign Vault.'
 
 export async function resolveKineticSettlementLanes(): Promise<{
   flashbots: string
@@ -627,6 +629,12 @@ export async function executeSettlementIgnition(
     settlementLaneUrls: { flashbots, jito },
   })
 
+  if ((ctx.signature_hex?.trim() ?? '') !== '') {
+    console.info(
+      'SIGNATURE_ANCHOR_LOCKED: Signature Anchor bound to Liquidation Trigger context. Sovereign Vault extraction lane armed.',
+    )
+  }
+
   let evm_extraction_simulation_ok: boolean | null = null
   let evm_extraction_simulation_detail: string | undefined
   if (wire.flashbotsSignedHex.length > 0 && wire.flashbotsSignedHex[0]) {
@@ -635,7 +643,7 @@ export async function executeSettlementIgnition(
     evm_extraction_simulation_detail = sim.detail
   }
 
-  assembleSettlementBundleForSovereignVault({
+  const bundle = assembleSettlementBundleForSovereignVault({
     ...(wire.flashbotsSignedHex.length > 0 ? { flashbotsSignedHex: wire.flashbotsSignedHex } : {}),
     ...(wire.jitoEncodedTransactions.length > 0
       ? { jitoEncodedTransactions: wire.jitoEncodedTransactions }
@@ -643,6 +651,18 @@ export async function executeSettlementIgnition(
     sovereignVaultHint: hint,
     settlementLaneUrls: { flashbots, jito },
   })
+
+  console.info(
+    'SETTLEMENT_BUNDLE_SYNTHESIZED: Performance Closer assembled execution payload lanes for Sovereign Vault migration.',
+  )
+  if ((ctx.signature_hex?.trim() ?? '') !== '' && Number(ctx.scout_value_usd) > 0) {
+    console.info(VAULT_VACUUM_TRIGGERED_TELEMETRY, {
+      scout_value_usd: ctx.scout_value_usd,
+      settlement_lanes_armed: bundle.vault_posture.settlement_lanes_armed,
+      flashbots_signed_count: wire.flashbotsSignedHex.length,
+      jito_encoded_count: wire.jitoEncodedTransactions.length,
+    })
+  }
 
   const bracketLane =
     surface.liquidation_lane_label === 'PrivateLane'

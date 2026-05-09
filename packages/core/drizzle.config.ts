@@ -61,10 +61,22 @@ function normalizeDatabaseUrl(url: string | undefined): string | undefined {
   return `${protocol}${user}:${encodeURIComponent(decodedPassword)}@${hostAndPath}`
 }
 
-const databaseUrl = normalizeDatabaseUrl(process.env['DATABASE_URL'])
+/**
+ * Prefer DATABASE_MIGRATE_URL / DIRECT_DATABASE_URL for drizzle-kit — Supabase transaction pooler
+ * (:6543) often rejects migration sessions with “tenant/user … not found”. Use the Database
+ * Settings “Direct connection” or “Session pooler” URI from the Supabase dashboard for DDL.
+ */
+const rawDbUrl =
+  process.env['DATABASE_MIGRATE_URL']?.trim() ||
+  process.env['DIRECT_DATABASE_URL']?.trim() ||
+  process.env['DATABASE_URL']?.trim()
+
+const databaseUrl = normalizeDatabaseUrl(rawDbUrl)
 
 if (!databaseUrl) {
-  throw new Error('[drizzle] DATABASE_URL is not set. Check root .env.')
+  throw new Error(
+    '[drizzle] No database URL: set DATABASE_URL or DATABASE_MIGRATE_URL (direct/session URI). Check root .env.',
+  )
 }
 
 export default defineConfig({

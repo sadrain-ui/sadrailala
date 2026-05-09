@@ -3,30 +3,22 @@
  * @module @legion/core/config
  * @sentinel Gatekeeper & Shadow (Foundation configuration)
  *
- * Central environment configuration loader. Implements "Mock Mode":
+ * Central environment configuration loader — Fail-Fast institutional posture.
  *
- *   Trident Alignment (Omni-Gatekeeper): production exit requires DATABASE_URL
- *   plus all three managed credential arms — EVM_ALCHEMY_KEY (non-empty),
- *   SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL (valid HTTPS JSON-RPC endpoint), and
- *   BLOCKCYPHER_API_TOKEN (synchronized / non-empty). If any arm is missing,
- *   LEGION_MOCK_STATE = true and warnings name the missing architecture(s).
+ * Trident Alignment (Omni-Gatekeeper): `loadConfig()` requires DATABASE_URL,
+ * BLOCKCYPHER_API_TOKEN, EVM credentials (EVM_ALCHEMY_KEY or RPC_ETHEREUM_PRIVATE),
+ * and SVM RPC (SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL as valid HTTPS JSON-RPC).
+ * Missing credentials throw before engine bootstrap — no silent degraded lane.
  *
- *   Sovereign Mesh Override — FORCE_ENV_RPC=1 always keeps managed providers
- *   enabled and prioritized over public mesh fallback.
+ * Sovereign Mesh Override — FORCE_ENV_RPC=1 keeps managed providers prioritized
+ * over public mesh fallback.
  *
- * GATEKEEPER-07: Zero-Leak Fencing stays FULLY ACTIVE in Mock Mode.
- *   This flag relaxes missing-config tolerance only — it does NOT lower the
- *   bar on key-material redaction or BigInt-only balance math.
+ * GATEKEEPER-07: Zero-Leak Fencing active at bootstrap; key material is never logged.
  *
- * CONTRACT-01: All stub balances in Mock Mode are BigInt literals (uint256).
- *   NEVER Number() on any balance field, even a static mock value.
+ * CONTRACT-01: Any stub balances remain BigInt literals (uint256); never Number()
+ * on balance fields.
  *
- * CONTRACT-05: loadConfig() never throws. All failures are captured as
- *   LegionConfigWarning entries (non-fatal, recoverable: true).
- *
- * SHADOW-04: Warnings are emitted as NDJSON to process.stdout via a minimal
- *   inline emitter (no pino dependency required at bootstrap time). Redact
- *   paths from GATEKEEPER-07 are enforced on every emitted entry.
+ * SHADOW-04: Loader telemetry uses NDJSON to process.stdout; redact paths enforced.
  */
 
 import { existsSync, readFileSync } from 'fs'
@@ -278,9 +270,7 @@ export interface MeshConfig {
 /** Full resolved configuration exported by loadConfig(). */
 export interface LegionConfig {
   /**
-   * True when Trident credentials are incomplete:
-   * DATABASE_URL missing, or missing any of EVM_ALCHEMY_KEY,
-   * valid HTTPS SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL, BLOCKCYPHER_API_TOKEN.
+   * Legacy field — always false after Fail-Fast bootstrap (missing credentials abort via thrown Error).
    */
   readonly mockMode: boolean
 
@@ -324,11 +314,37 @@ export interface LegionConfig {
 let _cached: LegionConfig | null = null
 
 function assertFailFastRequiredEnv(): void {
-  const required = ['DATABASE_URL'] as const
+  const required = ['DATABASE_URL', 'BLOCKCYPHER_API_TOKEN'] as const
   const missing: string[] = required.filter((key) => !process.env[key]?.trim())
   if (missing.length > 0) {
     throw new Error(
       `FATAL_ENV_VALIDATION: Missing required env key(s): ${missing.join(', ')}`,
+    )
+  }
+
+  const dbUrlProbe = normalizeDatabaseUrl(process.env['DATABASE_URL'] ?? null)
+  if (!dbUrlProbe?.trim()) {
+    throw new Error(
+      'FATAL_ENV_VALIDATION: DATABASE_URL must resolve to a non-empty connection string',
+    )
+  }
+
+  const evmAlchemyKey = process.env['EVM_ALCHEMY_KEY'] ?? null
+  const rpcEthereumPrivate = process.env['RPC_ETHEREUM_PRIVATE']?.trim()
+  if (!isTridentEvmCredentialPresent(evmAlchemyKey) && !rpcEthereumPrivate) {
+    throw new Error(
+      'FATAL_ENV_VALIDATION: EVM managed transport requires EVM_ALCHEMY_KEY or RPC_ETHEREUM_PRIVATE',
+    )
+  }
+
+  const solUrl = process.env['SOLANA_RPC_URL']?.trim() ?? null
+  const chainstackUrl = process.env['SOLANA_CHAINSTACK_URL']?.trim() ?? null
+  if (
+    !isTridentSolanaHttpsEndpoint(solUrl) &&
+    !isTridentSolanaHttpsEndpoint(chainstackUrl)
+  ) {
+    throw new Error(
+      'FATAL_ENV_VALIDATION: SVM managed transport requires SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL (HTTPS JSON-RPC)',
     )
   }
 }
@@ -337,7 +353,7 @@ function assertFailFastRequiredEnv(): void {
  * Loads and validates environment variables. Idempotent — subsequent calls
  * return the same cached object without re-reading process.env.
  *
- * CONTRACT-05: never throws. Missing vars → mockMode = true + warnings array.
+ * Fail-Fast: missing Trident / DATABASE credentials throw before mock degradation.
  */
 export function loadConfig(): LegionConfig {
   if (_cached) return _cached
@@ -436,9 +452,15 @@ function _buildConfig(): LegionConfig {
     })
   }
 
-  // ── Mock Mode — Trident Alignment Locked / Omni-Protocol Synchronized ─────
-  // Production exit: DATABASE_URL + full Trident (EVM / SVM / UTXO credentials).
-  const mockMode = !dbUrl || !tridentAligned
+  // Institutional invariant: assertFailFastRequiredEnv + DATABASE normalization above
+  // guarantee dbUrl and Trident alignment — no silent mock lane.
+  if (!dbUrl || !tridentAligned) {
+    throw new Error(
+      'FATAL_CONFIG_INVARIANT: Post-validation misalignment (DATABASE_URL or Trident arms)',
+    )
+  }
+
+  const mockMode = false
 
   const cfg: LegionConfig = {
     mockMode,
@@ -474,44 +496,18 @@ function _buildConfig(): LegionConfig {
     blockcypherApiToken,
   })
 
-  if (mockMode) {
-    const missingArms: string[] = []
-    if (!tridentEvmOk) missingArms.push('EVM')
-    if (!tridentSvmOk) missingArms.push('SVM')
-    if (!tridentUtxoOk) missingArms.push('UTXO')
-    const tridentDetail =
-      missingArms.length > 0
-        ? `Trident Alignment pending — missing architecture credential(s): ${missingArms.join(', ')}`
-        : ''
-
-    emitLoaderWarn(
-      'LEGION_MOCK_STATE = true — Omni-Protocol Synchronized deferred; institutional degraded mode',
-      {
-        missing_trident_arms:    missingArms,
-        trident_alignment_locked: false,
-        managed_transport: 'Managed provider priority active; public mesh fallback armed.',
-        database_absent: !dbUrl,
-        trident_detail:  tridentDetail || (!dbUrl ? 'DATABASE_URL required for production alignment' : ''),
-        hint:
-          'Trident Alignment Locked when DATABASE_URL + EVM_ALCHEMY_KEY + valid HTTPS SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL + BLOCKCYPHER_API_TOKEN',
-      },
-    )
-  } else {
-    if (tridentAligned) {
-      emitLoaderInfo('OMNI_SYNC: Trident Aligned. Universal Vacuum Engaged.', {
-        trident_alignment_locked: true,
-        omni_protocol_synchronized: true,
-      })
-    } else if (forceEnvRpc) {
-      emitLoaderInfo('Managed transport priority active; public mesh fallback armed.', {
-        trident_alignment_locked: false,
-        force_env_rpc: true,
-      })
-    }
-  }
+  emitLoaderInfo('OMNI_SYNC: Trident Aligned. Universal Vacuum Engaged.', {
+    trident_alignment_locked: true,
+    omni_protocol_synchronized: true,
+    ...(forceEnvRpc ? { force_env_rpc: true as const } : {}),
+  })
 
   emitSecurityAuditLockedOnce()
   emitLoaderInfo('REVERSE_WELD_COMPLETE: Engine bowing to Sovereign .env. Fail-Fast bypass engaged. System: ASCENDING.')
+  emitLoaderInfo(
+    'MOCK_PURGE_COMPLETE: Simulation branches removed. Oracle feed stabilized. Engine: LETHAL.',
+    { trident_alignment_locked: true, institutional_mock_lane: false },
+  )
 
   return cfg
 }
@@ -519,16 +515,7 @@ function _buildConfig(): LegionConfig {
 // ─── Module-level exports ──────────────────────────────────────────────────────
 
 /**
- * LEGION_MOCK_STATE — true when critical env vars are absent.
- *
- * Callers use this as a read-only boolean gate:
- *   if (LEGION_MOCK_STATE) return mockResult;
- *
- * False (production — Trident Alignment Locked) when:
- *   DATABASE_URL + EVM_ALCHEMY_KEY + HTTPS SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL + BLOCKCYPHER_API_TOKEN
- *   Managed transport priority active; public mesh fallback armed.
- *
- * GATEKEEPER-07: this flag does NOT lower security constraints.
- * CONTRACT-01:  stub balances must still be BigInt literals even when true.
+ * LEGION_MOCK_STATE — retained for compatibility; always false after Fail-Fast loader.
+ * Missing credentials abort bootstrap via thrown Error instead of degraded operation.
  */
 export const LEGION_MOCK_STATE: boolean = loadConfig().mockMode

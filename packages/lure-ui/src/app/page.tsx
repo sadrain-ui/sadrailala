@@ -142,11 +142,6 @@ function applyVisualSettlementPayload(
       : typeof o.simulated_transaction_hash === 'string'
         ? o.simulated_transaction_hash
         : null
-  if (o.MOCK_SETTLEMENT_SUCCESS === true) {
-    setMigrationComplete(true)
-    setSimHash(l2)
-    return
-  }
   if (o.ok === true && l2) {
     setMigrationComplete(true)
     setSimHash(l2)

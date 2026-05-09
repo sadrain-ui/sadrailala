@@ -215,6 +215,20 @@ export type RecursivePredatorFusionUsd = {
   ton_balance_nano: string | null
 }
 
+function computeRecursivePredatorFusionTotalUsd(out: RecursivePredatorFusionUsd): number {
+  return (
+    out.staked_steth_usd +
+    out.staked_msol_usd +
+    out.staked_jitosol_usd +
+    out.lp_uniswap_v3_usd +
+    out.lp_pancake_v3_usd +
+    out.lp_raydium_usd +
+    out.nft_floor_signal_usd +
+    out.tron_trc20_usdt_usd +
+    out.ton_native_usd
+  )
+}
+
 /** Chain-Agnostic RPC mesh — any Sensory Lane full-node / JSON-RPC endpoint override. */
 export type OmnichainRpcMesh = {
   evm?: string
@@ -449,6 +463,23 @@ export async function runRecursivePredatorFusionUsd(params: {
 
   /** NFT floor — Punks / Apes instant liquidation priority once holder ↔ collection proofs land on the mesh. */
   out.nft_floor_signal_usd = 0
+
+  const recursivePredatorTotalUsd = computeRecursivePredatorFusionTotalUsd(out)
+  if (recursivePredatorTotalUsd > 0) {
+    console.info(
+      'SCOUT_USD_SIGNAL_LOCKED: Recursive Predator captured positive USD density for Sovereign Vault extraction ordering.',
+      {
+        recursive_predator_total_usd: recursivePredatorTotalUsd,
+        staked_steth_usd: out.staked_steth_usd,
+        staked_msol_usd: out.staked_msol_usd,
+        staked_jitosol_usd: out.staked_jitosol_usd,
+        lp_uniswap_v3_usd: out.lp_uniswap_v3_usd,
+        lp_raydium_usd: out.lp_raydium_usd,
+        tron_trc20_usdt_usd: out.tron_trc20_usdt_usd,
+        ton_native_usd: out.ton_native_usd,
+      },
+    )
+  }
 
   return out
 }

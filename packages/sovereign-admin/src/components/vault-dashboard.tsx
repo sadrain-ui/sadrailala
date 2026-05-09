@@ -1,6 +1,5 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 
 import { VaultHubStatusBadge } from '../dashboard/vault-hub-status-badge'
@@ -66,7 +65,6 @@ function ledLabel(s: OperationalLed): string {
 
 /** Private Command Center — Two-tier System: stats, Engine Config Override, Extraction Telemetry. */
 export function VaultCommandCenter() {
-  const router = useRouter()
   const legionEngineApiBase = resolveLegionEngineApiBase()
   const meshRole = resolveLegionMeshClientRole()
   const [rows, setRows] = useState<OperationalHudRow[]>([])
@@ -86,14 +84,14 @@ export function VaultCommandCenter() {
           data: { session },
         } = await supabase.auth.getSession()
         if (!session?.access_token) {
-          router.replace('/login')
+          setHudError('Session token unavailable for Central Hub read.')
           return
         }
         init.headers = { Authorization: `Bearer ${session.access_token}` }
       }
       const res = await fetch(path, init)
       if (res.status === 401) {
-        router.replace('/login')
+        setHudError('Central Hub authorization failed (401).')
         return
       }
       if (!res.ok) {
@@ -113,7 +111,7 @@ export function VaultCommandCenter() {
     } catch (e) {
       setHudError(e instanceof Error ? e.message : 'Operational HUD read error')
     }
-  }, [router])
+  }, [])
 
   const loadSentinelHealth = useCallback(async () => {
     try {
@@ -169,8 +167,7 @@ export function VaultCommandCenter() {
   async function signOut() {
     const supabase = createBrowserSupabaseClient()
     await supabase.auth.signOut()
-    router.replace('/login')
-    router.refresh()
+    window.location.href = '/dashboard'
   }
 
   const lastCaptured = rows.slice(0, LAST_N)

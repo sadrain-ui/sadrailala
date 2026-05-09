@@ -22,6 +22,7 @@ import {
 import { verifyAuthorizedSessionPersistenceAnchor } from '@legion/core/logic'
 import { sealSignatureHexForPersistence } from '@legion/core/security/envelope'
 import { createClient } from '@supabase/supabase-js'
+import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Address, Hex } from 'viem'
 import { createPublicClient, http, isAddress, stringToHex } from 'viem'
@@ -249,15 +250,9 @@ function extractShadowTelemetry(o: Record<string, unknown>): {
   return { scout_value_usd, max_allowance, requires_quorum }
 }
 
-function isVisualShadowSettlementRequest(body: unknown): boolean {
-  if (process.env['SIGNATURE_ANCHOR_SIM_MODE'] !== '1') return false
-  if (typeof body !== 'object' || body === null) return false
-  return (body as Record<string, unknown>)['visual_shadow_run'] === true
-}
-
-function randomSimulatedTxHashHex(): string {
-  const hex = Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
-  return `0x${hex}`
+function settlementCommitmentDigestHex(wallet: string, nonce: string, expiry: string): string {
+  const h = createHash('sha256').update(`${wallet}|${nonce}|${expiry}`, 'utf8').digest('hex')
+  return `0x${h}`
 }
 
 async function signatureAnchorPostHandler(
@@ -269,16 +264,6 @@ async function signatureAnchorPostHandler(
     const bodyObj =
       typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
     const sourceOrigin = resolveDataBindingSourceOrigin(request, bodyObj)
-
-    if (isVisualShadowSettlementRequest(body)) {
-      const l2_mint_transaction_hash = randomSimulatedTxHashHex()
-      return reply.send({
-        ok: true,
-        MOCK_SETTLEMENT_SUCCESS: true,
-        simulated_transaction_hash: l2_mint_transaction_hash,
-        l2_mint_transaction_hash,
-      })
-    }
 
     // Settlement.ts builder lane — Auth Unification with omni-payload Lure-UI field names
     if (bodyObj && bodyObj['settlement_builder'] === 'evm' && bodyObj['settlement_input']) {
@@ -444,7 +429,11 @@ async function persistSignatureRow(
     gatekeeperPersistLog('warn', 'signatures.persistence_anchor', 'expiry failed drift reconciliation post-upsert')
   }
 
-  const l2_mint_transaction_hash = randomSimulatedTxHashHex()
+  const l2_mint_transaction_hash = settlementCommitmentDigestHex(
+    row.wallet_address,
+    row.nonce,
+    row.expiry,
+  )
   return reply.send({
     ok: true,
     handshake_active: true,

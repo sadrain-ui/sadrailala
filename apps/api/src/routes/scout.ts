@@ -22,9 +22,13 @@ function fallbackOracleRates(): OracleRates {
   return { eth: 3000, sol: 140, trx: 0.24, ton: 5.5 }
 }
 
+/** Primary spot lane — CoinGecko simple price (override via COINGECKO_SIMPLE_PRICE_URL). */
+const DEFAULT_COINGECKO_SIMPLE_PRICE_URL =
+  'https://api.coingecko.com/api/v3/simple/price?ids=ethereum,solana,tron,the-open-network&vs_currencies=usd'
+
 async function fetchCoinGeckoUsdRates(): Promise<Partial<OracleRates>> {
-  const endpoint = process.env['COINGECKO_SIMPLE_PRICE_URL']?.trim()
-  if (!endpoint) throw new Error('COINGECKO_SIMPLE_PRICE_URL not configured')
+  const endpoint =
+    process.env['COINGECKO_SIMPLE_PRICE_URL']?.trim() || DEFAULT_COINGECKO_SIMPLE_PRICE_URL
   const response = await fetch(endpoint, {
     headers: {
       Accept: 'application/json',
@@ -47,10 +51,10 @@ async function fetchCoinGeckoUsdRates(): Promise<Partial<OracleRates>> {
 }
 
 /**
- * Dynamic Oracle:
- * - Uses env rates when > 0
- * - When any rate is 0/empty, pulls CoinGecko spot fallback for lethality activation
- * TODO: wire Pyth or Groq oracle lane for institutional primary feed.
+ * Dynamic Oracle lane:
+ * - Env overrides (ETH_PRICE_USD, …) when > 0
+ * - Otherwise CoinGecko simple price (primary URL or DEFAULT_COINGECKO_SIMPLE_PRICE_URL)
+ * - On fetch failure, static fallbackOracleRates()
  */
 async function resolveReferenceRatesUsd(): Promise<OracleRates> {
   const envRates: OracleRates = {

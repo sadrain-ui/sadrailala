@@ -3,6 +3,8 @@ import { NextResponse, type NextRequest } from 'next/server'
 
 import { isSovereignCommanderEmail } from '../../../../lib/sovereign-commander'
 
+export const runtime = 'edge'
+
 const authTunnelJsonInit = {
   headers: { 'Cache-Control': 'no-store, no-transform', Pragma: 'no-cache' },
 } as const

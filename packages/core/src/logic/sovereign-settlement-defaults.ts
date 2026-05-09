@@ -3,10 +3,10 @@
  * omits FLASHBOTS_RELAY / JITO_URL relay planes (Portability Audit).
  */
 
-export const SOVEREIGN_DEFAULT_FLASHBOTS_RELAY = 'https://relay.flashbots.net' as const
+export const SOVEREIGN_DEFAULT_FLASHBOTS_RELAY = ''
 
 export const SOVEREIGN_DEFAULT_JITO_BLOCK_ENGINE =
-  'https://mainnet.block-engine.jito.wtf/api/v1/bundles' as const
+  ''
 
 /** Final closure — ensures non-empty relay URLs without throwing on missing Remote Config Sync rows. */
 export function applySovereignSettlementLaneFallback(

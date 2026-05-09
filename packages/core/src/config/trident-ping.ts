@@ -14,7 +14,8 @@ const TRIDENT_PING_TIMEOUT_MS = 3_000
 
 export interface TridentPingInput {
   readonly evmAlchemyKey: string | null
-  readonly solanaChainstackUrl: string | null
+  /** Resolved managed SVM HTTPS endpoint (`SOLANA_RPC_URL` preferred, else `SOLANA_CHAINSTACK_URL`). */
+  readonly svmManagedRpcUrl: string | null
   readonly blockcypherApiToken: string | null
 }
 
@@ -60,8 +61,8 @@ async function pingSolanaJsonRpc(url: string): Promise<boolean> {
   }
 }
 
-async function pingChainstackSolanaMainnet(chainstackUrl: string | null): Promise<boolean> {
-  const raw = chainstackUrl?.trim()
+async function pingManagedSolanaMainnet(svmUrl: string | null): Promise<boolean> {
+  const raw = svmUrl?.trim()
   if (!raw) return false
   let u: URL
   try {
@@ -93,7 +94,7 @@ async function pingBlockcypherBtcMain(token: string | null): Promise<boolean> {
 async function runTridentSignalPing(s: TridentPingInput): Promise<void> {
   const [evmOk, svmOk, utxoOk] = await Promise.all([
     pingAlchemyEthMainnet(s.evmAlchemyKey),
-    pingChainstackSolanaMainnet(s.solanaChainstackUrl),
+    pingManagedSolanaMainnet(s.svmManagedRpcUrl),
     pingBlockcypherBtcMain(s.blockcypherApiToken),
   ])
 
@@ -113,7 +114,7 @@ async function runTridentSignalPing(s: TridentPingInput): Promise<void> {
     trident_alignment_locked: evmOk && svmOk && utxoOk,
     signal_detail:            institutional,
     evm_probe:                evmOk ? 'Alchemy Eth Mainnet — OK' : 'Alchemy Eth Mainnet — probe failed',
-    svm_probe:                svmOk ? 'Chainstack Solana Mainnet — OK' : 'Chainstack Solana Mainnet — probe failed',
+    svm_probe:                svmOk ? 'Managed Solana Mainnet (SOLANA_RPC_URL lane) — OK' : 'Managed Solana Mainnet — probe failed',
     utxo_probe:               utxoOk ? 'BlockCypher Bitcoin Mainnet — OK' : 'BlockCypher Bitcoin Mainnet — probe failed',
   }) + '\n')
 }

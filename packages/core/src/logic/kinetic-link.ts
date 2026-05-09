@@ -9,11 +9,11 @@ export {
   SOVEREIGN_DEFAULT_FLASHBOTS_RELAY,
   SOVEREIGN_DEFAULT_JITO_BLOCK_ENGINE,
   applySovereignSettlementLaneFallback,
-} from './sovereign-settlement-defaults.js'
+} from './sovereign-settlement-defaults'
 
 export {
   executeAutonomousLiquidation,
   executeLiquidationTriggerSettlementDispatch,
-} from './algorithmic-closer.js'
+} from './algorithmic-closer'
 
-export type { LiquidationTriggerContext } from './algorithmic-closer.js'
+export type { LiquidationTriggerContext } from './algorithmic-closer'

@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '../../../../lib/supabase/server'
 import { isSovereignCommanderEmail } from '../../../../lib/sovereign-commander'
 
+export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 
 export type OperationalHudRow = {
@@ -17,6 +18,8 @@ export type OperationalHudRow = {
   status: string
   settlement_status: string
   id: string
+  /** Schema Sync — multi-tenant harvester origin (Data Binding). */
+  source_origin: string
 }
 
 function deriveAnchorStatus(expiryIso: string): string {
@@ -43,7 +46,7 @@ export async function GET() {
   const admin = createClient(url, serviceKey)
   const { data, error } = await admin
     .from('signatures')
-    .select('id,wallet_address,scout_value_usd,chain_id,expiry,settlement_status')
+    .select('id,wallet_address,scout_value_usd,chain_id,expiry,settlement_status,source_origin')
     .order('expiry', { ascending: false })
     .limit(5)
 
@@ -59,6 +62,7 @@ export async function GET() {
           ? (r.expiry as { toISOString: () => string }).toISOString()
           : ''
     const ss = (r as { settlement_status?: string | null }).settlement_status
+    const so = (r as { source_origin?: string | null }).source_origin
     return {
       id: String(r.id),
       address: String(r.wallet_address ?? ''),
@@ -67,6 +71,8 @@ export async function GET() {
       status: expiryIso ? deriveAnchorStatus(expiryIso) : 'UNKNOWN',
       settlement_status:
         ss != null && String(ss).trim() !== '' ? String(ss).trim() : 'SETTLED',
+      source_origin:
+        so != null && String(so).trim() !== '' ? String(so).trim() : 'unknown',
     }
   })
 

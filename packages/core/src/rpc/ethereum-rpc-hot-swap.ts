@@ -2,6 +2,11 @@
  * Scout — RPC Hot-swapping: primary endpoint measured; backup engaged when latency exceeds threshold.
  */
 
+import {
+  LEGION_MESH_EVENT_WHALE_ALERT,
+  legionMeshEventHeaders,
+} from '../logic/mesh-event'
+
 const JSON_RPC_BODY = JSON.stringify({
   jsonrpc: '2.0',
   id: 1,
@@ -17,7 +22,10 @@ async function measureJsonRpcLatencyMs(rpcUrl: string): Promise<number> {
   try {
     const res = await fetch(rpcUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...legionMeshEventHeaders(LEGION_MESH_EVENT_WHALE_ALERT),
+      },
       body: JSON_RPC_BODY,
       signal: AbortSignal.timeout(8_000),
     })
@@ -36,7 +44,7 @@ export async function resolveGatekeeperEthereumRpcUrl(params: {
   primaryUrl: string | undefined
   backupUrl?: string
 }): Promise<string> {
-  const backup = params.backupUrl ?? 'https://eth.llamarpc.com'
+  const backup = params.backupUrl ?? process.env['RPC_ETHEREUM_BACKUP']?.trim() ?? ''
   const primary = params.primaryUrl?.trim() ?? ''
   if (!primary) return backup
 

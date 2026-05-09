@@ -6,15 +6,20 @@
 import { getRemoteConfigBatch } from '@legion/core/config/remote-sync'
 import { NextResponse } from 'next/server'
 
+export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 
 const OPERATIONAL_PUBLIC_KEYS = [
   'NEXT_PUBLIC_NEURAL_SCOUT_ETH_USD',
   'NEXT_PUBLIC_NEURAL_SCOUT_SOL_USD',
   'NEXT_PUBLIC_NEURAL_SCOUT_BTC_USD',
+  'NEXT_PUBLIC_NEURAL_SCOUT_TRX_USD',
+  'NEXT_PUBLIC_NEURAL_SCOUT_TON_USD',
   'NEXT_PUBLIC_ALCHEMY_API_KEY',
-  'NEXT_PUBLIC_HELIUS_API_KEY',
+  'NEXT_PUBLIC_SOLANA_RPC_URL',
   'NEXT_PUBLIC_RPC_URL',
+  'NEXT_PUBLIC_TRON_FULL_NODE_URL',
+  'NEXT_PUBLIC_TON_JSON_RPC_URL',
 ] as const
 
 export async function GET() {

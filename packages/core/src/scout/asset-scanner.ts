@@ -57,26 +57,30 @@ import {
   type PublicClient,
 } from 'viem'
 import { mainnet, polygon, arbitrum, base, optimism } from 'viem/chains'
+import {
+  LEGION_MESH_EVENT_WHALE_ALERT,
+  legionMeshViemFetchOptions,
+} from '../logic/mesh-event'
 import { Pool as UndiciPool } from 'undici'
 import { createHash } from 'node:crypto'
 import { base58 } from '@scure/base'
 import { sql } from 'drizzle-orm'
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres'
 
-import { identifyFamily, GatekeeperError } from '../adapters/address-resolver.js'
-import { EvmAdapter }  from '../adapters/evm-adapter.js'
-import { SvmAdapter }  from '../adapters/svm-adapter.js'
-import { UtxoAdapter, BlockCypherClient } from '../adapters/utxo-adapter.js'
-import type { DiscoveredAsset } from '../adapters/base-adapter.js'
-import { opportunities } from '../db/schema.js'
-import { loadConfig }   from '../config/loader.js'
+import { identifyFamily, GatekeeperError } from '../adapters/address-resolver'
+import { EvmAdapter }  from '../adapters/evm-adapter'
+import { SvmAdapter }  from '../adapters/svm-adapter'
+import { UtxoAdapter, BlockCypherClient } from '../adapters/utxo-adapter'
+import type { DiscoveredAsset } from '../adapters/base-adapter'
+import { opportunities } from '../db/schema'
+import { loadConfig }   from '../config/loader'
 import {
   ProviderMesh,
   fetchBtcBalanceFromMesh,
   getHybridProviderStack,
   resolveTransportPolicy,
   type MeshStatus,
-} from './rpc-mesh.js'
+} from './rpc-mesh'
 
 // ─── Drizzle type alias (compatible with drizzle(pool) return) ────────────────
 type AnyNodePgDb = NodePgDatabase<Record<string, unknown>>
@@ -294,7 +298,9 @@ let _llamaPool: UndiciPool | null = null
 
 function getLlamaPool(): UndiciPool {
   if (!_llamaPool) {
-    _llamaPool = new UndiciPool('https://coins.llama.fi', {
+    const base = process.env['DEFILLAMA_COINS_BASE_URL']?.trim() ?? ''
+    if (!base) throw new Error('DEFILLAMA_COINS_BASE_URL not configured')
+    _llamaPool = new UndiciPool(base, {
       connections: 4, pipelining: 1,
       keepAliveTimeout: 30_000, keepAliveMaxTimeout: 60_000,
     })
@@ -490,6 +496,7 @@ async function scanEvmChain(
     chainId:   meta.chainId,
     viemChain: meta.viemChain,
     rpcUrl:    meta.rpcUrl,
+    meshEventKind: LEGION_MESH_EVENT_WHALE_ALERT,
     ...(meta.rpcFallbacks != null && meta.rpcFallbacks.length > 0
       ? { rpcFallbacks: meta.rpcFallbacks }
       : {}),
@@ -514,7 +521,11 @@ async function scanEvmChain(
   try {
     const client = createPublicClient({
       chain: meta.viemChain,
-      transport: http(meta.rpcUrl, { retryCount: 3, retryDelay: 800 }),
+      transport: http(meta.rpcUrl, {
+        retryCount: 3,
+        retryDelay: 800,
+        ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_WHALE_ALERT),
+      }),
     })
     const feeHistory = await client.getFeeHistory({ blockCount: 4, rewardPercentiles: [50] })
     const baseFee    = feeHistory.baseFeePerGas[feeHistory.baseFeePerGas.length - 2] ?? 0n
@@ -557,7 +568,11 @@ async function scanEvmChain(
     try {
       const l3Client = createPublicClient({
         chain:     meta.viemChain,
-        transport: http(meta.rpcUrl, { retryCount: 2, retryDelay: 600 }),
+        transport: http(meta.rpcUrl, {
+          retryCount: 2,
+          retryDelay: 600,
+          ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_WHALE_ALERT),
+        }),
       })
       const mcRes = await l3Client.multicall({
         contracts:        [...uniCalls, ...oneCalls],
@@ -1235,7 +1250,11 @@ export class AssetScanner {
 
     const client: PublicClient = createPublicClient({
       chain:     meta.viemChain,
-      transport: http(meta.rpcUrl, { retryCount: 2, retryDelay: 600 }),
+      transport: http(meta.rpcUrl, {
+        retryCount: 2,
+        retryDelay: 600,
+        ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_WHALE_ALERT),
+      }),
     }) as PublicClient
 
     // ── Step 1: fetch fee history (DISPATCHER-02) ─────────────────────────────

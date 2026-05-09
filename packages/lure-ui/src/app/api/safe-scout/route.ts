@@ -3,6 +3,8 @@
  */
 
 import { NextResponse } from 'next/server'
+
+export const runtime = 'edge'
 import type { Address } from 'viem'
 import { isAddress } from 'viem'
 

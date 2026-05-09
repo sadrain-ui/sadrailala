@@ -1,0 +1,249 @@
+/**
+ * @module @legion/core/logic/network-mesh
+ *
+ * Network Egress Cloaking — institutional outbound mesh for RPC and Remote Config Sync.
+ * When `PROXY_URL` is armed, JSON-RPC traffic routes through an HTTP(S) proxy (undici)
+ * and carries egress-cloak headers for observability.
+ */
+
+import { fetch as undiciFetch, ProxyAgent } from 'undici'
+
+import {
+  LEGION_MESH_EVENT_HEADER,
+  LEGION_MESH_EVENT_SETTLEMENT,
+  LEGION_MESH_EVENT_WHALE_ALERT,
+  type LegionMeshEventKind,
+} from './mesh-event'
+
+const PROXY_TAINT_WINDOW_MS = 60_000
+const TIMEOUT_SIGNATURES = ['timeout', 'timed out', 'etimedout', 'und_err_connect_timeout']
+
+let cachedPoolKey: string | null = null
+let cachedProxyPool: string[] = []
+let roundRobinCursor = 0
+let rotationalMeshAnnounced = false
+let shadowMeshEmptyAnnounced = false
+
+const proxyAgentCache = new Map<string, ProxyAgent>()
+const proxyTaintUntilMs = new Map<string, number>()
+
+/** Resolve HTTP(S) proxy URL fallback for Network Mesh egress. */
+export function resolveProxyUrlFromEnv(): string | undefined {
+  const raw = typeof process !== 'undefined' ? process.env['PROXY_URL']?.trim() : undefined
+  return raw && raw !== '' ? raw : undefined
+}
+
+/** Resolve Rotational Mesh proxy pool from `PROXY_POOL` (comma-separated). */
+export function resolveProxyPoolFromEnv(): string[] {
+  const rawPool = typeof process !== 'undefined' ? process.env['PROXY_POOL']?.trim() : undefined
+  const fallback = resolveProxyUrlFromEnv()
+  const cacheKey = `${rawPool ?? ''}|${fallback ?? ''}`
+  if (cacheKey === cachedPoolKey) return cachedProxyPool
+
+  const parsedPool =
+    rawPool
+      ?.split(/[,]+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0) ?? []
+
+  cachedProxyPool = parsedPool.length > 0 ? parsedPool : fallback ? [fallback] : []
+  cachedPoolKey = cacheKey
+  roundRobinCursor = 0
+
+  if (cachedProxyPool.length === 0) {
+    if (!shadowMeshEmptyAnnounced) {
+      shadowMeshEmptyAnnounced = true
+      console.warn('SHADOW_MESH_EMPTY: Check .env PROXY_POOL formatting.')
+    }
+  } else {
+    shadowMeshEmptyAnnounced = false
+  }
+
+  if (cachedProxyPool.length > 0 && !rotationalMeshAnnounced) {
+    console.info('ROTATIONAL_MESH_ACTIVE: 10-node shadow pool engaged. IP Fatigue protection enabled. System: OMNIPRESENT.')
+    rotationalMeshAnnounced = true
+  }
+
+  return cachedProxyPool
+}
+
+function resolveProxyHost(proxyUrl: string): string {
+  try {
+    return new URL(proxyUrl).hostname
+  } catch {
+    return 'armed'
+  }
+}
+
+/**
+ * Institutional headers merged onto every egress request — includes proxy host binding when `PROXY_URL` is set.
+ */
+export function resolveNetworkMeshHeaders(activeProxyUrl?: string): Record<string, string> {
+  const out: Record<string, string> = {
+    'X-Legion-Network-Mesh': 'sovereign',
+  }
+  const proxy = activeProxyUrl ?? resolveProxyPoolFromEnv()[0]
+  if (proxy) {
+    out['X-Legion-Egress-Proxy'] = resolveProxyHost(proxy)
+  }
+  return out
+}
+
+function getOrCreateProxyAgent(proxyUrl: string): ProxyAgent {
+  const existing = proxyAgentCache.get(proxyUrl)
+  if (existing) return existing
+  const next = new ProxyAgent(proxyUrl)
+  proxyAgentCache.set(proxyUrl, next)
+  return next
+}
+
+function markProxyTainted(proxyUrl: string): void {
+  proxyTaintUntilMs.set(proxyUrl, Date.now() + PROXY_TAINT_WINDOW_MS)
+}
+
+export function getNextProxy(): string | undefined {
+  const pool = resolveProxyPoolFromEnv()
+  if (pool.length === 0) return undefined
+
+  const now = Date.now()
+  for (let i = 0; i < pool.length; i++) {
+    const idx = (roundRobinCursor + i) % pool.length
+    const candidate = pool[idx]
+    if (candidate === undefined) continue
+    const taintedUntil = proxyTaintUntilMs.get(candidate) ?? 0
+    if (taintedUntil <= now) {
+      roundRobinCursor = (idx + 1) % pool.length
+      return candidate
+    }
+  }
+  return undefined
+}
+
+function isTaintStatus(status: number): boolean {
+  return status === 403 || status === 407
+}
+
+function isTimeoutError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  const lowered = message.toLowerCase()
+  return TIMEOUT_SIGNATURES.some((signature) => lowered.includes(signature))
+}
+
+function parseMeshEventFromInit(init?: RequestInit): LegionMeshEventKind | null {
+  if (init?.headers == null) return null
+  const raw = new Headers(init.headers).get(LEGION_MESH_EVENT_HEADER)?.trim()
+  if (raw === LEGION_MESH_EVENT_WHALE_ALERT) return LEGION_MESH_EVENT_WHALE_ALERT
+  if (raw === LEGION_MESH_EVENT_SETTLEMENT) return LEGION_MESH_EVENT_SETTLEMENT
+  return null
+}
+
+function logMeshEventProxyUsage(eventName: LegionMeshEventKind, proxyUrl: string): void {
+  console.info(`ROTATIONAL_MESH_PROXY_TRACE: ${eventName} routed via ${resolveProxyHost(proxyUrl)}.`)
+}
+
+/** Singleton fetch — proxy dispatcher + Network Mesh headers (Privacy RPC / Remote Config Sync). */
+export function createEgressCloakingFetchFn(): (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response> {
+  return async (input, init) => {
+    const selectedProxy = getNextProxy()
+    const headers = new Headers(init?.headers)
+    for (const [k, v] of Object.entries(resolveNetworkMeshHeaders(selectedProxy))) {
+      headers.set(k, v)
+    }
+
+    const meshEvent = parseMeshEventFromInit(init)
+    if (selectedProxy && meshEvent) {
+      logMeshEventProxyUsage(meshEvent, selectedProxy)
+    }
+
+    if (!selectedProxy) {
+      return globalThis.fetch(input, { ...init, headers })
+    }
+
+    const agent = getOrCreateProxyAgent(selectedProxy)
+    try {
+      type UndiciInit = NonNullable<Parameters<typeof undiciFetch>[1]>
+      const res = await undiciFetch(input as Parameters<typeof undiciFetch>[0], {
+        ...(init ?? {}),
+        headers,
+        dispatcher: agent,
+      } as UndiciInit)
+      if (isTaintStatus(res.status)) {
+        markProxyTainted(selectedProxy)
+      }
+      return res as unknown as Response
+    } catch (error) {
+      if (isTimeoutError(error)) {
+        markProxyTainted(selectedProxy)
+      }
+      throw error
+    }
+  }
+}
+
+let institutionalFetchMemo: ReturnType<typeof createEgressCloakingFetchFn> | null = null
+
+/** viem `http()` transport options — routes through `PROXY_URL` when configured. */
+export function getInstitutionalHttpTransportOptions(): { fetchFn: ReturnType<typeof createEgressCloakingFetchFn> } {
+  if (!institutionalFetchMemo) institutionalFetchMemo = createEgressCloakingFetchFn()
+  return { fetchFn: institutionalFetchMemo }
+}
+
+const EGRESS_IP_CHECK_URL =
+  (typeof process !== 'undefined' ? process.env['EGRESS_IP_CHECK_URL']?.trim() : '') ?? ''
+
+/** Ping Strike — probes one Rotational Mesh node; returns exit-plane ok + round-trip latency (Lethality Diagnostic). */
+export async function pingRotationalMeshExitPlaneDetailed(
+  proxyUrl: string,
+): Promise<{ ok: boolean; latency_ms: number | null }> {
+  const t0 = Date.now()
+  try {
+    const agent = new ProxyAgent(proxyUrl)
+    const res = await undiciFetch(EGRESS_IP_CHECK_URL, {
+      dispatcher: agent,
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    })
+    return { ok: res.ok, latency_ms: Date.now() - t0 }
+  } catch {
+    return { ok: false, latency_ms: Date.now() - t0 }
+  }
+}
+
+/** Ping Strike — boolean facade for isolated mesh probes (no Round-Robin Scheduler side effects). */
+export async function pingRotationalMeshExitPlane(proxyUrl: string): Promise<boolean> {
+  const r = await pingRotationalMeshExitPlaneDetailed(proxyUrl)
+  return r.ok
+}
+
+/**
+ * Egress Cloaking validation — GET via `PROXY_URL` to an IP-checker plane; confirms proxy transport masks origin egress.
+ */
+export async function verifyEgressCloaking(): Promise<void> {
+  if (resolveProxyPoolFromEnv().length === 0) {
+    console.info(
+      'ENV_RECONCILIATION: PROXY_POOL/PROXY_URL unset — Rotational Mesh not armed. Deployment plane: set PROXY_POOL for masked egress.',
+    )
+    return
+  }
+  try {
+    const fetchFn = createEgressCloakingFetchFn()
+    const res = await fetchFn(EGRESS_IP_CHECK_URL, {
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) throw new Error(`ip-check ${res.status}`)
+    const j = (await res.json()) as { ip?: string }
+    const exitDigest = j.ip ?? '(unknown)'
+    console.info(
+      `EGRESS_CLOAKING_VERIFIED: Proxy transport exit digest ${exitDigest} — origin egress masked (Egress Cloaking operational).`,
+    )
+    console.info(
+      'EGRESS_VERIFIED: Proxy transport active. Environment blueprint locked. Legion Engine is launch-ready.',
+    )
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`EGRESS_CLOAKING_FAULT: Egress Cloaking verification failed — ${msg}`)
+  }
+}

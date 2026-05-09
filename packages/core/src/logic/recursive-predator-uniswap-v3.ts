@@ -1,10 +1,22 @@
 /**
  * Recursive Predator — Uni V3 LP USD fusion (Ethereum mainnet Position mesh).
  */
-import { CurrencyAmount, Token } from '@uniswap/sdk-core'
-import { Pool, Position } from '@uniswap/v3-sdk'
+import { createRequire } from 'node:module'
+
 import { createPublicClient, http, type Address } from 'viem'
 import { mainnet } from 'viem/chains'
+
+import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshViemFetchOptions } from './mesh-event'
+
+import type { CurrencyAmount as CurrencyAmountType, Token as TokenType } from '@uniswap/sdk-core'
+
+/**
+ * ESM/CJS reconciliation — `@uniswap/sdk-core` and `@uniswap/v3-sdk` must load via `createRequire(import.meta.url)`
+ * so tsx + Node ESM resolve the CJS entry; named ESM imports fail at runtime ("does not provide export named …").
+ */
+const require = createRequire(import.meta.url)
+const { CurrencyAmount, Token } = require('@uniswap/sdk-core') as typeof import('@uniswap/sdk-core')
+const { Pool, Position } = require('@uniswap/v3-sdk') as typeof import('@uniswap/v3-sdk')
 
 const MAINNET_CHAIN_ID = 1
 
@@ -109,16 +121,16 @@ const erc20Abi = [
   },
 ] as const
 
-function tokenFromAddress(addr: Address, chainId: number, decimals: number, symbol: string): Token {
+function tokenFromAddress(addr: Address, chainId: number, decimals: number, symbol: string): TokenType {
   return new Token(chainId, addr, decimals, symbol, symbol)
 }
 
 /** Reference USD map — Neural Scout primary rates override via ethUsd passed in. */
 function usdForAmounts(
-  t0: Token,
-  t1: Token,
-  amount0: CurrencyAmount<Token>,
-  amount1: CurrencyAmount<Token>,
+  t0: TokenType,
+  t1: TokenType,
+  amount0: CurrencyAmountType<TokenType>,
+  amount1: CurrencyAmountType<TokenType>,
   ethUsd: number,
 ): number {
   const weth = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'.toLowerCase()
@@ -150,7 +162,10 @@ export async function estimateUniswapV3MainnetLpUsd(
   if (!holder?.startsWith('0x') || !rpcUrl.trim()) return 0
   const client = createPublicClient({
     chain: mainnet,
-    transport: http(rpcUrl.trim(), { timeout: 14_000 }),
+    transport: http(rpcUrl.trim(), {
+      timeout: 14_000,
+      ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_WHALE_ALERT),
+    }),
   })
   let bal: bigint
   try {

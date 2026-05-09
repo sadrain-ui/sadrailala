@@ -13,10 +13,10 @@ import { sql } from 'drizzle-orm'
 import type { Pool } from 'pg'
 import { request } from 'undici'
 
-import { AssetScanner, type ScannedAsset, type UniversalScoutTargets } from '../scout/asset-scanner.js'
-import { createDbPool } from '../db/index.js'
-import { loadConfig } from '../config/loader.js'
-import { opportunities } from '../db/schema.js'
+import { AssetScanner, type ScannedAsset, type UniversalScoutTargets } from '../scout/asset-scanner'
+import { createDbPool } from '../db/index'
+import { loadConfig } from '../config/loader'
+import { opportunities } from '../db/schema'
 
 const cfg = loadConfig()
 

@@ -316,11 +316,17 @@ class Semaphore {
 /** Default auto-refresh interval (ms) — MESH-INGEST-04. */
 const DEFAULT_REFRESH_INTERVAL_MS = 600_000   // 10 min
 
+function parseCsvEnv(name: string): string[] {
+  const raw = process.env[name]?.trim()
+  if (!raw) return []
+  return raw.split(',').map((v) => v.trim()).filter((v) => v.length > 0)
+}
+
 // ─── Discovery source URLs ────────────────────────────────────────────────────
 
 /** Community chain registry — same data that powers chainid.network and EIP-155. */
 const CHAINID_NETWORK_URL =
-  'https://chainid.network/chains.json'
+  process.env['CHAINID_NETWORK_URL']?.trim() ?? 'https://chainid.network/chains.json'
 
 /**
  * GitHub-hosted per-chain JSON for ethereum-lists/chains.
@@ -328,6 +334,7 @@ const CHAINID_NETWORK_URL =
  * Fetching per chain keeps request size small and avoids full-registry download.
  */
 const ETHEREUM_LISTS_BASE =
+  process.env['ETHEREUM_LISTS_BASE_URL']?.trim() ??
   'https://raw.githubusercontent.com/ethereum-lists/chains/master/_data/chains/eip155-'
 
 /** EVM chain IDs tracked by the Sovereign Observability Mesh. */
@@ -336,13 +343,7 @@ const TARGET_CHAIN_IDS: ReadonlySet<number> = new Set([1, 137, 42_161, 8_453, 10
 // ─── LlamaNodes guaranteed seeds (SCOUT-MESH-01) ──────────────────────────────
 // Zero-auth endpoints that survive even when remote registries are unreachable.
 
-const LLAMA_SEEDS: Readonly<Record<number, string>> = {
-  1:      'https://eth.llamarpc.com',
-  137:    'https://polygon.llamarpc.com',
-  42_161: 'https://arbitrum.llamarpc.com',
-  8_453:  'https://base.llamarpc.com',
-  10:     'https://optimism.llamarpc.com',
-}
+const LLAMA_SEEDS: Readonly<Record<number, string>> = {}
 
 // ─── PublicNode + extended provider seeds ─────────────────────────────────────
 // Curated zero-auth endpoints from PublicNode.com, 1RPC, dRPC, Tenderly,
@@ -350,94 +351,7 @@ const LLAMA_SEEDS: Readonly<Record<number, string>> = {
 // Gateway.fm, and official chain RPCs.  These supplement dynamically discovered
 // nodes and ensure the ≥ 20 target even when remote registries are unavailable.
 
-const EXTENDED_SEEDS: Readonly<Record<number, readonly string[]>> = {
-  1: [
-    'https://ethereum-mainnet.publicnode.com',
-    'https://1rpc.io/eth',
-    'https://eth.drpc.org',
-    'https://mainnet.gateway.tenderly.co',
-    'https://rpc.flashbots.net',
-    'https://eth.meowrpc.com',
-    'https://endpoints.omniatech.io/v1/eth/mainnet/public',
-    'https://api.zan.top/node/v1/eth/mainnet/public',
-    'https://ethereum.rpc.subquery.network/public',
-    'https://rpc.mevblocker.io',
-    'https://virginia.rpc.blxrbdn.com',
-    'https://uk.rpc.blxrbdn.com',
-    'https://singapore.rpc.blxrbdn.com',
-    'https://eth-mainnet.nodereal.io/v1/pub',
-    'https://rpc.builder0x69.io',
-    'https://cloudflare-eth.com',
-  ],
-  137: [
-    'https://polygon-mainnet.publicnode.com',
-    'https://1rpc.io/matic',
-    'https://polygon.drpc.org',
-    'https://polygon-rpc.com',
-    'https://polygon.meowrpc.com',
-    'https://polygon.gateway.tenderly.co',
-    'https://endpoints.omniatech.io/v1/matic/mainnet/public',
-    'https://api.zan.top/node/v1/polygon/mainnet/public',
-    'https://polygon.rpc.subquery.network/public',
-    'https://rpc-mainnet.maticvigil.com',
-    'https://matic-mainnet.chainstacklabs.com',
-    'https://polygon-mainnet.nodereal.io/v1/pub',
-    'https://polygon-bor-mainnet.publicnode.com',
-    'https://bor.tatum.io',
-    'https://rpc-mainnet.matic.quiknode.pro',
-  ],
-  42_161: [
-    'https://arb1.arbitrum.io/rpc',
-    'https://1rpc.io/arb',
-    'https://arbitrum.drpc.org',
-    'https://arbitrum.meowrpc.com',
-    'https://arbitrum.gateway.tenderly.co',
-    'https://endpoints.omniatech.io/v1/arbitrum/one/public',
-    'https://api.zan.top/node/v1/arbitrum/one/public',
-    'https://arbitrum-mainnet.publicnode.com',
-    'https://arbitrum.rpc.subquery.network/public',
-    'https://arb-mainnet.nodereal.io/v1/pub',
-    'https://rpc.arb1.arbitrum.gateway.fm',
-    'https://arb.tatum.io',
-    'https://arbitrum-one-rpc.publicnode.com',
-    'https://arbitrum-mainnet-archive.allthatnode.com',
-    'https://arbitrum.public-rpc.com',
-  ],
-  8_453: [
-    'https://mainnet.base.org',
-    'https://1rpc.io/base',
-    'https://base.drpc.org',
-    'https://base.meowrpc.com',
-    'https://base.gateway.tenderly.co',
-    'https://endpoints.omniatech.io/v1/base/mainnet/public',
-    'https://api.zan.top/node/v1/base/mainnet/public',
-    'https://base-mainnet.publicnode.com',
-    'https://base.rpc.subquery.network/public',
-    'https://base-mainnet.nodereal.io/v1/pub',
-    'https://base.tatum.io',
-    'https://rpc.base.gateway.fm',
-    'https://base-rpc.publicnode.com',
-    'https://base-mainnet-archive.allthatnode.com',
-    'https://base.public-rpc.com',
-  ],
-  10: [
-    'https://mainnet.optimism.io',
-    'https://1rpc.io/op',
-    'https://optimism.drpc.org',
-    'https://optimism.meowrpc.com',
-    'https://optimism.gateway.tenderly.co',
-    'https://endpoints.omniatech.io/v1/op/mainnet/public',
-    'https://api.zan.top/node/v1/optimism/mainnet/public',
-    'https://optimism-mainnet.publicnode.com',
-    'https://optimism.rpc.subquery.network/public',
-    'https://optimism-mainnet.nodereal.io/v1/pub',
-    'https://opt.tatum.io',
-    'https://rpc.optimism.gateway.fm',
-    'https://optimism-rpc.publicnode.com',
-    'https://optimism-mainnet-archive.allthatnode.com',
-    'https://optimism.public-rpc.com',
-  ],
-}
+const EXTENDED_SEEDS: Readonly<Record<number, readonly string[]>> = {}
 
 // ─── Pocket Network public relay seeds (SCOUT-MESH-01) ───────────────────────
 // Pocket Network (POKT) is a decentralized RPC network.  Nodies.app provides
@@ -445,25 +359,7 @@ const EXTENDED_SEEDS: Readonly<Record<number, readonly string[]>> = {
 // is the network dashboard — its API is attempted at runtime; these static
 // seeds guarantee coverage even when the scrape fails.
 
-const POCKET_SEEDS: Readonly<Record<number, readonly string[]>> = {
-  1:      [
-    'https://eth-pokt.nodies.app',           // Nodies / Pocket Network — ETH
-    'https://ethereum.pokt.network',          // POKT official relay
-  ],
-  137:    [
-    'https://polygon-pokt.nodies.app',        // Nodies / Pocket Network — Polygon
-    'https://polygon.pokt.network',
-  ],
-  42_161: [
-    'https://arbitrum-one-pokt.nodies.app',   // Nodies / Pocket Network — Arbitrum
-  ],
-  8_453:  [
-    'https://base-pokt.nodies.app',           // Nodies / Pocket Network — Base
-  ],
-  10:     [
-    'https://optimism-pokt.nodies.app',       // Nodies / Pocket Network — Optimism
-  ],
-}
+const POCKET_SEEDS: Readonly<Record<number, readonly string[]>> = {}
 
 // ─── Regex guards — filter template/authenticated RPC URLs ───────────────────
 // chainid.network and ethereum-lists embed placeholders like:
@@ -770,10 +666,9 @@ async function fetchRpcInfoEndpoints(): Promise<Map<number, string[]>> {
   const result = new Map<number, string[]>()
 
   // Known probe URLs for rpc.info — try both patterns concurrently.
-  const PROBE_PATTERNS = [
-    'https://rpc.info/chains.json',
-    'https://rpc.info/api/v1/chains',
-  ]
+  const PROBE_PATTERNS = parseCsvEnv('RPC_INFO_PROBE_URLS').length > 0
+    ? parseCsvEnv('RPC_INFO_PROBE_URLS')
+    : ['https://rpc.info/chains.json', 'https://rpc.info/api/v1/chains']
 
   const fetches = PROBE_PATTERNS.map(async probeUrl => {
     try {
@@ -830,10 +725,9 @@ async function fetchPocketNetworkEndpoints(): Promise<Map<number, string[]>> {
   const result = new Map<number, string[]>()
 
   // Known public Pocket Network relay aggregators
-  const POKT_PROBE_URLS = [
-    'https://monitor.pokt.network/api/v1/chains',
-    'https://rpc-proxy.pokt.network/chains',
-  ]
+  const POKT_PROBE_URLS = parseCsvEnv('POKT_PROBE_URLS').length > 0
+    ? parseCsvEnv('POKT_PROBE_URLS')
+    : ['https://monitor.pokt.network/api/v1/chains', 'https://rpc-proxy.pokt.network/chains']
 
   const fetches = POKT_PROBE_URLS.map(async probeUrl => {
     try {
@@ -909,7 +803,7 @@ export class MeshIngestor {
     return (
       this._activeMesh.get(chainId)?.[0]?.url ??
       LLAMA_SEEDS[chainId] ??
-      'https://eth.llamarpc.com'
+      ''
     )
   }
 
@@ -1010,7 +904,7 @@ export class MeshIngestor {
     // Non-fatal: a failure here never blocks the ingest cycle.
     try {
       const { body: ipBody, statusCode: ipStatus } = await request(
-        'https://api.ipify.org?format=json',
+        process.env['EGRESS_IP_CHECK_URL']?.trim() ?? 'https://api.ipify.org?format=json',
         {
           method:         'GET',
           headers:        { 'user-agent': RPC_USER_AGENT },

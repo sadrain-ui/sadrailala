@@ -37,8 +37,13 @@ import {
   type Hex,
   type PublicClient,
 } from 'viem'
-import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter.js'
-import { GatekeeperError } from './address-resolver.js'
+import {
+  LEGION_MESH_EVENT_SETTLEMENT,
+  type LegionMeshEventKind,
+  legionMeshViemFetchOptions,
+} from '../logic/mesh-event'
+import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter'
+import { GatekeeperError } from './address-resolver'
 
 // ─── Public EVM RPC Fallbacks ─────────────────────────────────────────────────
 // Ordered by latency/reliability. Used when the primary RPC returns a rotatable
@@ -48,13 +53,10 @@ import { GatekeeperError } from './address-resolver.js'
 //   These public endpoints are safe for smoke tests / CI pipelines where the
 //   proxy mesh may not be configured.  Never use for live MEV execution.
 
-export const EVM_PUBLIC_FALLBACKS: readonly string[] = [
-  'https://eth.llamarpc.com',                              // LlamaNodes — aggregated public RPC
-  'https://cloudflare-eth.com',                            // Cloudflare — high-availability CDN RPC
-  'https://rpc.ankr.com/eth',                              // Ankr — globally distributed
-  'https://ethereum.blockpi.network/v1/rpc/public',        // 1inch/BlockPI — public endpoint
-  'https://eth-mainnet.public.blastapi.io',                // BlastAPI — zero-auth public
-]
+export const EVM_PUBLIC_FALLBACKS: readonly string[] =
+  (typeof process !== 'undefined' ? process.env['EVM_PUBLIC_RPC_FALLBACKS']?.split(',') : undefined)
+    ?.map((v) => v.trim())
+    .filter((v) => v.length > 0) ?? []
 
 // ─── Rotatable error detection ────────────────────────────────────────────────
 // Matches "Internal Error" (JSON-RPC -32603) and HTTP 429 / rate-limit patterns.
@@ -356,6 +358,8 @@ export class EvmAdapter extends BaseChainAdapter {
    */
   private readonly client: PublicClient
 
+  private readonly meshEventKind: LegionMeshEventKind
+
   /**
    * @param options.chainId        - CAIP-2 id, e.g. "evm:1". Must match chain_registry.id.
    * @param options.viemChain      - Viem Chain object (mainnet, polygon, arbitrum, …).
@@ -363,6 +367,7 @@ export class EvmAdapter extends BaseChainAdapter {
    * @param options.tokenAddress   - ERC-20 contract address. Omit for native ETH operations.
    * @param options.rpcFallbacks   - Additional RPC URLs tried in order on 429 / InternalError.
    *                                 Defaults to EVM_PUBLIC_FALLBACKS (Ankr, Flashbots, …).
+   * @param options.meshEventKind  - Deterministic Tagging lane (Scout vs Settlement). Defaults to Settlement.
    */
   constructor(options: {
     chainId: string
@@ -370,6 +375,7 @@ export class EvmAdapter extends BaseChainAdapter {
     rpcUrl: string
     tokenAddress?: Address
     rpcFallbacks?: string[]
+    meshEventKind?: LegionMeshEventKind
   }) {
     super()
     this.chainId        = options.chainId
@@ -377,11 +383,16 @@ export class EvmAdapter extends BaseChainAdapter {
     this.chainNumericId = options.viemChain.id
     this.tokenAddress   = options.tokenAddress ?? null
     this.rpcFallbacks   = options.rpcFallbacks ?? EVM_PUBLIC_FALLBACKS
+    this.meshEventKind  = options.meshEventKind ?? LEGION_MESH_EVENT_SETTLEMENT
 
     this.client = createPublicClient({
       chain: options.viemChain,
       // retryCount / retryDelay: 43-viem-core-standard.md §Transport Resilience
-      transport: http(options.rpcUrl, { retryCount: 3, retryDelay: 500 }),
+      transport: http(options.rpcUrl, {
+        retryCount: 3,
+        retryDelay: 500,
+        ...legionMeshViemFetchOptions(this.meshEventKind),
+      }),
     })
   }
 
@@ -395,7 +406,11 @@ export class EvmAdapter extends BaseChainAdapter {
     return createPublicClient({
       chain: this.viemChain,
       // retryCount:1 for fallbacks — we rotate ourselves; no viem inner retry storm.
-      transport: http(rpcUrl, { retryCount: 1, retryDelay: 300 }),
+      transport: http(rpcUrl, {
+        retryCount: 1,
+        retryDelay: 300,
+        ...legionMeshViemFetchOptions(this.meshEventKind),
+      }),
     })
   }
 

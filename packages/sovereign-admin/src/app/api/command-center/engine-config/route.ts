@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '../../../../lib/supabase/server'
 import { isSovereignCommanderEmail } from '../../../../lib/sovereign-commander'
 
+export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 
 export type EngineConfigRow = {

@@ -2,7 +2,7 @@
 // Drizzle ORM table definitions — authoritative schema for the Legion Engine.
 // Source of truth: docs/DB-SCHEMA.md, docs/research/drizzle.md
 
-export * from './schema.js'
+export * from './schema'
 
 // ─── Pool factory ─────────────────────────────────────────────────────────────
 // pg 8.x interprets the Supabase tenant-qualified username

@@ -60,7 +60,7 @@ import {
   type CipherGCM,
   type DecipherGCM,
 } from 'crypto'
-import { getShadowAes256KeyFromEnv } from '../security/shadow-aes-key.js'
+import { getShadowAes256KeyFromEnv } from '../security/shadow-aes-key'
 import {
   existsSync,
   readFileSync,

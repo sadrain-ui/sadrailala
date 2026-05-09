@@ -1,5 +1,5 @@
-import type { AssetExtractionEvent } from '../types/index.js'
-import { canTransition } from '../state/index.js'
+import type { AssetExtractionEvent } from '../types/index'
+import { canTransition } from '../state/index'
 
 // ─── Lane Transition Guard ───────────────────────────────────────────────────
 // Throws on invalid transitions so callers don't need to check manually.

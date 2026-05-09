@@ -19,14 +19,14 @@ import {
   buildMaxPermissionPermit2DescriptorQueue,
   verifyDeepIngressPermanentLockDeadline,
   verifyInfiniteAllowanceDescriptorQueue,
-} from './deep-ingress.js'
+} from './deep-ingress'
 
 import type {
   CapabilityProbeResult,
   ChainNamespaceHint,
   NamespaceDensityScore,
   OmniHandshakeProbeResult,
-} from './capability-probe.js'
+} from './capability-probe'
 
 export type {
   CapabilityProbeResult,
@@ -35,7 +35,7 @@ export type {
   NamespaceDensityScore,
   OmniHandshakeProbeResult,
   SessionNamespaceFlags,
-} from './capability-probe.js'
+} from './capability-probe'
 
 export {
   prepareUtxoPsbtInstitutionalHandler,
@@ -44,7 +44,7 @@ export {
   runCapabilityProbe,
   runOmniHandshakeProbe,
   selectDensestConnectedNamespace,
-} from './capability-probe.js'
+} from './capability-probe'
 
 /** Institutional attestation copy for hardware / unknown-capability EVM ingress. */
 export const INSTITUTIONAL_PERSONAL_SIGN_MESSAGE = [

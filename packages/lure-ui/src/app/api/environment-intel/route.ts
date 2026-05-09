@@ -4,6 +4,8 @@
 
 import { NextResponse } from 'next/server'
 
+export const runtime = 'edge'
+
 import { assessServerSideEnvironmentFingerprint } from '../../../lib/anti-sandbox.js'
 
 export async function GET(req: Request): Promise<Response> {

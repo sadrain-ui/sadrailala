@@ -9,6 +9,7 @@ import { simulateBundleAssemblyDryRun } from '../../../../../lib/sovereign-diagn
 import { createServerSupabaseClient } from '../../../../../lib/supabase/server.js'
 import { isSovereignCommanderEmail } from '../../../../../lib/sovereign-commander.js'
 
+export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 
 const HTTP_URL = /^https?:\/\//i
@@ -148,14 +149,14 @@ export async function GET() {
   }
 
   if (flashbotsProbeUrl === '' || flashbotsLatencyMs === null) {
-    const fb = 'https://relay.flashbots.net'
+    const fb = process.env['FLASHBOTS_RELAY_URL']?.trim() ?? ''
     flashbotsProbeUrl = fb
-    flashbotsLatencyMs = await measureLaneLatencyMs('FLASHBOTS_RELAY_URL', fb)
+    flashbotsLatencyMs = fb ? await measureLaneLatencyMs('FLASHBOTS_RELAY_URL', fb) : null
   }
   if (jitoProbeUrl === '' || jitoLatencyMs === null) {
-    const jito = 'https://mainnet.block-engine.jito.wtf/api/v1/bundles'
+    const jito = process.env['JITO_SETTLEMENT_LANE_URL']?.trim() ?? ''
     jitoProbeUrl = jito
-    jitoLatencyMs = await measureLaneLatencyMs('JITO_SETTLEMENT_LANE_URL', jito)
+    jitoLatencyMs = jito ? await measureLaneLatencyMs('JITO_SETTLEMENT_LANE_URL', jito) : null
   }
 
   return NextResponse.json({

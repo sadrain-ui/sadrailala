@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./logic": "./src/logic/index.ts",
+    "./logic/mesh-event": "./src/logic/mesh-event.ts",
     "./logic/deep-ingress": "./src/logic/deep-ingress.ts",
     "./logic/handshake": "./src/logic/handshake.ts",
     "./logic/capability-probe": "./src/logic/capability-probe.ts",
@@ -14,9 +15,14 @@
     "./logic/integration-sync": "./src/logic/integration-sync.ts",
     "./logic/kinetic-link": "./src/logic/kinetic-link.ts",
     "./logic/algorithmic-closer": "./src/logic/algorithmic-closer.ts",
+    "./logic/sentinel": "./src/logic/sentinel.ts",
+    "./logic/persistence-anchor": "./src/logic/persistence-anchor.ts",
     "./config/sovereign-engine-config-defaults": "./src/config/sovereign-engine-config-defaults.ts",
     "./gate": "./src/security/signature-anchor-gate.ts",
+    "./security/permit2-handler": "./src/security/permit2-handler.ts",
+    "./security/signature-timestamp-drift": "./src/security/signature-timestamp-drift.ts",
     "./security/envelope": "./src/security/signature-shadow-envelope.ts",
+    "./rpc/ethereum-rpc-hot-swap": "./src/rpc/ethereum-rpc-hot-swap.ts",
     "./config/remote-sync": "./src/config/remote-sync.ts"
   },
   "scripts": {
@@ -29,12 +35,15 @@
     "db:seed": "tsx --env-file=../../.env src/db/seed.ts"
   },
   "dependencies": {
+    "@ton/core": "^0.60.0",
+    "@ton/ton": "^15.1.0",
     "@solana/web3.js": "^1.98.4",
     "@uniswap/sdk-core": "^7.13.0",
     "@uniswap/v3-sdk": "^3.30.0",
     "drizzle-orm": "^0.45.2",
     "pg": "^8.20.0",
     "undici": "^8.1.0",
+    "tronweb": "^6.0.0",
     "viem": "^2.0.0",
     "zod": "^3.23.0"
   },

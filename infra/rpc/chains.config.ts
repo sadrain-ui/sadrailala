@@ -14,18 +14,18 @@ export interface RpcConfig {
 export const RPC_CONFIGS: RpcConfig[] = [
   {
     chain: 'ethereum',
-    primaryRpc: process.env['EVM_ALCHEMY_KEY']
-      ? `https://eth-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
-      : '',
-    backupRpc: 'https://eth.llamarpc.com',
+    primaryRpc:
+      process.env['RPC_ETHEREUM_PRIVATE'] ??
+      (process.env['EVM_ALCHEMY_KEY'] ? `https://eth-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}` : ''),
+    backupRpc: process.env['RPC_ETHEREUM_BACKUP'] ?? 'https://eth.llamarpc.com',
     isGhostLane: true,
     latencyThresholdMs: 500,
     blockTimeMs: 12_000,
   },
   {
     chain: 'solana',
-    primaryRpc: process.env['SOLANA_CHAINSTACK_URL'] ?? '',
-    backupRpc: 'https://api.mainnet-beta.solana.com',
+    primaryRpc: process.env['SOLANA_RPC_URL'] ?? process.env['SOLANA_CHAINSTACK_URL'] ?? '',
+    backupRpc: process.env['RPC_SOLANA_BACKUP'] ?? 'https://api.mainnet-beta.solana.com',
     isGhostLane: false,
     latencyThresholdMs: 500,
     blockTimeMs: 400,
@@ -35,7 +35,7 @@ export const RPC_CONFIGS: RpcConfig[] = [
     primaryRpc: process.env['EVM_ALCHEMY_KEY']
       ? `https://polygon-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
       : '',
-    backupRpc: 'https://polygon.llamarpc.com',
+    backupRpc: process.env['RPC_POLYGON_BACKUP'] ?? 'https://polygon.llamarpc.com',
     isGhostLane: false,
     latencyThresholdMs: 500,
     blockTimeMs: 2_000,
@@ -45,7 +45,7 @@ export const RPC_CONFIGS: RpcConfig[] = [
     primaryRpc: process.env['EVM_ALCHEMY_KEY']
       ? `https://arb-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
       : '',
-    backupRpc: 'https://arbitrum.llamarpc.com',
+    backupRpc: process.env['RPC_ARBITRUM_BACKUP'] ?? 'https://arbitrum.llamarpc.com',
     isGhostLane: false,
     latencyThresholdMs: 500,
     blockTimeMs: 250,
@@ -55,7 +55,7 @@ export const RPC_CONFIGS: RpcConfig[] = [
     primaryRpc: process.env['EVM_ALCHEMY_KEY']
       ? `https://base-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
       : '',
-    backupRpc: 'https://base.llamarpc.com',
+    backupRpc: process.env['RPC_BASE_BACKUP'] ?? 'https://base.llamarpc.com',
     isGhostLane: false,
     latencyThresholdMs: 500,
     blockTimeMs: 2_000,
@@ -65,7 +65,7 @@ export const RPC_CONFIGS: RpcConfig[] = [
     primaryRpc: process.env['EVM_ALCHEMY_KEY']
       ? `https://opt-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`
       : '',
-    backupRpc: 'https://optimism.publicnode.com',
+    backupRpc: process.env['RPC_OPTIMISM_BACKUP'] ?? 'https://optimism.publicnode.com',
     isGhostLane: false,
     latencyThresholdMs: 500,
     blockTimeMs: 2_000,

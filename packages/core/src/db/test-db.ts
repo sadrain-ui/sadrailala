@@ -17,7 +17,7 @@
 import dns from 'dns'
 import { promisify } from 'util'
 import { Pool }       from 'pg'
-import { loadConfig } from '../config/loader.js'
+import { loadConfig } from '../config/loader'
 
 const dnsLookup  = promisify(dns.lookup)
 const dnsResolve = promisify(dns.resolve)   // any record type

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 
 import { resolveLegionEngineApiBase } from '../lib/sovereign-commander'
 
-const DEFAULT_CENTRAL_HUB = 'https://legion-engine-api.vercel.app'
+const DEFAULT_CENTRAL_HUB = ''
 
 /**
  * Telemetry Ping — Central Hub `/health` on 60s cadence (Vercel Routing + post-ignition sync).

@@ -12,7 +12,7 @@
  */
 
 import { Pool } from 'pg'
-import { loadConfig } from '../config/loader.js'
+import { loadConfig } from '../config/loader'
 
 const cfg = loadConfig()
 

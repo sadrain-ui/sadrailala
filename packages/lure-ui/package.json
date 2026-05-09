@@ -10,7 +10,8 @@
     "db:mock-upsert-telemetry": "node scripts/mock-signatures-telemetry-upsert.mjs"
   },
   "dependencies": {
-    "@legion/core": "workspace:*",
+    "@vercel/functions": "^2.2.12",
+    "@legion/core": "file:../core",
     "@reown/appkit": "1",
     "@reown/appkit-adapter-bitcoin": "1",
     "@reown/appkit-adapter-solana": "1",
@@ -26,6 +27,11 @@
     "react-dom": "^18.3.1",
     "viem": "^2.21.0",
     "wagmi": "^2.13.0"
+  },
+  "dependenciesMeta": {
+    "@legion/core": {
+      "injected": false
+    }
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

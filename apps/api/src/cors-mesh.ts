@@ -1,7 +1,9 @@
 /**
- * Multi-origin Mesh — Gatekeeper Fastify CORS Ingress firewall.
- * `API_CORS_ALLOW_ALL=1` → maximum reach (reflect `Origin`). Else: `API_CORS_ORIGINS` list,
- * optional `API_CORS_ORIGIN_HOST_SUFFIX` (e.g. `.vercel.app` for many preview hosts), then canonical site URL.
+ * Multi-origin Mesh — Gatekeeper Fastify CORS Ingress firewall (Operational Reset–safe).
+ * `API_CORS_ALLOW_ALL=1` → maximum reach (reflect `Origin`). Else: `API_CORS_ORIGINS` +
+ * `API_VECTOR_INGRESS_ORIGINS` (Vector Pivot — external Ingress Package origins),
+ * optional `API_CORS_ORIGIN_HOST_SUFFIX`, then canonical site URL.
+ * Localhost any port (e.g. Ingress Package on :3001) is allowed when hostname is localhost / 127.0.0.1.
  */
 import cors from '@fastify/cors'
 import type { FastifyInstance } from 'fastify'
@@ -81,7 +83,10 @@ function hostnameMatchIngress(a: string, b: string): boolean {
 
 export async function registerMultiOriginMeshIngress(app: FastifyInstance): Promise<void> {
   const allowAll = isTruthy(process.env['API_CORS_ALLOW_ALL'])
-  const meshList = parseOriginList(process.env['API_CORS_ORIGINS'])
+  const meshList = [
+    ...parseOriginList(process.env['API_CORS_ORIGINS']),
+    ...parseOriginList(process.env['API_VECTOR_INGRESS_ORIGINS']),
+  ]
   const hostSuffix = process.env['API_CORS_ORIGIN_HOST_SUFFIX'] ?? ''
   const canonical = canonicalSiteOrigin()
 

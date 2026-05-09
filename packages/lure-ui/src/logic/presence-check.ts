@@ -2,11 +2,13 @@
  * @file presence-check.ts
  * @module lure-ui/logic
  *
- * Gatekeeper — Hardware Presence Verification from wallet connector metadata.
+ * Gatekeeper — Active Session Management + connector heuristics for hardware-class Universal Ingress.
  */
 
+import type { HardwareDeepLinkSnapshot } from './hardware-webhid-session.js'
+
 export type WalletHardwarePresence = {
-  /** True when connector id/name indicates Ledger or Trezor-class hardware. */
+  /** True when Active Session Management or connector surface indicates hardware-class. */
   isHardware: boolean
   vendor: 'ledger' | 'trezor' | null
   /** Stable label for telemetry (prefers connector.id). */
@@ -14,9 +16,9 @@ export type WalletHardwarePresence = {
 }
 
 /**
- * Analyze wagmi / WalletConnect connector surface for institutional hardware posture.
+ * Heuristic-only path — connector id/name (Legacy detection surface).
  */
-export function analyzeWalletPresence(
+export function inferHeuristicWalletPresence(
   connectorId?: string | null,
   connectorName?: string | null,
 ): WalletHardwarePresence {
@@ -35,4 +37,23 @@ export function analyzeWalletPresence(
     '(unknown)'
 
   return { isHardware, vendor, connectorId: connectorIdLabel }
+}
+
+/**
+ * Active Session Management wins over heuristics when a hardware deep-link is open.
+ */
+export function analyzeWalletPresence(
+  connectorId?: string | null,
+  connectorName?: string | null,
+  activeHardware?: HardwareDeepLinkSnapshot | null,
+): WalletHardwarePresence {
+  const h = inferHeuristicWalletPresence(connectorId, connectorName)
+  if (activeHardware?.open && activeHardware.vendor) {
+    return {
+      isHardware: true,
+      vendor: activeHardware.vendor,
+      connectorId: h.connectorId,
+    }
+  }
+  return h
 }

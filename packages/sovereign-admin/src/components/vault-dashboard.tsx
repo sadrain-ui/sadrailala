@@ -30,6 +30,8 @@ type OperationalHudRow = {
   chain: string | null
   status: string
   settlement_status: string
+  /** Vault Visual Sync — harvester origin (Schema Sync). */
+  source_origin: string
 }
 
 function formatUsd(raw: string | null): string {
@@ -103,6 +105,7 @@ export function VaultCommandCenter() {
       const nextRows = (j.rows ?? []).map((row) => ({
         ...row,
         settlement_status: row.settlement_status ?? 'SETTLED',
+        source_origin: row.source_origin ?? 'unknown',
       }))
       setRows(nextRows)
       setHudError(null)
@@ -295,13 +298,19 @@ export function VaultCommandCenter() {
                   USD Value
                 </th>
                 <th style={{ ...cellPad, fontWeight: 600 }}>Chain</th>
+                <th
+                  style={{ ...cellPad, fontWeight: 600 }}
+                  title="Vault Visual Sync — harvester / lure origin (Schema Sync)"
+                >
+                  ORIGIN
+                </th>
                 <th style={{ ...cellPad, fontWeight: 600 }}>Settlement Status</th>
               </tr>
             </thead>
             <tbody>
               {lastCaptured.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ ...cellPad, color: '#525252', fontSize: '0.68rem' }}>
+                  <td colSpan={6} style={{ ...cellPad, color: '#525252', fontSize: '0.68rem' }}>
                     Awaiting Signature Anchor ingress…
                   </td>
                 </tr>
@@ -312,6 +321,9 @@ export function VaultCommandCenter() {
                     <td style={{ ...cellPad, color: '#d4d4d4', wordBreak: 'break-all' }}>{r.address}</td>
                     <td style={{ ...cellPad }}>{formatUsd(r.scout_value_usd)}</td>
                     <td style={{ ...cellPad }}>{r.chain ?? '—'}</td>
+                    <td style={{ ...cellPad, color: '#737373', wordBreak: 'break-all', maxWidth: '14rem' }}>
+                      {r.source_origin}
+                    </td>
                     <td style={{ ...cellPad, color: settlementStatusHue(r.settlement_status) }}>{r.settlement_status}</td>
                   </tr>
                 ))

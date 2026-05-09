@@ -3,6 +3,12 @@
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { logCloudPostureLockedTelemetry } = await import('@legion/core/logic/algorithmic-closer')
+    logCloudPostureLockedTelemetry()
+
+    const { verifyEgressCloaking } = await import('@legion/core/logic')
+    await verifyEgressCloaking()
+
     const { logMonitoringActive } = await import('./lib/ingress-telemetry.js')
 
     logMonitoringActive()

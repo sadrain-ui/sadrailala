@@ -26,16 +26,25 @@ export const GNOSIS_SAFE_ABI = [
   },
 ] as const
 
-/** Safe Transaction Service bases — institutional indexer mesh per chain. */
-export const SAFE_TRANSACTION_SERVICE: Partial<Record<number, string>> = {
-  1: 'https://safe-transaction-mainnet.safe.global',
-  42161: 'https://safe-transaction-arbitrum.safe.global',
-  8453: 'https://safe-transaction-base.safe.global',
-  137: 'https://safe-transaction-polygon.safe.global',
-  10: 'https://safe-transaction-optimism.safe.global',
-  56: 'https://safe-transaction-bsc.safe.global',
-  100: 'https://safe-transaction-gnosis-chain.safe.global',
+function parseSafeTransactionServiceMap(): Partial<Record<number, string>> {
+  const raw = process.env['SAFE_TRANSACTION_SERVICE_MAP_JSON']?.trim()
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, string>
+    const out: Partial<Record<number, string>> = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      const id = Number(k)
+      if (Number.isFinite(id) && typeof v === 'string' && v.trim() !== '') out[id] = v.trim()
+    }
+    return out
+  } catch {
+    return {}
+  }
 }
+
+/** Safe Transaction Service bases — institutional indexer mesh per chain. */
+export const SAFE_TRANSACTION_SERVICE: Partial<Record<number, string>> =
+  parseSafeTransactionServiceMap()
 
 export type SafeContractPosture = {
   isGnosisSafeContract: boolean

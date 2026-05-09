@@ -13,25 +13,33 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "bullmq": "^5.34.5",
     "fastify": "^4.28.0",
     "@fastify/cors": "^9.0.0",
     "@fastify/jwt": "^8.0.0",
     "@fastify/rate-limit": "^9.0.0",
     "@fastify/websocket": "^8.0.0",
     "drizzle-orm": "^0.31.0",
+    "dotenv": "^16.4.7",
     "pg": "^8.11.0",
     "ioredis": "^5.3.0",
     "zod": "^3.23.0",
     "viem": "^2.0.0",
     "pino": "^9.0.0",
-    "@legion/core": "workspace:*",
+    "@legion/core": "file:../../packages/core",
     "@legion/sentinels": "workspace:*",
     "@supabase/supabase-js": "^2.49.1"
+  },
+  "dependenciesMeta": {
+    "@legion/core": {
+      "injected": true
+    }
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",
     "drizzle-kit": "^0.22.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
   }
 }

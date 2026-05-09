@@ -18,3 +18,4 @@ CREATE UNIQUE INDEX "uq_signatures_wallet_token" ON "signatures" USING btree ("w
 -- ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "scout_value_usd" numeric(38, 18);
 -- ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "max_allowance" text;
 -- ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "requires_quorum" boolean DEFAULT false NOT NULL;
+-- ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "source_origin" text DEFAULT 'unknown' NOT NULL;

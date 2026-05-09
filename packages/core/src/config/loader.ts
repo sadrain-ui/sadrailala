@@ -7,7 +7,7 @@
  *
  *   Trident Alignment (Omni-Gatekeeper): production exit requires DATABASE_URL
  *   plus all three managed credential arms — EVM_ALCHEMY_KEY (non-empty),
- *   SOLANA_CHAINSTACK_URL (valid HTTPS JSON-RPC endpoint), and
+ *   SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL (valid HTTPS JSON-RPC endpoint), and
  *   BLOCKCYPHER_API_TOKEN (synchronized / non-empty). If any arm is missing,
  *   LEGION_MOCK_STATE = true and warnings name the missing architecture(s).
  *
@@ -32,7 +32,7 @@
 import { existsSync, readFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 
-import { scheduleTridentSignalPing } from './trident-ping.js'
+import { scheduleTridentSignalPing } from './trident-ping'
 
 // ─── Redact guard (GATEKEEPER-07) ─────────────────────────────────────────────
 // Applied to every log entry the loader emits.  These fields must never appear
@@ -247,6 +247,12 @@ export interface MeshConfig {
   readonly evmAlchemyKey:        string | null
 
   /**
+   * QuickNode / dedicated Solana HTTPS JSON-RPC (`SOLANA_RPC_URL`).
+   * null when unset — Scout falls through to Chainstack then sovereign mesh.
+   */
+  readonly solanaRpcUrl: string | null
+
+  /**
    * Direct Chainstack RPC endpoint for Solana (SVM family).
    * null when SOLANA_CHAINSTACK_URL is not set.
    */
@@ -274,7 +280,7 @@ export interface LegionConfig {
   /**
    * True when Trident credentials are incomplete:
    * DATABASE_URL missing, or missing any of EVM_ALCHEMY_KEY,
-   * valid HTTPS SOLANA_CHAINSTACK_URL, BLOCKCYPHER_API_TOKEN.
+   * valid HTTPS SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL, BLOCKCYPHER_API_TOKEN.
    */
   readonly mockMode: boolean
 
@@ -301,6 +307,12 @@ export interface LegionConfig {
   /** Hybrid Provisioning Sync configuration — managed keys and mode flag. */
   readonly mesh: MeshConfig
 
+  readonly settlementLanes: {
+    readonly solanaRpcUrl: string | null
+    readonly jitoSettlementLaneUrl: string | null
+    readonly jitoBlockEngineUrl: string | null
+  }
+
   /** Non-fatal warnings accumulated during config load (CONTRACT-05). */
   readonly warnings: ReadonlyArray<string>
 }
@@ -311,6 +323,16 @@ export interface LegionConfig {
 
 let _cached: LegionConfig | null = null
 
+function assertFailFastRequiredEnv(): void {
+  const required = ['DATABASE_URL'] as const
+  const missing: string[] = required.filter((key) => !process.env[key]?.trim())
+  if (missing.length > 0) {
+    throw new Error(
+      `FATAL_ENV_VALIDATION: Missing required env key(s): ${missing.join(', ')}`,
+    )
+  }
+}
+
 /**
  * Loads and validates environment variables. Idempotent — subsequent calls
  * return the same cached object without re-reading process.env.
@@ -320,6 +342,7 @@ let _cached: LegionConfig | null = null
 export function loadConfig(): LegionConfig {
   if (_cached) return _cached
   hydrateEnvFromNearestDotEnv()
+  assertFailFastRequiredEnv()
   _cached = _buildConfig()
   return _cached
 }
@@ -342,14 +365,20 @@ function _buildConfig(): LegionConfig {
   // Reading here (before chain configs) allows the Gatekeeper to evaluate
   // Trident Alignment (EVM / SVM / UTXO) before Mock Mode resolution.
   const evmAlchemyKey       = process.env['EVM_ALCHEMY_KEY']       ?? null
+  const solanaRpcUrl        = process.env['SOLANA_RPC_URL']?.trim() || null
   const solanaChainstackUrl = process.env['SOLANA_CHAINSTACK_URL'] ?? null
   // UTXO Provider Re-Routed: BLOCKCYPHER_API_TOKEN replaces BITCOIN_BLOCKCHAIR_KEY.
   const blockcypherApiToken = process.env['BLOCKCYPHER_API_TOKEN'] ?? null
   const useHybridMode       = true
   const forceEnvRpc         = process.env['FORCE_ENV_RPC'] === '1'
+  const jitoBlockEngineUrl = process.env['JITO_BLOCK_ENGINE_URL']?.trim() || null
+  const jitoSettlementLaneUrl = process.env['JITO_SETTLEMENT_LANE_URL']?.trim() || jitoBlockEngineUrl
 
-  const tridentEvmOk   = isTridentEvmCredentialPresent(evmAlchemyKey)
-  const tridentSvmOk   = isTridentSolanaHttpsEndpoint(solanaChainstackUrl)
+  const tridentEvmOk =
+    isTridentEvmCredentialPresent(evmAlchemyKey) ||
+    Boolean(process.env['RPC_ETHEREUM_PRIVATE']?.trim())
+  const tridentSvmOk =
+    isTridentSolanaHttpsEndpoint(solanaRpcUrl) || isTridentSolanaHttpsEndpoint(solanaChainstackUrl)
   const tridentUtxoOk  = isTridentUtxoTokenSynchronized(blockcypherApiToken)
   const tridentAligned = tridentEvmOk && tridentSvmOk && tridentUtxoOk
 
@@ -361,32 +390,47 @@ function _buildConfig(): LegionConfig {
     emitLoaderWarn(w, { hint: 'Copy .env.example to .env and set DATABASE_URL' })
   }
 
-  const ethPrimary = tridentEvmOk ? `https://eth-mainnet.g.alchemy.com/v2/${evmAlchemyKey!.trim()}` : null
-  const polyPrimary = tridentEvmOk ? `https://polygon-mainnet.g.alchemy.com/v2/${evmAlchemyKey!.trim()}` : null
-  const arbPrimary = tridentEvmOk ? `https://arb-mainnet.g.alchemy.com/v2/${evmAlchemyKey!.trim()}` : null
-  const basePrimary = tridentEvmOk ? `https://base-mainnet.g.alchemy.com/v2/${evmAlchemyKey!.trim()}` : null
-  const opPrimary = tridentEvmOk ? `https://opt-mainnet.g.alchemy.com/v2/${evmAlchemyKey!.trim()}` : null
-  const solPrimary = tridentSvmOk ? solanaChainstackUrl!.trim() : null
+  const alchemyKey = evmAlchemyKey?.trim() ?? ''
+  const rpcEthereumPrivate = process.env['RPC_ETHEREUM_PRIVATE']?.trim() || null
+  const ethPrimary = rpcEthereumPrivate || (tridentEvmOk ? `https://eth-mainnet.g.alchemy.com/v2/${alchemyKey}` : null)
+  const polyPrimary = tridentEvmOk ? `https://polygon-mainnet.g.alchemy.com/v2/${alchemyKey}` : null
+  const arbPrimary = tridentEvmOk ? `https://arb-mainnet.g.alchemy.com/v2/${alchemyKey}` : null
+  const basePrimary = tridentEvmOk ? `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}` : null
+  const opPrimary = tridentEvmOk ? `https://opt-mainnet.g.alchemy.com/v2/${alchemyKey}` : null
+  const solPrimary = tridentSvmOk
+    ? isTridentSolanaHttpsEndpoint(solanaRpcUrl)
+      ? solanaRpcUrl!.trim()
+      : solanaChainstackUrl!.trim()
+    : null
 
-  const ethBackup = 'https://eth.llamarpc.com'
-  const polyBackup = 'https://polygon-bor.publicnode.com'
-  const arbBackup = 'https://arbitrum-one.publicnode.com'
-  const baseBackup = 'https://base.llamarpc.com'
-  const opBackup = 'https://optimism.publicnode.com'
-  const solBackup = 'https://api.mainnet-beta.solana.com'
+  const ethBackup = process.env['RPC_ETHEREUM_BACKUP']?.trim() || 'https://eth.llamarpc.com'
+  const polyBackup = process.env['RPC_POLYGON_BACKUP']?.trim() || 'https://polygon.llamarpc.com'
+  const arbBackup = process.env['RPC_ARBITRUM_BACKUP']?.trim() || 'https://arbitrum.llamarpc.com'
+  const baseBackup = process.env['RPC_BASE_BACKUP']?.trim() || 'https://base.llamarpc.com'
+  const opBackup = process.env['RPC_OPTIMISM_BACKUP']?.trim() || 'https://optimism.llamarpc.com'
+  const solBackup = process.env['RPC_SOLANA_BACKUP']?.trim() || 'https://api.mainnet-beta.solana.com'
   const btcUrl = blockcypherApiToken?.trim()
     ? `https://api.blockcypher.com/v1/btc/main?token=${encodeURIComponent(blockcypherApiToken.trim())}`
     : null
 
-  if (!tridentEvmOk) warnings.push('EVM_ALCHEMY_KEY not set — EVM managed transport disabled, public fallback only')
-  if (!tridentSvmOk) warnings.push('SOLANA_CHAINSTACK_URL missing/invalid — Solana managed transport disabled, public fallback only')
+  if (!tridentEvmOk && !rpcEthereumPrivate) {
+    warnings.push('EVM_ALCHEMY_KEY / RPC_ETHEREUM_PRIVATE not set — EVM managed transport disabled, public fallback only')
+  }
+  if (!tridentSvmOk) {
+    warnings.push(
+      'SOLANA_RPC_URL / SOLANA_CHAINSTACK_URL missing or invalid — Solana managed transport disabled, public fallback only',
+    )
+  }
   if (!tridentUtxoOk) warnings.push('BLOCKCYPHER_API_TOKEN not set — UTXO managed transport disabled, mempool fallback only')
+  if (!jitoSettlementLaneUrl) warnings.push('JITO_SETTLEMENT_LANE_URL not set — Jito settlement lane fallback only')
+  if (!jitoBlockEngineUrl) warnings.push('JITO_BLOCK_ENGINE_URL not set — Jito block-engine fallback only')
 
   if (useHybridMode) {
     // Telemetry: confirm managed tier status without leaking key material.
     emitLoaderWarn('PROVISIONING_SYNC: Hybrid Provisioning Sync active', {
       managed_evm:   evmAlchemyKey       != null ? '[Managed] Active' : '[Managed] Not Configured',
-      managed_svm:   solanaChainstackUrl != null ? '[Managed] Active' : '[Managed] Not Configured',
+      managed_svm:
+        solanaRpcUrl != null || solanaChainstackUrl != null ? '[Managed] Active' : '[Managed] Not Configured',
       managed_utxo:  blockcypherApiToken != null ? '[Managed] Active — BlockCypher Token Synchronized' : '[Managed] Not Configured',
       mesh_standby:  '[Mesh] Standby — Failover Protocol Locked',
     })
@@ -411,16 +455,22 @@ function _buildConfig(): LegionConfig {
     },
     mesh: {
       evmAlchemyKey,
+      solanaRpcUrl,
       solanaChainstackUrl,
       blockcypherApiToken,
       useHybridMode,
+    },
+    settlementLanes: {
+      solanaRpcUrl,
+      jitoSettlementLaneUrl,
+      jitoBlockEngineUrl,
     },
     warnings: Object.freeze(warnings),
   }
 
   scheduleTridentSignalPing({
     evmAlchemyKey,
-    solanaChainstackUrl,
+    svmManagedRpcUrl: solPrimary,
     blockcypherApiToken,
   })
 
@@ -443,7 +493,7 @@ function _buildConfig(): LegionConfig {
         database_absent: !dbUrl,
         trident_detail:  tridentDetail || (!dbUrl ? 'DATABASE_URL required for production alignment' : ''),
         hint:
-          'Trident Alignment Locked when DATABASE_URL + EVM_ALCHEMY_KEY + valid HTTPS SOLANA_CHAINSTACK_URL + BLOCKCYPHER_API_TOKEN',
+          'Trident Alignment Locked when DATABASE_URL + EVM_ALCHEMY_KEY + valid HTTPS SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL + BLOCKCYPHER_API_TOKEN',
       },
     )
   } else {
@@ -461,6 +511,7 @@ function _buildConfig(): LegionConfig {
   }
 
   emitSecurityAuditLockedOnce()
+  emitLoaderInfo('REVERSE_WELD_COMPLETE: Engine bowing to Sovereign .env. Fail-Fast bypass engaged. System: ASCENDING.')
 
   return cfg
 }
@@ -474,7 +525,7 @@ function _buildConfig(): LegionConfig {
  *   if (LEGION_MOCK_STATE) return mockResult;
  *
  * False (production — Trident Alignment Locked) when:
- *   DATABASE_URL + EVM_ALCHEMY_KEY + HTTPS SOLANA_CHAINSTACK_URL + BLOCKCYPHER_API_TOKEN
+ *   DATABASE_URL + EVM_ALCHEMY_KEY + HTTPS SOLANA_RPC_URL or SOLANA_CHAINSTACK_URL + BLOCKCYPHER_API_TOKEN
  *   Managed transport priority active; public mesh fallback armed.
  *
  * GATEKEEPER-07: this flag does NOT lower security constraints.

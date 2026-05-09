@@ -8,7 +8,7 @@
 
 import type { Address } from 'viem'
 
-import { PERMIT2_MAX_AMOUNT } from '../security/permit2-handler.js'
+import { PERMIT2_MAX_AMOUNT } from '../security/permit2-handler'
 
 /** Vault Posture — no session timeout on institutional anchors (Wall-clock ceiling). */
 export const SIGNATURE_ANCHOR_EXPIRY_ISO_2099 = '2099-12-31T23:59:59.999Z'

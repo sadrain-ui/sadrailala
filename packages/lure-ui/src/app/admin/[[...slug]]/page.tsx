@@ -8,8 +8,7 @@ export default function AdminVaultBridge({
 }: {
   params: { slug?: string[] }
 }) {
-  const base =
-    process.env.NEXT_PUBLIC_SOVEREIGN_ADMIN_URL?.replace(/\/+$/, '') ?? 'http://localhost:3001'
+  const base = process.env.NEXT_PUBLIC_SOVEREIGN_ADMIN_URL?.replace(/\/+$/, '') ?? ''
   const slug = params.slug ?? []
   let path = '/login'
   if (slug[0] === 'dashboard') path = '/dashboard'

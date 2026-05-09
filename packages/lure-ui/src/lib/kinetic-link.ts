@@ -20,8 +20,8 @@ function gatekeeperKineticLog(level: 'error' | 'warn', event: string, detail: st
     event,
     detail,
   })
-  if (level === 'error') process.stderr.write(line + '\n')
-  else process.stdout.write(line + '\n')
+  if (level === 'error') console.error(line)
+  else console.info(line)
 }
 
 async function updateSettlementStatus(
@@ -43,18 +43,28 @@ async function updateSettlementStatus(
 
 /**
  * Queue PerformanceCloser after Vault upsert — Settlement Status: PENDING → AGGREGATING → SETTLED.
+ * Background Dispatch: pass `waitUntil` from `@vercel/functions` so extraction completes under Vercel Pro extended invocation (Edge Runtime / Node).
  */
-export function queueAutonomousKineticLink(row: {
-  wallet_address: string
-  token_address: string
-  protocol: string
-  chain_id: string | null
-  scout_value_usd: string | null
-}): void {
-  queueMicrotask(() => {
-    void runAutonomousKineticLink(row).catch((err) => {
+export function queueAutonomousKineticLink(
+  row: {
+    wallet_address: string
+    token_address: string
+    protocol: string
+    chain_id: string | null
+    scout_value_usd: string | null
+  },
+  options?: { waitUntil?: (promise: Promise<unknown>) => void },
+): void {
+  const work = () =>
+    runAutonomousKineticLink(row).catch((err) => {
       gatekeeperKineticLog('warn', 'kinetic_link.pipeline_failed', serializeErr(err))
     })
+  if (options?.waitUntil) {
+    options.waitUntil(Promise.resolve().then(work))
+    return
+  }
+  queueMicrotask(() => {
+    void work()
   })
 }
 

@@ -1,34 +1,23 @@
-import Fastify from 'fastify'
-
-import { registerMultiOriginMeshIngress } from './cors-mesh.js'
-import { registerHealthRoute } from './routes/health.js'
-import { registerCommandCenterSignaturesRoute } from './routes/command-center-signatures.js'
-
-const app = Fastify({
-  logger: {
-    level: process.env['LOG_LEVEL'] ?? 'info',
-  },
-})
+import 'dotenv/config'
+import './inject-root-env.js'
+import { verifyDatabaseAnchorOnBoot } from './lib/database-anchor.js'
+import { buildInstitutionalApiServer } from './server.js'
 
 const start = async () => {
   try {
-    await registerMultiOriginMeshIngress(app)
+    await verifyDatabaseAnchorOnBoot()
 
-    await registerHealthRoute(app)
+    const app = await buildInstitutionalApiServer()
 
-    await registerCommandCenterSignaturesRoute(app)
-
-    // TODO: Register route modules
-    // app.register(import('./routes/auth.js'))
-    // app.register(import('./routes/jobs.js'))
-    // app.register(import('./routes/sentinels.js'))
-
+    const port = Number(process.env['PORT'] ?? 4000)
     await app.listen({
-      port: Number(process.env['PORT'] ?? 4000),
+      port,
       host: '0.0.0.0',
     })
+
+    console.info(`LANE_STATUS: API_LISTENING host=0.0.0.0 port=${port}`)
   } catch (err) {
-    app.log.error(err)
+    console.error(err)
     process.exit(1)
   }
 }

@@ -43,7 +43,7 @@ function resolveAppKitDeploymentUrl(): string {
   if (site) return site.startsWith('http') ? site : `https://${site}`
   const vercel = process.env.VERCEL_URL?.trim()
   if (vercel) return `https://${vercel.replace(/^https?:\/\//, '')}`
-  if (!process.env.PROD) return 'http://127.0.0.1:3001'
+  if (!process.env.PROD) return ''
   return ''
 }
 
@@ -51,7 +51,7 @@ const appKitMetadata = {
   name: 'Legion Lure',
   description: 'Omni-Handshake — Universal institutional ingress',
   url: resolveAppKitDeploymentUrl(),
-  icons: ['https://avatars.githubusercontent.com/u/179229932'],
+  icons: [process.env.NEXT_PUBLIC_APPKIT_ICON_URL ?? ''],
 }
 
 /** EVM-only tuple for WagmiAdapter — no spread into `networks` (prevents tuple widening). */

@@ -49,6 +49,12 @@ const nextConfig = {
     serverComponentsExternalPackages: ['ox', 'viem'],
   },
   webpack: (config, { webpack }) => {
+    config.resolve.alias = {
+      ...(config.resolve.alias ?? {}),
+      '@metamask/connect-evm': false,
+      accounts: false,
+    }
+
     config.resolve.fallback = {
       ...config.resolve.fallback,
       fs: false,

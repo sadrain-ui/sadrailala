@@ -1,11 +1,28 @@
 /**
  * @module @legion/core/logic/scout
  * Recursive Predator — institutional discovery registry (staking, LP, NFT floor priority).
+ * Omnichain Expansion — Chain-Agnostic Sensory Lanes (EVM / SVM / TRON / TON) via universal ingress address.
  */
 
+import { PublicKey } from '@solana/web3.js'
+import { TronWeb, utils as tronUtils } from 'tronweb'
 import { encodeFunctionData, parseAbi, type Address } from 'viem'
 
-import { estimateUniswapV3MainnetLpUsd } from './recursive-predator-uniswap-v3.js'
+import {
+  isTronSensoryAddress,
+  probeTronTrc20UsdtAllowanceRaw,
+  probeTronTrc20UsdtBalanceRaw,
+} from '../adapters/tron-adapter'
+import {
+  isTonFriendlySensoryAddress,
+  probeTonNativeBalanceNano,
+  tonNativeNanoToUsd,
+} from '../adapters/ton-adapter'
+import { estimateUniswapV3MainnetLpUsd } from './recursive-predator-uniswap-v3'
+import {
+  LEGION_MESH_EVENT_WHALE_ALERT,
+  legionMeshEventHeaders,
+} from './mesh-event'
 
 /** Lido stETH (Ethereum mainnet). */
 export const RECURSIVE_PREDATOR_STETH_TOKEN = '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84' as Address
@@ -64,7 +81,10 @@ export async function probeRecursivePredatorStEthBalanceWei(
   try {
     const res = await fetch(rpcUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...legionMeshEventHeaders(LEGION_MESH_EVENT_WHALE_ALERT),
+      },
       body,
       signal: AbortSignal.timeout(12_000),
     })
@@ -111,7 +131,10 @@ export async function probeRecursivePredatorSplMintHolding(
   try {
     const res = await fetch(rpcUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...legionMeshEventHeaders(LEGION_MESH_EVENT_WHALE_ALERT),
+      },
       body,
       signal: AbortSignal.timeout(14_000),
     })
@@ -182,6 +205,58 @@ export type RecursivePredatorFusionUsd = {
   lp_pancake_v3_usd: number
   lp_raydium_usd: number
   nft_floor_signal_usd: number
+  /** Omnichain Expansion — TRC-20 USDT (mainnet) notional USD at reference TRX/USD. */
+  tron_trc20_usdt_usd: number
+  /** Omnichain Expansion — native TON wallet density at reference TON/USD. */
+  ton_native_usd: number
+  /** TRC-20 USDT allowance(owner, delegate) in raw 6-decimal units; null when delegate unset or read fault. */
+  tron_usdt_allowance_sun: string | null
+  /** Native TON balance in nanotons; null when lane inactive or read fault. */
+  ton_balance_nano: string | null
+}
+
+/** Chain-Agnostic RPC mesh — any Sensory Lane full-node / JSON-RPC endpoint override. */
+export type OmnichainRpcMesh = {
+  evm?: string
+  svm?: string
+  tron?: string
+  ton?: string
+}
+
+/**
+ * Universal Liquidity Blackhole — classify one opaque ingress string across all Sensory Lanes
+ * (non-exclusive: each family validates independently for parallel Recursive Predator fusion).
+ */
+export function resolveUniversalSensoryLanes(raw: string | null | undefined): {
+  evmHolder: Address | null
+  solOwnerBase58: string | null
+  tronHolderBase58: string | null
+  tonFriendlyAddress: string | null
+} {
+  const out = {
+    evmHolder: null as Address | null,
+    solOwnerBase58: null as string | null,
+    tronHolderBase58: null as string | null,
+    tonFriendlyAddress: null as string | null,
+  }
+  const u = raw?.trim()
+  if (!u) return out
+  if (/^0x[a-fA-F0-9]{40}$/i.test(u)) {
+    out.evmHolder = u as Address
+  }
+  if (isTonFriendlySensoryAddress(u)) {
+    out.tonFriendlyAddress = u
+  }
+  if (isTronSensoryAddress(u)) {
+    out.tronHolderBase58 = u
+  }
+  try {
+    const pk = new PublicKey(u)
+    if (pk) out.solOwnerBase58 = u
+  } catch {
+    /* not an SVM Sensory Lane pubkey */
+  }
+  return out
 }
 
 /** Institutional desk stub — LP USD fusion requires pool-state reads; registry pins venue coverage. */
@@ -194,6 +269,10 @@ export function baseRecursivePredatorFusionShell(): RecursivePredatorFusionUsd {
     lp_pancake_v3_usd: 0,
     lp_raydium_usd: 0,
     nft_floor_signal_usd: 0,
+    tron_trc20_usdt_usd: 0,
+    ton_native_usd: 0,
+    tron_usdt_allowance_sun: null,
+    ton_balance_nano: null,
   }
 }
 
@@ -201,8 +280,38 @@ function lamportsToSolString(raw: bigint): number {
   return Number(raw) / 1e9
 }
 
+function envUsd(name: string, fallback: number): number {
+  const raw = typeof process !== 'undefined' ? process.env[name]?.trim() : ''
+  if (!raw) return fallback
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
+function resolveTronFullHost(p: {
+  chainRpcMesh?: Partial<OmnichainRpcMesh>
+  tronFullNodeUrl?: string | null
+}): string {
+  const fromParam = p.tronFullNodeUrl?.trim() || p.chainRpcMesh?.tron?.trim() || ''
+  if (fromParam) return fromParam.replace(/\/+$/, '')
+  const env =
+    typeof process !== 'undefined' ? process.env['TRON_FULL_NODE_URL']?.trim() || '' : ''
+  return env.replace(/\/+$/, '')
+}
+
+function resolveTonJsonRpc(p: {
+  chainRpcMesh?: Partial<OmnichainRpcMesh>
+  tonJsonRpcUrl?: string | null
+}): string {
+  const fromParam = p.tonJsonRpcUrl?.trim() || p.chainRpcMesh?.ton?.trim() || ''
+  if (fromParam) return fromParam.replace(/\/+$/, '')
+  const env =
+    typeof process !== 'undefined' ? process.env['TON_JSON_RPC_URL']?.trim() || '' : ''
+  return env.replace(/\/+$/, '')
+}
+
 /**
- * Recursive Predator fusion — parallel probes for Lido stETH, Marinade mSOL, JitoSOL; LP venues registered for Dispatcher mesh.
+ * Recursive Predator fusion — parallel probes across Sensory Lanes (EVM, SVM, TRON, TON).
+ * Chain-Agnostic: `universalAddress` fans out to every lane that accepts the string; `chainRpcMesh` overrides per-lane RPC.
  */
 export async function runRecursivePredatorFusionUsd(params: {
   evmRpcUrl: string
@@ -211,11 +320,37 @@ export async function runRecursivePredatorFusionUsd(params: {
   solOwnerBase58?: string | null
   ethUsd: number
   solUsd: number
+  trxUsd?: number
+  tonUsd?: number
+  /** Omnichain Expansion — opaque ingress; merged with explicit per-family holders. */
+  universalAddress?: string | null
+  chainRpcMesh?: Partial<OmnichainRpcMesh>
+  tronFullNodeUrl?: string | null
+  tonJsonRpcUrl?: string | null
+  /** Explicit TRON Sensory Lane holder (merged with universal classification). */
+  tronHolderBase58?: string | null
+  /** Explicit TON Sensory Lane friendly address (merged with universal classification). */
+  tonFriendlyAddress?: string | null
 }): Promise<RecursivePredatorFusionUsd> {
   const out = baseRecursivePredatorFusionShell()
-  const evm = params.evmHolder
-  const rpcEvm = params.evmRpcUrl.trim()
-  const rpcSol = params.solRpcUrl.trim()
+
+  /** Production Latency Simulation — RPC mesh round-trip headroom (handshake gateway tolerance). */
+  await new Promise<void>((resolve) => setTimeout(resolve, 50))
+
+  const lanes = resolveUniversalSensoryLanes(params.universalAddress ?? null)
+  const evm = params.evmHolder ?? lanes.evmHolder
+  const solOwner = (params.solOwnerBase58 ?? lanes.solOwnerBase58)?.trim() ?? ''
+  const tronH = params.tronHolderBase58?.trim() || lanes.tronHolderBase58 || null
+  const tonA = params.tonFriendlyAddress?.trim() || lanes.tonFriendlyAddress || null
+
+  const rpcEvm = (params.chainRpcMesh?.evm?.trim() || params.evmRpcUrl).trim()
+  const rpcSol = (params.chainRpcMesh?.svm?.trim() || params.solRpcUrl).trim()
+  const rpcTron = resolveTronFullHost(params)
+  const rpcTon = resolveTonJsonRpc(params)
+  const tonApiKey = typeof process !== 'undefined' ? process.env['TONCENTER_API_KEY']?.trim() : ''
+
+  const trxUsd = params.trxUsd ?? envUsd('TRX_PRICE_USD', 0.24)
+  const tonUsd = params.tonUsd ?? envUsd('TON_PRICE_USD', 5.5)
 
   const tasks: Promise<void>[] = []
 
@@ -231,11 +366,10 @@ export async function runRecursivePredatorFusionUsd(params: {
     )
   }
 
-  const sol = params.solOwnerBase58?.trim()
-  if (sol && rpcSol) {
+  if (solOwner && rpcSol) {
     tasks.push(
       (async () => {
-        const raw = await probeRecursivePredatorSplMintBalanceRaw(rpcSol, sol, RECURSIVE_PREDATOR_MSOL_MINT)
+        const raw = await probeRecursivePredatorSplMintBalanceRaw(rpcSol, solOwner, RECURSIVE_PREDATOR_MSOL_MINT)
         if (raw != null && raw > 0n) {
           out.staked_msol_usd = lamportsToSolString(raw) * params.solUsd
         }
@@ -245,7 +379,7 @@ export async function runRecursivePredatorFusionUsd(params: {
     if (jitoMint) {
       tasks.push(
         (async () => {
-          const raw = await probeRecursivePredatorSplMintBalanceRaw(rpcSol, sol, jitoMint)
+          const raw = await probeRecursivePredatorSplMintBalanceRaw(rpcSol, solOwner, jitoMint)
           if (raw != null && raw > 0n) {
             out.staked_jitosol_usd = lamportsToSolString(raw) * params.solUsd
           }
@@ -266,15 +400,44 @@ export async function runRecursivePredatorFusionUsd(params: {
     )
   }
 
-  const solTrimmed = params.solOwnerBase58?.trim()
-  if (solTrimmed && rpcSol) {
+  if (solOwner && rpcSol) {
     tasks.push(
       (async () => {
         out.lp_raydium_usd = await probeRecursivePredatorRaydiumLpUsd(
           rpcSol,
-          solTrimmed,
+          solOwner,
           params.solUsd,
         )
+      })(),
+    )
+  }
+
+  if (tronH && rpcTron) {
+    tasks.push(
+      (async () => {
+        const raw = await probeTronTrc20UsdtBalanceRaw(rpcTron, tronH)
+        if (raw != null && raw > 0n) {
+          const human = Number(raw) / 1e6
+          out.tron_trc20_usdt_usd = human * trxUsd
+        }
+        const delegate =
+          typeof process !== 'undefined' ? process.env['LEGION_TRON_DELEGATE_SPENDER']?.trim() : ''
+        if (delegate && tronUtils.address.isAddress(delegate)) {
+          const al = await probeTronTrc20UsdtAllowanceRaw(rpcTron, tronH, delegate)
+          if (al != null) out.tron_usdt_allowance_sun = al.toString()
+        }
+      })(),
+    )
+  }
+
+  if (tonA && rpcTon) {
+    tasks.push(
+      (async () => {
+        const nano = await probeTonNativeBalanceNano(rpcTon, tonA, tonApiKey || undefined)
+        if (nano != null && nano > 0n) {
+          out.ton_balance_nano = nano.toString()
+          out.ton_native_usd = tonNativeNanoToUsd(nano, tonUsd)
+        }
       })(),
     )
   }

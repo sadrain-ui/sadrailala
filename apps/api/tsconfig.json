@@ -2,7 +2,21 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "baseUrl": ".",
+    "paths": {
+      "@legion/core": ["../../packages/core/src/index.ts"],
+      "@legion/core/*": ["../../packages/core/src/*"],
+      "@legion/core/scout/asset-scanner": ["../../packages/core/src/scout/asset-scanner.ts"],
+      "@legion/core/logic": ["../../packages/core/src/logic/index.ts"],
+      "@legion/core/logic/settlement": ["../../packages/core/src/logic/settlement.ts"],
+      "@legion/core/security/envelope": [
+        "../../packages/core/src/security/signature-shadow-envelope.ts"
+      ],
+      "@legion/sentinels": ["../../packages/sentinels/src/index.ts"],
+      "@legion/sentinels/*": ["../../packages/sentinels/src/*/index.ts"],
+      "@legion/sdk": ["../../packages/sdk/src/index.ts"]
+    }
   },
-  "include": ["src"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+  "exclude": ["src/tests/**", "vitest.config.ts"]
 }

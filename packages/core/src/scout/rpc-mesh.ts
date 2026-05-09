@@ -34,7 +34,30 @@
  */
 
 import { request } from 'undici'
-import { loadConfig } from '../config/loader.js'
+import { loadConfig } from '../config/loader'
+function parseMeshMapEnv(name: string): Readonly<Record<number, readonly string[]>> {
+  const raw = process.env[name]?.trim()
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, string[]>
+    const out: Record<number, readonly string[]> = {}
+    for (const [k, urls] of Object.entries(parsed)) {
+      const chainId = Number(k)
+      if (!Number.isFinite(chainId) || !Array.isArray(urls)) continue
+      out[chainId] = urls.filter((u) => typeof u === 'string' && u.trim() !== '').map((u) => u.trim())
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function parseListEnv(name: string): readonly string[] {
+  const raw = process.env[name]?.trim()
+  if (!raw) return []
+  return raw.split(',').map((v) => v.trim()).filter((v) => v.length > 0)
+}
+
 export interface TransportPolicyState {
   strictMode: boolean
   lockThreshold: number
@@ -54,14 +77,16 @@ export const EVM_MESH: Readonly<Record<number, readonly string[]>> = {
   42161: ['https://arbitrum-one.publicnode.com', 'https://arbitrum.llamarpc.com'],
   8453: ['https://base.llamarpc.com', 'https://base.publicnode.com'],
   10: ['https://optimism.publicnode.com', 'https://optimism.llamarpc.com'],
-} as const
+  ...parseMeshMapEnv('EVM_MESH_JSON'),
+}
 
 // ─── SVM Mesh (4 nodes, zero-API-key) ─────────────────────────────────────────
 // Priority: Solana-Main → Extrnode → Jito-Public → GenesysGo
 
 export const SVM_MESH: readonly string[] = [
   'https://api.mainnet-beta.solana.com',
-] as const
+  ...parseListEnv('SVM_MESH_URLS'),
+]
 
 // ─── UTXO REST Mesh (4 providers, zero-API-key) ───────────────────────────────
 // Priority: Mempool.space → Blockstream → Blockchain.info → Chain.so
@@ -70,7 +95,8 @@ export const SVM_MESH: readonly string[] = [
 
 export const UTXO_MESH_ENDPOINTS: readonly string[] = [
   'https://mempool.space/api',
-] as const
+  ...parseListEnv('UTXO_MESH_ENDPOINTS'),
+]
 
 // ─── Health-Ping constants ─────────────────────────────────────────────────────
 const PING_TIMEOUT_MS = 3_000
@@ -327,7 +353,7 @@ export class ProviderMesh {
     const candidates = this.getEvmFallbacks(chainNumericId)
     const now = Date.now()
     const preferred = candidates.find((url) => (this.preferredUntil.get(`evm:${chainNumericId}:${url}`) ?? 0) > now)
-    return preferred ?? candidates[0] ?? 'https://eth.llamarpc.com'
+    return preferred ?? candidates[0] ?? ''
   }
 
   /** All live EVM URLs for a chain — drives fallback rotation in EvmAdapter. */
@@ -519,6 +545,7 @@ function dedupeUrls(urls: readonly string[]): string[] {
  */
 export class HybridProviderStack {
   private readonly _evmAlchemyKey:        string | null
+  private readonly _solanaRpcUrl:         string | null
   private readonly _solanaChainstackUrl:  string | null
   private readonly _blockcypherToken:     string | null
   private readonly _hybridMode:           boolean
@@ -526,6 +553,7 @@ export class HybridProviderStack {
   constructor() {
     const cfg = loadConfig()
     this._evmAlchemyKey       = cfg.mesh.evmAlchemyKey
+    this._solanaRpcUrl        = cfg.mesh.solanaRpcUrl
     this._solanaChainstackUrl = cfg.mesh.solanaChainstackUrl
     this._blockcypherToken    = cfg.mesh.blockcypherApiToken
     this._hybridMode          = cfg.mesh.useHybridMode
@@ -538,7 +566,8 @@ export class HybridProviderStack {
     if (!this._hybridMode) return
 
     const managedEvm  = this._evmAlchemyKey    ? '[Managed] Active' : '[Managed] Not Configured'
-    const managedSvm  = this._solanaChainstackUrl ? '[Managed] Active' : '[Managed] Not Configured'
+    const managedSvm  =
+      this._solanaRpcUrl || this._solanaChainstackUrl ? '[Managed] Active' : '[Managed] Not Configured'
     // UTXO Provider Re-Routed: BlockCypher Token Synchronized when token is present.
     const managedUtxo = this._blockcypherToken ? '[Managed] Active — BlockCypher Token Synchronized' : '[Managed] Not Configured'
 
@@ -593,10 +622,9 @@ export class HybridProviderStack {
   /**
    * Returns ordered SVM RPC stack.
    *
-   * Hybrid mode (USE_HYBRID_MODE = true + SOLANA_CHAINSTACK_URL set):
-   *   [chainstackUrl, ...SVM_MESH]
-   *   All SVM calls are routed through Chainstack — Failover Protocol Locked
-   *   means SvmAdapter's withFallback() will fall back to SVM_MESH on failure.
+   * Hybrid mode (USE_HYBRID_MODE = true + SOLANA_RPC_URL and/or SOLANA_CHAINSTACK_URL set):
+   *   [SOLANA_RPC_URL QuickNode lane, Chainstack, ...SVM_MESH]
+   *   Failover Protocol Locked: SvmAdapter's withFallback() rotates on failure.
    *
    * Sovereign Mesh only (default):
    *   [...SVM_MESH]
@@ -605,12 +633,16 @@ export class HybridProviderStack {
     const cfg        = loadConfig()
     const meshUrls   = [...SVM_MESH]
     const envSol     = cfg.forceEnvRpc ? cfg.rpc.solana.primary?.trim() : null
-    const chainstack = this._hybridMode && this._solanaChainstackUrl?.trim()
-      ? this._solanaChainstackUrl.trim()
-      : null
+    const quickNode =
+      this._hybridMode && this._solanaRpcUrl?.trim() ? this._solanaRpcUrl.trim() : null
+    const chainstack =
+      this._hybridMode && this._solanaChainstackUrl?.trim()
+        ? this._solanaChainstackUrl.trim()
+        : null
 
     const ordered: string[] = []
     if (envSol) ordered.push(envSol)
+    if (quickNode) ordered.push(quickNode)
     if (chainstack) ordered.push(chainstack)
     ordered.push(...meshUrls)
 

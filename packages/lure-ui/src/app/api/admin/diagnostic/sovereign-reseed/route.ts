@@ -10,6 +10,7 @@ import { SOVEREIGN_ENGINE_CONFIG_DEFAULTS } from '@legion/core/config/sovereign-
 import { createServerSupabaseClient } from '../../../../../lib/supabase/server.js'
 import { isSovereignCommanderEmail } from '../../../../../lib/sovereign-commander.js'
 
+export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
 
 export async function POST() {

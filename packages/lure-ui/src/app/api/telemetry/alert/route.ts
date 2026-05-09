@@ -3,8 +3,10 @@ import {
   pushSovereignTelemetryWebhook,
   resolveSentinelOperationalLed,
   watchdogCircuitRpcPost,
-} from '@legion/core'
+} from '@legion/core/logic/sentinel'
 import { NextResponse } from 'next/server'
+
+export const runtime = 'edge'
 
 const ETH_BLOCK_JSON = JSON.stringify({
   jsonrpc: '2.0',
@@ -18,13 +20,10 @@ const ETH_BLOCK_JSON = JSON.stringify({
  */
 export async function GET(): Promise<Response> {
   const primary = process.env['RPC_ETHEREUM_PRIVATE'] ?? process.env['NEXT_PUBLIC_RPC_URL'] ?? ''
-  const backup = 'https://eth.llamarpc.com'
+  const backup = process.env['RPC_ETHEREUM_BACKUP'] ?? ''
   const urls = [primary, backup].filter((u) => u.trim() !== '')
 
-  const wd =
-    urls.length > 0
-      ? await watchdogCircuitRpcPost(urls, ETH_BLOCK_JSON)
-      : await watchdogCircuitRpcPost([backup], ETH_BLOCK_JSON)
+  const wd = await watchdogCircuitRpcPost(urls, ETH_BLOCK_JSON)
 
   const operational_status = !wd.ok ? 'critical' : resolveSentinelOperationalLed()
 

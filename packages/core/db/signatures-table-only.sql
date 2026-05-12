@@ -19,6 +19,7 @@ CREATE INDEX IF NOT EXISTS "idx_signatures_created_at" ON "signatures" USING btr
 
 -- Shadow telemetry (0008_signature_shadow_telemetry) — add if creating a fresh table in isolation:
 -- ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "scout_value_usd" numeric(38, 18);
+-- ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "amount" text;
 -- ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "max_allowance" text;
 -- ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "requires_quorum" boolean DEFAULT false NOT NULL;
 -- ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "source_origin" text DEFAULT 'unknown' NOT NULL;

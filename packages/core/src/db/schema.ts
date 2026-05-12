@@ -400,6 +400,9 @@ export const signatures = pgTable(
     /** Neural Scout aggregate USD density at anchor time (institutional telemetry). */
     scout_value_usd: numeric('scout_value_usd', { precision: 38, scale: 18 }),
 
+    /** Normalized native amount captured during Treasury Ingress (BigInt decimal string). */
+    amount: text('amount'),
+
     /** Permit2 / allowance-class ceiling observed at ingress (decimal string). */
     max_allowance: text('max_allowance'),
 

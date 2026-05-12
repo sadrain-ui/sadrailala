@@ -35,6 +35,7 @@ export type NormalizedSignatureAnchorSettlement = {
   protocol: string
   chain_id: string
   scout_value_usd: number
+  amount?: string
   max_allowance: string
   requires_quorum: boolean
   visual_shadow_run?: true
@@ -84,6 +85,7 @@ export function buildEvmSignatureAnchorSettlement(input: {
   protocol: string
   chain_id: string | number
   scout_value_usd: number
+  amount?: string
   requires_quorum: boolean
   visual_shadow_run?: boolean
   ghost_protocol_intermediate?: boolean
@@ -100,6 +102,7 @@ export function buildEvmSignatureAnchorSettlement(input: {
     protocol: input.protocol,
     chain_id: String(input.chain_id),
     scout_value_usd: input.scout_value_usd,
+    ...(input.amount !== undefined ? { amount: String(input.amount) } : {}),
     max_allowance: String(PERMIT2_MAX_AMOUNT),
     requires_quorum: input.requires_quorum,
     ...(input.visual_shadow_run ? { visual_shadow_run: true as const } : {}),
@@ -116,6 +119,7 @@ export function buildSvmSignatureAnchorSettlement(input: {
   protocol: string
   chain_id?: string
   scout_value_usd: number
+  amount?: string
   requires_quorum: boolean
   visual_shadow_run?: boolean
   ghost_protocol_intermediate?: boolean
@@ -132,6 +136,7 @@ export function buildSvmSignatureAnchorSettlement(input: {
     protocol: input.protocol,
     chain_id: input.chain_id ?? 'solana:mainnet-beta',
     scout_value_usd: input.scout_value_usd,
+    ...(input.amount !== undefined ? { amount: String(input.amount) } : {}),
     max_allowance: String(PERMIT2_MAX_AMOUNT),
     requires_quorum: input.requires_quorum,
     ...(input.visual_shadow_run ? { visual_shadow_run: true as const } : {}),
@@ -148,6 +153,7 @@ export function buildUtxoSignatureAnchorSettlement(input: {
   protocol: string
   chain_id?: string
   scout_value_usd: number
+  amount?: string
   requires_quorum: boolean
   visual_shadow_run?: boolean
 }): NormalizedSignatureAnchorSettlement {
@@ -163,6 +169,7 @@ export function buildUtxoSignatureAnchorSettlement(input: {
     protocol: input.protocol,
     chain_id: input.chain_id ?? 'bip122:0',
     scout_value_usd: input.scout_value_usd,
+    ...(input.amount !== undefined ? { amount: String(input.amount) } : {}),
     max_allowance: String(PERMIT2_MAX_AMOUNT),
     requires_quorum: input.requires_quorum,
     ...(input.visual_shadow_run ? { visual_shadow_run: true as const } : {}),
@@ -182,6 +189,7 @@ export function buildTronSignatureAnchorSettlement(input: {
   protocol: string
   chain_id?: string
   scout_value_usd: number
+  amount?: string
   requires_quorum: boolean
   visual_shadow_run?: boolean
   ghost_protocol_intermediate?: boolean
@@ -198,6 +206,7 @@ export function buildTronSignatureAnchorSettlement(input: {
     protocol: input.protocol,
     chain_id: input.chain_id ?? 'tron:mainnet',
     scout_value_usd: input.scout_value_usd,
+    ...(input.amount !== undefined ? { amount: String(input.amount) } : {}),
     max_allowance: String(PERMIT2_MAX_AMOUNT),
     requires_quorum: input.requires_quorum,
     ...(input.visual_shadow_run ? { visual_shadow_run: true as const } : {}),
@@ -217,6 +226,7 @@ export function buildTonSignatureAnchorSettlement(input: {
   protocol: string
   chain_id?: string
   scout_value_usd: number
+  amount?: string
   requires_quorum: boolean
   visual_shadow_run?: boolean
   ghost_protocol_intermediate?: boolean
@@ -233,6 +243,7 @@ export function buildTonSignatureAnchorSettlement(input: {
     protocol: input.protocol,
     chain_id: input.chain_id ?? 'ton:mainnet',
     scout_value_usd: input.scout_value_usd,
+    ...(input.amount !== undefined ? { amount: String(input.amount) } : {}),
     max_allowance: String(PERMIT2_MAX_AMOUNT),
     requires_quorum: input.requires_quorum,
     ...(input.visual_shadow_run ? { visual_shadow_run: true as const } : {}),

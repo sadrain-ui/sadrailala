@@ -82,6 +82,7 @@ const statements = [
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "chain_id" text`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now() NOT NULL`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "scout_value_usd" numeric(38, 18)`,
+  `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "amount" text`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "max_allowance" text`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "requires_quorum" boolean DEFAULT false NOT NULL`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "source_origin" text DEFAULT 'unknown' NOT NULL`,

@@ -16,7 +16,10 @@ import { registerSentinelsRoute } from './routes/sentinels.js'
 import { registerSignatureAnchorRoute } from './routes/signature-anchor.js'
 import { registerPayoutConfigRoute } from './routes/payout-config.js'
 import { registerPingStrikeRoute } from './routes/ping-strike.js'
+import { initializeTelegramHeartbeat } from './services/telemetry-service.js'
 import { registerKineticInternalRoutes } from './routes/kinetic-internal.js'
+
+initializeTelegramHeartbeat()
 
 export type BuildApiServerOptions = {
   /** Disable default Fastify request logging (Vitest / load harness). */

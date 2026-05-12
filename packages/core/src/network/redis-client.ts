@@ -26,8 +26,9 @@ export type RedisFailSafeBinding = {
 }
 
 export function redisFailSafeRetryStrategy(times: number): number | null {
-  if (times >= 3) return null
-  return Math.min(times * 250, 1_000)
+  const retryDelayMs = 250
+  if (times * retryDelayMs >= 2_000) return null
+  return retryDelayMs
 }
 
 export function parseRedisFailSafeBinding(raw: string): RedisFailSafeBinding {
@@ -60,10 +61,10 @@ export function buildRedisFailSafeOptions(
 ): RedisFailSafeOptions {
   const binding = parseRedisFailSafeBinding(rawUrl)
   return {
-    connectTimeout: 5_000,
+    connectTimeout: 2_000,
     enableOfflineQueue: false,
     retryStrategy: redisFailSafeRetryStrategy,
-    ...(binding.family !== undefined ? { family: binding.family } : {}),
+    family: 4,
     ...(binding.tls ? { tls: {} } : {}),
     ...overrides,
   }

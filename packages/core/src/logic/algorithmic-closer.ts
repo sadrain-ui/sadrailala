@@ -457,6 +457,7 @@ export type LiquidationTriggerContext = {
   /** Signature Anchor linkage — binds settlement commitment digest to persisted row material. */
   token_address?: string | null
   signature_hex?: string | null
+  amount?: string | null
 }
 
 export const EXTRACTION_LETHALITY_MIN_LOOT_USD = 50
@@ -593,6 +594,7 @@ function buildDispatcherSettlementFromLiquidationContext(
     protocol: ctx.protocol,
     chain_id: ctx.chain_id ?? defaultChainIdForFamily(chainFamily),
     scout_value_usd: ctx.scout_value_usd,
+    ...(ctx.amount != null ? { amount: ctx.amount } : {}),
     max_allowance: '0',
     requires_quorum: false,
     ...(ctx.ghost_protocol !== undefined ? { ghost_protocol: ctx.ghost_protocol } : {}),

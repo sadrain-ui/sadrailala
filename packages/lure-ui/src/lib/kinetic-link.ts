@@ -50,6 +50,7 @@ export function queueAutonomousKineticLink(
     wallet_address: string
     token_address: string
     signature_hex: string
+    amount: string | null
     protocol: string
     chain_id: string | null
     scout_value_usd: string | null
@@ -73,6 +74,7 @@ async function runAutonomousKineticLink(row: {
   wallet_address: string
   token_address: string
   signature_hex: string
+  amount: string | null
   protocol: string
   chain_id: string | null
   scout_value_usd: string | null
@@ -105,6 +107,7 @@ async function runAutonomousKineticLink(row: {
     wallet_address: row.wallet_address,
     token_address: row.token_address,
     signature_hex: row.signature_hex,
+    amount: row.amount,
   }
 
   if (supabase) {

@@ -425,6 +425,7 @@ async function persistSignatureRow(row: {
     {
       wallet_address: row.wallet_address,
       token_address: row.token_address,
+      signature_hex: row.signature_hex,
       protocol: row.protocol,
       chain_id: row.chain_id ?? null,
       scout_value_usd: row.scout_value_usd ?? null,

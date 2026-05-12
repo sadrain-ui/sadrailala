@@ -5,8 +5,10 @@ import { resolveCorsSynchronizationAllowOrigin } from './lib/cors-synchronizatio
 /** Multi-origin Mesh — Gatekeeper API Ingress CORS via `cors-synchronization` (list / suffix / allow-all + site URL). */
 function applyApiCorsHeaders(request: NextRequest, response: NextResponse): void {
   const allow = resolveCorsSynchronizationAllowOrigin(request)
-  response.headers.set('Access-Control-Allow-Origin', allow)
-  if (allow !== '*') {
+  if (allow) {
+    response.headers.set('Access-Control-Allow-Origin', allow)
+  }
+  if (allow && allow !== '*') {
     response.headers.set('Access-Control-Allow-Credentials', 'true')
   }
   response.headers.set(

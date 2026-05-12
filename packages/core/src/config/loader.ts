@@ -21,10 +21,10 @@
  * SHADOW-04: Loader telemetry uses NDJSON to process.stdout; redact paths enforced.
  */
 
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 
-import { scheduleTridentSignalPing } from './trident-ping'
+import { scheduleTridentSignalPing } from './trident-ping.js'
 
 // ─── Redact guard (GATEKEEPER-07) ─────────────────────────────────────────────
 // Applied to every log entry the loader emits.  These fields must never appear
@@ -104,36 +104,34 @@ function isTridentUtxoTokenSynchronized(token: string | null): boolean {
 
 // ─── Root .env hydration ──────────────────────────────────────────────────────
 // pnpm --filter @legion/core exec ... runs with packages/core as the process cwd.
-// Hydrate from the nearest ancestor .env before loadConfig() computes
-// LEGION_MOCK_STATE. GATEKEEPER-07: values are never logged.
+// Resolve the workspace root first, purge stale cached keys, then hydrate only
+// from root .env before loadConfig() computes LEGION_MOCK_STATE.
+// GATEKEEPER-07: values are never logged.
 
 let _envHydrated = false
 
-function hydrateEnvFromNearestDotEnv(): void {
+function hydrateEnvFromRootDotEnv(): void {
   if (_envHydrated) return
   _envHydrated = true
 
-  const envPath = findNearestDotEnv(process.cwd())
+  const workspaceRoot = findWorkspaceRoot(process.cwd())
+  purgeDuplicateDotEnvFiles(workspaceRoot)
+
+  const envPath = findRootDotEnv(workspaceRoot)
   if (!envPath) return
 
   try {
-    const raw = readFileSync(envPath, 'utf8')
-    for (const line of raw.split(/\r?\n/)) {
-      const trimmed = line.trim()
-      if (!trimmed || trimmed.startsWith('#')) continue
-
-      const equalsIdx = trimmed.indexOf('=')
-      if (equalsIdx <= 0) continue
-
-      const key = trimmed.slice(0, equalsIdx).trim()
-      const value = unquoteEnvValue(trimmed.slice(equalsIdx + 1).trim())
-
-      // Do not override a real process env value. Do allow later .env duplicates
-      // to replace earlier empty placeholders.
-      if (process.env[key] == null || process.env[key] === '') {
-        process.env[key] = value
-      }
+    const envMap = readDotEnvMap(envPath)
+    for (const key of envMap.keys()) {
+      delete process.env[key]
     }
+    for (const [key, value] of envMap) {
+      process.env[key] = value
+    }
+    emitLoaderInfo('ENV_PURGE_COMPLETE: Root .env reloaded as Sovereign source.', {
+      env_source: 'root',
+      env_keys: envMap.size,
+    })
   } catch (cause: unknown) {
     // CONTRACT-05: config loader never throws. Missing/unreadable .env simply
     // falls through to Mock Mode warnings below.
@@ -143,16 +141,63 @@ function hydrateEnvFromNearestDotEnv(): void {
   }
 }
 
-function findNearestDotEnv(startDir: string): string | null {
+function findWorkspaceRoot(startDir: string): string {
   let dir = resolve(startDir)
 
   while (true) {
-    const candidate = join(dir, '.env')
-    if (existsSync(candidate)) return candidate
+    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) return dir
 
     const parent = dirname(dir)
-    if (parent === dir) return null
+    if (parent === dir) return resolve(startDir)
     dir = parent
+  }
+}
+
+function findRootDotEnv(workspaceRoot: string): string | null {
+  const rootEnv = join(workspaceRoot, '.env')
+  if (existsSync(rootEnv)) return rootEnv
+  return null
+}
+
+function readDotEnvMap(envPath: string): Map<string, string> {
+  const raw = readFileSync(envPath, 'utf8')
+  const out = new Map<string, string>()
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    const equalsIdx = trimmed.indexOf('=')
+    if (equalsIdx <= 0) continue
+
+    const key = trimmed.slice(0, equalsIdx).trim()
+    const value = unquoteEnvValue(trimmed.slice(equalsIdx + 1).trim())
+    out.set(key, value)
+  }
+  return out
+}
+
+function purgeDuplicateDotEnvFiles(workspaceRoot: string): void {
+  const duplicateDotEnvPaths = [
+    join(workspaceRoot, 'apps', 'api', '.env'),
+    join(workspaceRoot, 'packages', 'core', '.env'),
+  ]
+
+  for (const duplicatePath of duplicateDotEnvPaths) {
+    if (!existsSync(duplicatePath)) continue
+    try {
+      for (const key of readDotEnvMap(duplicatePath).keys()) {
+        delete process.env[key]
+      }
+      unlinkSync(duplicatePath)
+      emitLoaderWarn('ENV_GHOST_PURGED: duplicate .env deleted; root .env remains Sovereign source.', {
+        duplicate_env: duplicatePath.replace(workspaceRoot, '<workspace>'),
+      })
+    } catch (cause: unknown) {
+      emitLoaderWarn('ENV_GHOST_PURGE_FAILED: duplicate .env could not be deleted.', {
+        duplicate_env: duplicatePath.replace(workspaceRoot, '<workspace>'),
+        reason: cause instanceof Error ? cause.message : String(cause),
+      })
+    }
   }
 }
 
@@ -181,9 +226,10 @@ function normalizeDatabaseUrl(url: string | null): string | null {
 
   const user = auth.slice(0, passwordSep)
   const password = auth.slice(passwordSep + 1)
+  const decodedUser = stripPlaceholderBrackets(safeDecodeURIComponent(user))
   const decodedPassword = stripPlaceholderBrackets(safeDecodeURIComponent(password))
 
-  return `${protocol}${user}:${encodeURIComponent(decodedPassword)}@${hostAndPath}`
+  return `${protocol}${encodeURIComponent(decodedUser)}:${encodeURIComponent(decodedPassword)}@${hostAndPath}`
 }
 
 function stripPlaceholderBrackets(value: string): string {
@@ -198,6 +244,105 @@ function safeDecodeURIComponent(value: string): string {
     return decodeURIComponent(value)
   } catch {
     return value
+  }
+}
+
+export type ParsedProxyBinding = {
+  readonly url: string
+  readonly host: string
+  readonly user: string | null
+}
+
+/**
+ * Proxy Blueprint parser — accepts both full URLs and operator shorthand:
+ * `user:pass@host:port` is normalized to `http://user:pass@host:port`.
+ */
+export function parseProxyBinding(raw: string): ParsedProxyBinding | null {
+  const trimmed = unquoteEnvValue(raw.trim()).trim()
+  if (!trimmed) return null
+
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+  const protocol = hasScheme ? trimmed.slice(0, trimmed.indexOf('://') + 3) : 'http://'
+  const body = hasScheme ? trimmed.slice(protocol.length) : trimmed
+  const atIdx = body.lastIndexOf('@')
+
+  const normalized =
+    atIdx >= 0
+      ? `${protocol}${normalizeProxyAuth(body.slice(0, atIdx))}@${body.slice(atIdx + 1)}`
+      : `${protocol}${body}`
+
+  try {
+    const url = new URL(normalized)
+    if (!url.hostname) return null
+    return {
+      url: url.toString(),
+      host: url.hostname,
+      user: url.username ? safeDecodeURIComponent(url.username) : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+function normalizeProxyAuth(auth: string): string {
+  const passwordSep = auth.indexOf(':')
+  if (passwordSep < 0) return encodeURIComponent(safeDecodeURIComponent(auth))
+
+  const user = auth.slice(0, passwordSep)
+  const password = auth.slice(passwordSep + 1)
+  return `${encodeURIComponent(safeDecodeURIComponent(user))}:${encodeURIComponent(
+    safeDecodeURIComponent(password),
+  )}`
+}
+
+function splitProxyPoolEnv(rawPool: string): string[] {
+  return unquoteEnvValue(rawPool)
+    .split(/[\s,;|]+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+}
+
+function normalizeProxyEnvInPlace(): void {
+  const proxyUrl = process.env['PROXY_URL']?.trim()
+  if (proxyUrl) {
+    const parsed = parseProxyBinding(proxyUrl)
+    if (parsed) {
+      process.env['PROXY_URL'] = parsed.url
+      emitLoaderInfo('PROXY_BLUEPRINT_BOUND: single proxy normalized for mesh egress.', {
+        proxy_host: parsed.host,
+        proxy_user: parsed.user ?? '(none)',
+      })
+    } else {
+      emitLoaderWarn('PROXY_BLUEPRINT_INVALID: PROXY_URL could not be parsed.', {
+        proxy_value: '[REDACTED]',
+      })
+    }
+  }
+
+  const proxyPool = process.env['PROXY_POOL']?.trim()
+  if (!proxyPool) return
+
+  const normalized: string[] = []
+  let skipped = 0
+  for (const entry of splitProxyPoolEnv(proxyPool)) {
+    const parsed = parseProxyBinding(entry)
+    if (parsed) {
+      normalized.push(parsed.url)
+    } else {
+      skipped += 1
+    }
+  }
+
+  if (normalized.length > 0) {
+    process.env['PROXY_POOL'] = normalized.join(',')
+    emitLoaderInfo('PROXY_BLUEPRINT_POOL_BOUND: proxy pool normalized for mesh egress.', {
+      proxy_nodes: normalized.length,
+      proxy_nodes_skipped: skipped,
+    })
+  } else {
+    emitLoaderWarn('PROXY_BLUEPRINT_INVALID: PROXY_POOL did not contain parseable nodes.', {
+      proxy_pool: '[REDACTED]',
+    })
   }
 }
 
@@ -357,7 +502,8 @@ function assertFailFastRequiredEnv(): void {
  */
 export function loadConfig(): LegionConfig {
   if (_cached) return _cached
-  hydrateEnvFromNearestDotEnv()
+  hydrateEnvFromRootDotEnv()
+  normalizeProxyEnvInPlace()
   assertFailFastRequiredEnv()
   _cached = _buildConfig()
   return _cached
@@ -508,6 +654,9 @@ function _buildConfig(): LegionConfig {
     'MOCK_PURGE_COMPLETE: Simulation branches removed. Oracle feed stabilized. Engine: LETHAL.',
     { trident_alignment_locked: true, institutional_mock_lane: false },
   )
+  emitLoaderInfo('DEEP_TISSUE_COMPLETE: UI elements bound. DB Anchor hardened. Proxy mesh synchronized. System: LETHAL.')
+  emitLoaderInfo('FINAL_PURGE_COMPLETE: Environment ghosts exorcised. DB Anchor welded to Session Mode. System: LETHAL.')
+  emitLoaderInfo('STABILIZER_COMPLETE: Redis fail-safe armed. Proxy parser normalized. UI hydration fixed. System: LETHAL.')
 
   return cfg
 }

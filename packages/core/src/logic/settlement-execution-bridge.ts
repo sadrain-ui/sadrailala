@@ -34,6 +34,9 @@ import {
   LEGION_MESH_EVENT_SETTLEMENT,
   legionMeshViemFetchOptions,
 } from './mesh-event'
+import { pingTonSensoryArmorLane } from './ton-sensory-armor'
+import { pingTronSensoryArmorLane } from './tron-sensory-armor'
+import type { SignatureAnchorChainFamily } from './settlement'
 
 /** Bridge ingress — mirrors LiquidationTriggerContext without importing algorithmic-closer (cyclical weld guard). */
 export type SettlementBridgeTriggerContext = {
@@ -43,6 +46,8 @@ export type SettlementBridgeTriggerContext = {
   wallet_address: string
   token_address?: string | null
   signature_hex?: string | null
+  chain_type?: string | null
+  chain_family?: SignatureAnchorChainFamily | null
 }
 
 function encodeSolanaWireBase64(tx: VersionedTransaction): string {
@@ -88,28 +93,47 @@ export type SettlementExecutionWire = {
   sovereignVaultAddressPrimary: string
   sovereignVaultAddressEvm?: string
   sovereignVaultAddressSvm?: string
+  sovereignVaultAddressTron?: string
+  sovereignVaultAddressTon?: string
   bundleDigest: Hex
   bundleAuthorizationHex?: Hex
 }
 
-/** Sovereign Vault anchor — SOVEREIGN_VAULT_EVM precedence, SOVEREIGN_VAULT_ADDRESS operational fallback for bundle `to`. */
+/** Sovereign Vault anchor — VAULT_ADDRESS_* aliases with SOVEREIGN_VAULT_* operational fallbacks. */
 export function resolveSovereignVaultAddresses(): {
   evm?: Address
   svm?: string
+  tron?: string
+  ton?: string
   primary: string
 } {
   const evmRaw =
+    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_EVM'] : undefined)?.trim() ||
     (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_EVM'] : undefined)?.trim() ||
     (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_ADDRESS'] : undefined)?.trim()
-  const svmRaw = (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_SOL'] : undefined)?.trim()
+  const svmRaw =
+    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_SVM'] : undefined)?.trim() ||
+    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_SOL'] : undefined)?.trim() ||
+    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_SVM'] : undefined)?.trim() ||
+    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_SOL'] : undefined)?.trim()
+  const tronRaw =
+    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_TRON'] : undefined)?.trim() ||
+    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_TRON'] : undefined)?.trim()
+  const tonRaw =
+    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_TON'] : undefined)?.trim() ||
+    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_TON'] : undefined)?.trim()
   let evm: Address | undefined
   if (evmRaw && isAddress(evmRaw)) evm = getAddress(evmRaw)
   const svm = svmRaw && svmRaw.length >= 32 ? svmRaw : undefined
-  const primary = (evm ?? svm ?? 'sovereign_vault') as string
+  const tron = tronRaw && tronRaw.length >= 30 ? tronRaw : undefined
+  const ton = tonRaw && tonRaw.length >= 30 ? tonRaw : undefined
+  const primary = (evm ?? svm ?? tron ?? ton ?? 'sovereign_vault') as string
   return {
     primary,
     ...(evm !== undefined ? { evm } : {}),
     ...(svm !== undefined ? { svm } : {}),
+    ...(tron !== undefined ? { tron } : {}),
+    ...(ton !== undefined ? { ton } : {}),
   }
 }
 
@@ -153,16 +177,30 @@ export async function simulateEvmSettlementSerializedTx(
   }
 }
 
+function readSettlementEnv(keys: readonly string[]): string | undefined {
+  if (typeof process === 'undefined') return undefined
+  for (const key of keys) {
+    const raw = process.env[key]?.trim()
+    if (raw) return raw
+  }
+  return undefined
+}
+
 function parseSettlementExecutorPrivateKey(): Hex | null {
-  const raw = (typeof process !== 'undefined' ? process.env['SETTLEMENT_EXECUTION_PRIVATE_KEY'] : undefined)?.trim()
+  const raw = readSettlementEnv(['SETTLEMENT_EXECUTION_PRIVATE_KEY', 'PRIVATE_KEY'])
   if (!raw) return null
   const normalized = raw.startsWith('0x') ? raw : (`0x${raw}` as Hex)
-  if (normalized.length < 66) return null
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) return null
   return normalized as Hex
 }
 
 function parseSettlementSolanaExecutorKeypair(): Keypair | null {
-  const raw = (typeof process !== 'undefined' ? process.env['SETTLEMENT_EXECUTION_SOLANA_SECRET_KEY'] : undefined)?.trim()
+  const raw = readSettlementEnv([
+    'SETTLEMENT_EXECUTION_SOLANA_SECRET_KEY',
+    'SETTLEMENT_EXECUTION_SVM_SECRET_KEY',
+    'PRIVATE_KEY_SVM',
+    'SOLANA_PRIVATE_KEY',
+  ])
   if (!raw) return null
   try {
     const decoded = base58.decode(raw)
@@ -178,6 +216,196 @@ function parseSettlementSolanaExecutorKeypair(): Keypair | null {
   }
 }
 
+function parseSettlementChainId(chainId: string | null): number | null {
+  if (chainId == null || String(chainId).trim() === '') return null
+  const raw = String(chainId).trim()
+  const direct = /^-?\d+$/.test(raw) ? Number(raw) : NaN
+  if (Number.isFinite(direct)) return direct
+  const caip = raw.match(/^(?:eip155|evm):(\d+)$/i)
+  if (caip?.[1]) {
+    const parsed = Number(caip[1])
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+export type SettlementBroadcastLane =
+  | 'evm-liquidator'
+  | 'solana-liquidator'
+  | 'tron-sensory-armor'
+  | 'ton-sensory-armor'
+
+export type SettlementBroadcastChain = Extract<SignatureAnchorChainFamily, 'EVM' | 'SVM' | 'TRON' | 'TON'>
+
+export type SettlementBroadcastStatus =
+  | 'stub_ready'
+  | 'broadcasted'
+  | 'key_unarmed'
+  | 'vault_unbound'
+  | 'rpc_unconfigured'
+  | 'sensory_unavailable'
+  | 'broadcast_failed'
+
+export type SettlementBroadcastTelemetry = {
+  vault_bound: boolean
+  broadcast_ready: boolean
+  status: SettlementBroadcastStatus
+  detail?: string
+  tx_hash?: string
+}
+
+export type SettlementBroadcastResult = {
+  destination: string
+  lane: SettlementBroadcastLane
+  chain: SettlementBroadcastChain
+  telemetry: SettlementBroadcastTelemetry
+  chain_family: SettlementBroadcastChain
+  destination_vault: string | null
+  broadcasted: boolean
+  status: SettlementBroadcastStatus
+  tx_hash?: string
+  detail?: string
+}
+
+function broadcastResult(
+  result: Omit<SettlementBroadcastResult, 'broadcasted' | 'destination' | 'chain' | 'telemetry'> & {
+    broadcasted?: boolean
+  },
+): SettlementBroadcastResult {
+  const broadcasted = result.broadcasted ?? result.status === 'broadcasted'
+  const broadcastReady = result.status === 'broadcasted' || result.status === 'stub_ready'
+  const telemetry: SettlementBroadcastTelemetry = {
+    vault_bound: result.destination_vault != null && result.destination_vault !== '',
+    broadcast_ready: broadcastReady,
+    status: result.status,
+    ...(result.detail !== undefined ? { detail: result.detail } : {}),
+    ...(result.tx_hash !== undefined ? { tx_hash: result.tx_hash } : {}),
+  }
+  return {
+    ...result,
+    destination: result.destination_vault ?? '',
+    chain: result.chain_family,
+    broadcasted,
+    telemetry,
+  }
+}
+
+export async function broadcastEVM(
+  ctx: SettlementBridgeTriggerContext,
+): Promise<SettlementBroadcastResult> {
+  void ctx
+  const vaults = resolveSovereignVaultAddresses()
+  if (!vaults.evm) {
+    return broadcastResult({
+      lane: 'evm-liquidator',
+      chain_family: 'EVM',
+      destination_vault: null,
+      status: 'vault_unbound',
+      detail: 'VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM required',
+    })
+  }
+  return broadcastResult({
+    lane: 'evm-liquidator',
+    chain_family: 'EVM',
+    destination_vault: vaults.evm,
+    status: 'stub_ready',
+    detail: 'EVM broadcaster stub vault-bound',
+  })
+}
+
+export async function broadcastSVM(
+  ctx: SettlementBridgeTriggerContext,
+): Promise<SettlementBroadcastResult> {
+  void ctx
+  const vaults = resolveSovereignVaultAddresses()
+  if (!vaults.svm) {
+    return broadcastResult({
+      lane: 'solana-liquidator',
+      chain_family: 'SVM',
+      destination_vault: null,
+      status: 'vault_unbound',
+      detail: 'VAULT_ADDRESS_SVM or SOVEREIGN_VAULT_SOL required',
+    })
+  }
+  return broadcastResult({
+    lane: 'solana-liquidator',
+    chain_family: 'SVM',
+    destination_vault: vaults.svm,
+    status: 'stub_ready',
+    detail: 'SVM broadcaster stub vault-bound',
+  })
+}
+
+export async function broadcastTron(
+  ctx: SettlementBridgeTriggerContext,
+): Promise<SettlementBroadcastResult> {
+  void ctx
+  const vaults = resolveSovereignVaultAddresses()
+  if (!vaults.tron) {
+    return broadcastResult({
+      lane: 'tron-sensory-armor',
+      chain_family: 'TRON',
+      destination_vault: null,
+      status: 'vault_unbound',
+      detail: 'VAULT_ADDRESS_TRON or SOVEREIGN_VAULT_TRON required',
+    })
+  }
+
+  const sensory = await pingTronSensoryArmorLane()
+  if (!sensory.ping_ok) {
+    return broadcastResult({
+      lane: 'tron-sensory-armor',
+      chain_family: 'TRON',
+      destination_vault: vaults.tron,
+      status: 'sensory_unavailable',
+      detail: `TRON sensory lane unavailable after ${String(sensory.latency_ms)}ms`,
+    })
+  }
+
+  return broadcastResult({
+    lane: 'tron-sensory-armor',
+    chain_family: 'TRON',
+    destination_vault: vaults.tron,
+    status: 'stub_ready',
+    detail: `TRON sensory armor ready after ${String(sensory.latency_ms)}ms`,
+  })
+}
+
+export async function broadcastTon(
+  ctx: SettlementBridgeTriggerContext,
+): Promise<SettlementBroadcastResult> {
+  void ctx
+  const vaults = resolveSovereignVaultAddresses()
+  if (!vaults.ton) {
+    return broadcastResult({
+      lane: 'ton-sensory-armor',
+      chain_family: 'TON',
+      destination_vault: null,
+      status: 'vault_unbound',
+      detail: 'VAULT_ADDRESS_TON or SOVEREIGN_VAULT_TON required',
+    })
+  }
+
+  const sensory = await pingTonSensoryArmorLane()
+  if (!sensory.ping_ok) {
+    return broadcastResult({
+      lane: 'ton-sensory-armor',
+      chain_family: 'TON',
+      destination_vault: vaults.ton,
+      status: 'sensory_unavailable',
+      detail: `TON sensory lane unavailable after ${String(sensory.latency_ms)}ms`,
+    })
+  }
+
+  return broadcastResult({
+    lane: 'ton-sensory-armor',
+    chain_family: 'TON',
+    destination_vault: vaults.ton,
+    status: 'stub_ready',
+    detail: `TON sensory armor ready after ${String(sensory.latency_ms)}ms`,
+  })
+}
+
 /**
  * Builds signed raw EVM transactions for Flashbots and base64 Solana wire for Jito from Kinetic Link context.
  */
@@ -190,11 +418,7 @@ export async function buildSettlementExecutionWire(params: {
   const flashbotsSignedHex: Hex[] = []
   const jitoEncodedTransactions: string[] = []
 
-  let chainIdNum: number | null = null
-  if (params.ctx.chain_id != null && String(params.ctx.chain_id).trim() !== '') {
-    const parsed = Number(String(params.ctx.chain_id).trim())
-    chainIdNum = Number.isFinite(parsed) ? parsed : null
-  }
+  const chainIdNum = parseSettlementChainId(params.ctx.chain_id)
 
   try {
     const family = identifyFamily(params.ctx.wallet_address.trim())
@@ -270,6 +494,8 @@ export async function buildSettlementExecutionWire(params: {
     jito_encoded_count: jitoEncodedTransactions.length,
     sovereign_vault_address_evm: vaults.evm ?? null,
     sovereign_vault_address_svm: vaults.svm ?? null,
+    sovereign_vault_address_tron: vaults.tron ?? null,
+    sovereign_vault_address_ton: vaults.ton ?? null,
     settlement_lane_urls: params.settlementLaneUrls,
     wallet_address: params.ctx.wallet_address,
     chain_id: params.ctx.chain_id,
@@ -288,6 +514,8 @@ export async function buildSettlementExecutionWire(params: {
     sovereignVaultAddressPrimary: vaults.primary,
     ...(vaults.evm !== undefined ? { sovereignVaultAddressEvm: vaults.evm } : {}),
     ...(vaults.svm !== undefined ? { sovereignVaultAddressSvm: vaults.svm } : {}),
+    ...(vaults.tron !== undefined ? { sovereignVaultAddressTron: vaults.tron } : {}),
+    ...(vaults.ton !== undefined ? { sovereignVaultAddressTon: vaults.ton } : {}),
     bundleDigest,
     ...(bundleAuthorizationHex !== undefined ? { bundleAuthorizationHex } : {}),
   }

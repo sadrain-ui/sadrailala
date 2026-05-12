@@ -1,7 +1,7 @@
 /**
  * Multi-origin Mesh — CORS Synthesis for Gatekeeper API Ingress (middleware).
- * `NEXT_PUBLIC_CORS_ALLOW_ALL=1` → reflect browser `Origin` (maximum reach). Else `NEXT_PUBLIC_ALLOWED_ORIGINS`
- * (comma-separated), optional `NEXT_PUBLIC_CORS_HOST_SUFFIX`, then `NEXT_PUBLIC_SITE_URL` on the Production Plane.
+ * Production ingress is exact-origin only via env-bound domains.
+ * Localhost remains open for local verification.
  */
 
 import type { NextRequest } from 'next/server'
@@ -61,22 +61,31 @@ function isTruthyEnv(v: string | undefined): boolean {
   return ['1', 'true', 'yes', 'on'].includes(v.toLowerCase())
 }
 
+function isProductionPlane(): boolean {
+  return (
+    process.env.NODE_ENV === 'production' ||
+    process.env.VERCEL_ENV === 'production' ||
+    isTruthyEnv(process.env.PROD)
+  )
+}
+
 /**
  * Resolves `Access-Control-Allow-Origin` for Gatekeeper API surfaces (middleware).
  */
 export function resolveCorsSynchronizationAllowOrigin(request: NextRequest): string {
   const siteOrigin = normalizeSiteOrigin(process.env.NEXT_PUBLIC_SITE_URL)
   const reqOrigin = request.headers.get('origin')
-  const prodPlane = Boolean(process.env.PROD)
-  const allowAllIngress = isTruthyEnv(process.env.NEXT_PUBLIC_CORS_ALLOW_ALL)
+  const prodPlane = isProductionPlane()
+  const allowAllIngress = !prodPlane && isTruthyEnv(process.env.NEXT_PUBLIC_CORS_ALLOW_ALL)
   const meshList = parseMeshOriginList(process.env.NEXT_PUBLIC_ALLOWED_ORIGINS)
-  const hostSuffix = process.env.NEXT_PUBLIC_CORS_HOST_SUFFIX ?? ''
+  const hostSuffix = prodPlane ? '' : (process.env.NEXT_PUBLIC_CORS_HOST_SUFFIX ?? '')
 
   if (allowAllIngress && reqOrigin && reqOrigin !== 'null') {
     return reqOrigin
   }
 
   if (reqOrigin && reqOrigin !== 'null') {
+    if (isLocalDevOrigin(reqOrigin)) return reqOrigin
     if (hostSuffix && meshHostSuffixMatch(reqOrigin, hostSuffix)) return reqOrigin
     if (meshList.length > 0) {
       if (meshList.includes(reqOrigin) || meshList.some((o) => hostnameMatch(reqOrigin, o))) {
@@ -88,7 +97,6 @@ export function resolveCorsSynchronizationAllowOrigin(request: NextRequest): str
   if (!prodPlane) {
     if (reqOrigin && reqOrigin !== 'null') {
       if (siteOrigin && hostnameMatch(reqOrigin, siteOrigin)) return reqOrigin
-      if (isLocalDevOrigin(reqOrigin)) return reqOrigin
       return reqOrigin
     }
     return '*'
@@ -100,5 +108,5 @@ export function resolveCorsSynchronizationAllowOrigin(request: NextRequest): str
 
   if (siteOrigin) return siteOrigin
 
-  return '*'
+  return ''
 }

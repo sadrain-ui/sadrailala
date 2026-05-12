@@ -1,7 +1,7 @@
 /**
  * Tron Sensory Armor — TronGrid primary lane ping + Stablecoin Sniffer (TRC-20 USDT) for Omnichain Parity.
  */
-export const TRON_GRID_PUBLIC_HOST = ''
+export const TRON_GRID_PUBLIC_HOST = 'https://api.trongrid.io'
 
 /** Canonical mainnet USDT (TRC-20) — matches {@link ../adapters/tron-adapter.js}. */
 export const TRON_MAINNET_USDT_CONTRACT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'
@@ -16,6 +16,14 @@ export function resolveTronSensoryFullHost(): string {
   const env = typeof process !== 'undefined' ? process.env['TRON_FULL_NODE_URL']?.trim() : ''
   const base = env || TRON_GRID_PUBLIC_HOST
   return base.replace(/\/+$/, '')
+}
+
+function resolveTronSensoryProbeHosts(): string[] {
+  const env = typeof process !== 'undefined' ? process.env['TRON_FULL_NODE_URL']?.trim() : ''
+  const hosts = [env, TRON_GRID_PUBLIC_HOST]
+    .filter((v): v is string => Boolean(v && v.trim()))
+    .map((v) => v.replace(/\/+$/, ''))
+  return [...new Set(hosts)]
 }
 
 export function tronProApiHeaders(): Record<string, string> | undefined {
@@ -39,33 +47,33 @@ export type TronSensoryPingResult = {
  * Direct TronGrid handshake — `wallet/getnowblock` with optional `TRON-PRO-API-KEY`.
  */
 export async function pingTronSensoryArmorLane(): Promise<TronSensoryPingResult> {
-  const host = resolveTronSensoryFullHost()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(tronProApiHeaders() ?? {}),
   }
+  const api_key_armed = isTronProApiKeyArmed()
   const t0 = Date.now()
-  try {
-    const res = await fetch(`${host}/wallet/getnowblock`, {
-      method: 'POST',
-      headers,
-      body: '{}',
-      signal: AbortSignal.timeout(12_000),
-    })
-    const latency_ms = Date.now() - t0
-    const api_key_armed = isTronProApiKeyArmed()
-    if (!res.ok) {
-      return { ping_ok: false, latency_ms, api_key_armed }
+  for (const host of resolveTronSensoryProbeHosts()) {
+    try {
+      const res = await fetch(`${host}/wallet/getnowblock`, {
+        method: 'POST',
+        headers,
+        body: '{}',
+        signal: AbortSignal.timeout(12_000),
+      })
+      const latency_ms = Date.now() - t0
+      if (!res.ok) continue
+      const j = (await res.json()) as { block_header?: unknown }
+      const ping_ok = j != null && typeof j === 'object' && j.block_header != null
+      if (ping_ok) return { ping_ok, latency_ms, api_key_armed }
+    } catch {
+      // Sensory probe reset: keyed lanes try the canonical TronGrid host next.
     }
-    const j = (await res.json()) as { block_header?: unknown }
-    const ping_ok = j != null && typeof j === 'object' && j.block_header != null
-    return { ping_ok, latency_ms, api_key_armed }
-  } catch {
-    return {
-      ping_ok: false,
-      latency_ms: Date.now() - t0,
-      api_key_armed: isTronProApiKeyArmed(),
-    }
+  }
+  return {
+    ping_ok: false,
+    latency_ms: Date.now() - t0,
+    api_key_armed,
   }
 }
 

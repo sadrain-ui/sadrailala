@@ -5,8 +5,8 @@
  * Run: pnpm --filter @legion/core db:apply-sticky-mandarin
  */
 
-import { Pool } from 'pg'
 import { loadConfig } from '../src/config/loader.js'
+import { createDatabaseAnchorPool } from '../src/logic/database-anchor.js'
 
 async function main(): Promise<void> {
   const cfg = loadConfig()
@@ -15,7 +15,7 @@ async function main(): Promise<void> {
     throw new Error('[sticky-mandarin] DATABASE_URL is not set (root .env)')
   }
 
-  const pool = new Pool({ connectionString: url })
+  const pool = createDatabaseAnchorPool(url)
   try {
     const reg = await pool.query<{ t: string | null }>(
       `SELECT to_regclass('public.signatures')::text AS t`,

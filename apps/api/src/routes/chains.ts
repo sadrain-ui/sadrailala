@@ -1,8 +1,9 @@
 /**
  * Chain registry plane — active RPC endpoints and finality models from Postgres `chain_registry`.
  */
-import { Pool } from 'pg'
+import type { Pool } from 'pg'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { createDatabaseAnchorPool } from '@legion/core/logic/database-anchor'
 
 import { normalizeDatabaseConnectionString } from '../lib/database-anchor.js'
 
@@ -18,7 +19,10 @@ function getChainRegistryPool(): Pool {
   const envMaxRaw = process.env['DATABASE_POOL_MAX']?.trim()
   const envMax = envMaxRaw ? Number(envMaxRaw) : NaN
   const poolMax = Number.isFinite(envMax) && envMax > 0 ? Math.floor(envMax) : 20
-  pool = new Pool({ connectionString, max: poolMax, connectionTimeoutMillis: 10_000 })
+  pool = createDatabaseAnchorPool(connectionString, {
+    max: poolMax,
+    connectionTimeoutMillis: 10_000,
+  })
   return pool
 }
 

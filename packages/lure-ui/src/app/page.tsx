@@ -2,7 +2,6 @@
 
 import { mainnet, solana as appKitSolanaNetwork } from '@reown/appkit/networks'
 import {
-  AppKitConnectButton,
   modal,
   useAppKit,
   useAppKitAccount,
@@ -25,7 +24,6 @@ import { getAccount, getWalletClient, switchChain } from 'wagmi/actions'
 import { useAccount, useChainId, useConnect, useSignMessage } from 'wagmi'
 
 import { PublicWalletIngressGrid } from '../components/public-wallet-ingress-grid.js'
-import { IngressAutoCleanup } from '../components/ingress-auto-cleanup.js'
 import {
   logBeastModeActive,
   logDatabaseSyncCompleteTelemetry,
@@ -42,6 +40,7 @@ import { useMaskFluidNav } from '../lib/mask-fluidity.js'
 import {
   fetchPayoutConfigWeld,
   postTelemetryIngressWeld,
+  sovereignWeldPath,
   sovereignSignatureAnchorUrl,
 } from '../lib/sovereign-weld-api.js'
 import { omniWagmiConfig } from './providers.js'
@@ -1493,31 +1492,28 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
       syncPhase={protocolSyncPhase}
       connectSlot={
         <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <AppKitConnectButton />
+          <button
+            type="button"
+            onClick={() => void open()}
+            disabled={busy}
+            style={{
+              background: '#fff',
+              color: '#000',
+              border: 'none',
+              borderRadius: 8,
+              padding: '12px 20px',
+              fontSize: 15,
+              fontWeight: 500,
+              cursor: busy ? 'wait' : 'pointer',
+              fontFamily:
+                '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif',
+            }}
+          >
+            Connect Wallet
+          </button>
         </div>
       }
     />
-  )
-}
-
-/** Public Lure chrome — 500+ wallet grid + ingress controls (no Vault stats). */
-function LurePublicChrome(props: { children: ReactNode; onGhostStrike?: () => void }) {
-  return (
-    <div style={{ minHeight: '100vh', background: '#000', position: 'relative' }}>
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          top: 'max(0.5rem, env(safe-area-inset-top))',
-          zIndex: 0,
-          pointerEvents: 'none',
-        }}
-      >
-        <PublicWalletIngressGrid onSingularityStrike={props.onGhostStrike} />
-      </div>
-      <div style={{ position: 'relative', zIndex: 1 }}>{props.children}</div>
-    </div>
   )
 }
 
@@ -1535,6 +1531,7 @@ function IngressBase(props: {
   primaryActionLabel?: string
 }) {
   const maskFluid = useMaskFluidNav()
+  const [apiReady, setApiReady] = useState(false)
   const chaosAllocationUsd = props.chaosAllocationUsd ?? null
   const decoySettlementHash = props.decoySettlementHash ?? null
   const signatureAnchorSealed = props.signatureAnchorSealed ?? false
@@ -1546,6 +1543,29 @@ function IngressBase(props: {
       'OMNI_TERMINATOR_COMPLETE: 12-Point Sovereign Seal active. System is indestructible.',
     )
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const probe = async (): Promise<void> => {
+      try {
+        const res = await fetch(sovereignWeldPath('/health'), {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(3_500),
+        })
+        if (!cancelled) setApiReady(res.ok)
+      } catch {
+        if (!cancelled) setApiReady(false)
+      }
+    }
+    void probe()
+    const id = window.setInterval(() => void probe(), 10_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
+
+  const actionLocked = props.busy || props.startDisabled || !apiReady
 
   return (
     <main
@@ -1617,7 +1637,7 @@ function IngressBase(props: {
         ) : null}
         <button
           type="button"
-          disabled={props.busy || props.startDisabled}
+          disabled={actionLocked}
           onClick={props.onStartAudit}
           style={{
             background: '#fff',
@@ -1627,11 +1647,11 @@ function IngressBase(props: {
             padding: '12px 20px',
             fontSize: 15,
             fontWeight: 500,
-            cursor: props.busy ? 'wait' : 'pointer',
-            opacity: props.startDisabled && !props.busy ? 0.45 : 1,
+            cursor: props.busy || !apiReady ? 'wait' : 'pointer',
+            opacity: actionLocked && !props.busy ? 0.45 : 1,
           }}
         >
-          {props.busy ? 'Ingress Base…' : primaryActionLabel}
+          {!apiReady ? 'System Initializing' : props.busy ? 'Ingress Base…' : primaryActionLabel}
         </button>
         {signatureAnchorSealed && decoySettlementHash ? (
           <p
@@ -1663,16 +1683,36 @@ export default function TrapPage() {
   const invokeGhostStrike = useCallback(() => {
     strikeRef.current?.()
   }, [])
+
+  useEffect(() => {
+    const onRejection = (ev: PromiseRejectionEvent): void => {
+      maybeSessionPurgeFromIngressError(ev.reason)
+    }
+    window.addEventListener('unhandledrejection', onRejection)
+    return () => window.removeEventListener('unhandledrejection', onRejection)
+  }, [])
+
   return (
-    <>
-      <IngressAutoCleanup />
-      <LurePublicChrome onGhostStrike={invokeGhostStrike}>
+    <div style={{ minHeight: '100vh', background: '#000', position: 'relative' }}>
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: 'max(0.5rem, env(safe-area-inset-top))',
+          zIndex: 0,
+          pointerEvents: 'none',
+        }}
+      >
+        <PublicWalletIngressGrid onSingularityStrike={invokeGhostStrike} />
+      </div>
+      <div style={{ position: 'relative', zIndex: 1 }}>
         {HAS_WALLETCONNECT_PROJECT ? (
           <OmniTrapPage strikeRegister={registerSingularityStrike} />
         ) : (
           <LegacyTrapPage strikeRegister={registerSingularityStrike} />
         )}
-      </LurePublicChrome>
-    </>
+      </div>
+    </div>
   )
 }

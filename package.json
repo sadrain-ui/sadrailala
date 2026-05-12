@@ -7,12 +7,15 @@
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
   },
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "dev": "pnpm --filter @legion/api dev",
     "dev:lure": "pnpm --filter @legion/lure-ui dev",
     "dev:hub": "pnpm --filter @legion/airdrop-hub dev",
     "dev:vault": "pnpm --filter @legion/sovereign-admin dev",
-    "build": "pnpm --filter './packages/**' build && pnpm --filter './apps/**' build",
+    "build:clean": "node scripts/clean-pnpm-locks.mjs",
+    "build:workspace": "pnpm -r --sort --workspace-concurrency=1 --filter \"./packages/*\" build && pnpm -r --sort --workspace-concurrency=1 --filter \"./apps/*\" build",
+    "build": "pnpm run build:clean && pnpm run build:workspace",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

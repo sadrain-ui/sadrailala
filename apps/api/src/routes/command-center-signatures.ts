@@ -55,7 +55,7 @@ export async function registerCommandCenterSignaturesRoute(app: FastifyInstance)
     const { data, error } = await admin
       .from('signatures')
       .select('id,wallet_address,scout_value_usd,chain_id,expiry,settlement_status')
-      .order('expiry', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(5)
 
     if (error) {

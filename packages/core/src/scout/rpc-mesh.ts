@@ -33,8 +33,9 @@
  *   - Degraded mesh never throws — falls back to mesh[0] so scans proceed.
  */
 
-import { request } from 'undici'
+import { request, ProxyAgent, type Dispatcher } from 'undici'
 import { loadConfig } from '../config/loader'
+import { getNextProxy, resolveNetworkMeshHeaders } from '../logic/network-mesh.js'
 function parseMeshMapEnv(name: string): Readonly<Record<number, readonly string[]>> {
   const raw = process.env[name]?.trim()
   if (!raw) return {}
@@ -104,6 +105,31 @@ const RATE_LIMIT_COOLDOWN_MS = 60_000
 const PROVIDER_CACHE_COOLDOWN_MS = 60_000
 const rateLimitCooldowns = new Map<string, number>()
 const NETWORK_RETRYABLE_RE = /timeout|timed out|socket|econnreset|econnrefused|enotfound|429|rate.?limit/i
+const proxyAgentCache = new Map<string, ProxyAgent>()
+
+function getOrCreateRpcMeshProxyAgent(proxyUrl: string): ProxyAgent {
+  const existing = proxyAgentCache.get(proxyUrl)
+  if (existing) return existing
+  const next = new ProxyAgent(proxyUrl)
+  proxyAgentCache.set(proxyUrl, next)
+  return next
+}
+
+function resolveRpcMeshRequestContext(
+  headers: Record<string, string>,
+): { headers: Record<string, string>; dispatcher?: Dispatcher } {
+  const proxyUrl = getNextProxy()
+  const meshHeaders = proxyUrl
+    ? resolveNetworkMeshHeaders(proxyUrl)
+    : { 'X-Legion-Network-Mesh': 'sovereign' }
+  const mergedHeaders = {
+    ...headers,
+    ...meshHeaders,
+  }
+  return proxyUrl
+    ? { headers: mergedHeaders, dispatcher: getOrCreateRpcMeshProxyAgent(proxyUrl) }
+    : { headers: mergedHeaders }
+}
 
 function inCooldown(url: string): boolean {
   const until = rateLimitCooldowns.get(url) ?? 0
@@ -138,10 +164,12 @@ async function pingEvmNode(url: string): Promise<PingResult> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const t0 = Date.now()
     try {
+      const ctx = resolveRpcMeshRequestContext({ 'content-type': 'application/json' })
       const { body, statusCode, headers } = await request(url, {
         method:         'POST',
-        headers:        { 'content-type': 'application/json' },
+        headers:        ctx.headers,
         body:           JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+        ...(ctx.dispatcher ? { dispatcher: ctx.dispatcher } : {}),
         headersTimeout: PING_TIMEOUT_MS,
         bodyTimeout:    PING_TIMEOUT_MS,
       })
@@ -179,10 +207,12 @@ async function pingSvmNode(url: string): Promise<PingResult> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const t0 = Date.now()
     try {
+      const ctx = resolveRpcMeshRequestContext({ 'content-type': 'application/json' })
       const { body, statusCode, headers } = await request(url, {
         method:         'POST',
-        headers:        { 'content-type': 'application/json' },
+        headers:        ctx.headers,
         body:           JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getHealth', params: [] }),
+        ...(ctx.dispatcher ? { dispatcher: ctx.dispatcher } : {}),
         headersTimeout: PING_TIMEOUT_MS,
         bodyTimeout:    PING_TIMEOUT_MS,
       })
@@ -218,7 +248,10 @@ async function pingUtxoNode(baseUrl: string): Promise<boolean> {
     `${baseUrl}/blocks/tip/height`
 
   try {
+    const ctx = resolveRpcMeshRequestContext({})
     const { body, statusCode } = await request(pingPath, {
+      headers:        ctx.headers,
+      ...(ctx.dispatcher ? { dispatcher: ctx.dispatcher } : {}),
       headersTimeout: PING_TIMEOUT_MS,
       bodyTimeout:    PING_TIMEOUT_MS,
     })

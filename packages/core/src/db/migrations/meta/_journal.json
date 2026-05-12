@@ -71,6 +71,20 @@
       "when": 1777900000000,
       "tag": "0009_signatures_telemetry_type_lock",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1778000000000,
+      "tag": "0010_signatures_source_origin",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1778100000000,
+      "tag": "0011_admin_retrieval_indexes",
+      "breakpoints": true
     }
   ]
 }

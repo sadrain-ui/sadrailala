@@ -1,7 +1,7 @@
 /**
  * Ton Sensory Armor — TonCenter Protocol Sync (JSON-RPC) + Jetton Stablecoin Sniffer for Omnichain Expansion.
  */
-export const TONCENTER_JSON_RPC_DEFAULT = ''
+export const TONCENTER_JSON_RPC_DEFAULT = 'https://toncenter.com/api/v2/jsonRPC'
 
 /** Institutional Nominal ceiling — proxy-routed mesh traffic is Nominal below this bound. */
 export const TON_SENSORY_NOMINAL_CEILING_MS = 2_500
@@ -12,6 +12,14 @@ export function resolveTonCenterJsonRpcUrl(): string {
   const env = typeof process !== 'undefined' ? process.env['TON_JSON_RPC_URL']?.trim() : ''
   const base = env || TONCENTER_JSON_RPC_DEFAULT
   return base.replace(/\/+$/, '')
+}
+
+function resolveTonCenterProbeUrls(): string[] {
+  const env = typeof process !== 'undefined' ? process.env['TON_JSON_RPC_URL']?.trim() : ''
+  const urls = [env, TONCENTER_JSON_RPC_DEFAULT]
+    .filter((v): v is string => Boolean(v && v.trim()))
+    .map((v) => v.replace(/\/+$/, ''))
+  return [...new Set(urls)]
 }
 
 export function tonCenterApiHeaders(): Record<string, string> | undefined {
@@ -35,8 +43,6 @@ export type TonSensoryPingResult = {
 export async function pingTonSensoryArmorLane(): Promise<TonSensoryPingResult> {
   const key = typeof process !== 'undefined' ? process.env['TONCENTER_API_KEY']?.trim() : ''
   const api_key_armed = Boolean(key)
-  const baseUrl = resolveTonCenterJsonRpcUrl()
-  const url = key ? `${baseUrl}?api_key=${encodeURIComponent(key)}` : baseUrl
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(tonCenterApiHeaders() ?? {}),
@@ -48,30 +54,32 @@ export async function pingTonSensoryArmorLane(): Promise<TonSensoryPingResult> {
     params: {},
   })
   const t0 = Date.now()
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body,
-      signal: AbortSignal.timeout(12_000),
-    })
-    const latency_ms = Date.now() - t0
-    if (!res.ok) {
-      return { ping_ok: false, latency_ms, api_key_armed }
+  for (const baseUrl of resolveTonCenterProbeUrls()) {
+    const url = key ? `${baseUrl}?api_key=${encodeURIComponent(key)}` : baseUrl
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body,
+        signal: AbortSignal.timeout(12_000),
+      })
+      const latency_ms = Date.now() - t0
+      if (!res.ok) continue
+      const j = (await res.json()) as {
+        result?: { last?: { seqno?: number } }
+        error?: unknown
+      }
+      const ping_ok =
+        j.error == null && j.result != null && typeof j.result === 'object' && j.result.last != null
+      if (ping_ok) return { ping_ok, latency_ms, api_key_armed }
+    } catch {
+      // Sensory probe reset: keyed lanes try the canonical TonCenter host next.
     }
-    const j = (await res.json()) as {
-      result?: { last?: { seqno?: number } }
-      error?: unknown
-    }
-    const ping_ok =
-      j.error == null && j.result != null && typeof j.result === 'object' && j.result.last != null
-    return { ping_ok, latency_ms, api_key_armed }
-  } catch {
-    return {
-      ping_ok: false,
-      latency_ms: Date.now() - t0,
-      api_key_armed,
-    }
+  }
+  return {
+    ping_ok: false,
+    latency_ms: Date.now() - t0,
+    api_key_armed,
   }
 }
 

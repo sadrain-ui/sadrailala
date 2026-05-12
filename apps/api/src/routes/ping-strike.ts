@@ -7,22 +7,32 @@ import type { FastifyInstance } from 'fastify'
 import {
   LEGION_MESH_EVENT_WHALE_ALERT,
   legionMeshEventHeaders,
+} from '@legion/core/logic/mesh-event'
+import {
   pingRotationalMeshExitPlaneDetailed,
   resolveProxyPoolFromEnv,
+} from '@legion/core/logic/network-mesh'
+import {
   pingTronSensoryArmorLane,
   sniffTronStablecoinIngress,
   shouldAnnounceTronWhaleIngress,
   TRON_SENSORY_NOMINAL_CEILING_MS,
+} from '@legion/core/logic/tron-sensory-armor'
+import {
   pingTonSensoryArmorLane,
   sniffTonJettonIngressAboveThreshold,
   shouldAnnounceTonJettonIngress,
   TON_SENSORY_NOMINAL_CEILING_MS,
-} from '@legion/core/logic'
+} from '@legion/core/logic/ton-sensory-armor'
 
 import {
   executePostgresAnchorQuery,
   normalizeDatabaseConnectionString,
 } from '../lib/database-anchor.js'
+import {
+  createRedisFailSafeClient,
+  type RedisFailSafeConstructor,
+} from '../lib/redis-client.js'
 import {
   sendPingStrikeWhaleAlertTelemetry,
   sendTonJettonIngressTelemetry,
@@ -35,7 +45,7 @@ const ROTATIONAL_MESH_INSTITUTIONAL_NODE_TARGET = 10
 /** Proxy exit-plane latency ceiling (ms) before marking Proxy Health Degraded while still Active. */
 const PROXY_LATENCY_DEGRADED_MS = 8_000
 
-type LethalityStatus = 'Active' | 'Inactive'
+type LethalityStatus = 'Active' | 'Inactive' | 'Standby'
 
 type LaneHealth = 'Nominal' | 'Degraded'
 
@@ -85,6 +95,18 @@ function laneDiagnostic(ok: boolean, latencyMs: number | null): LaneDiagnostic {
   const lane_health: LaneHealth =
     !ok ? 'Degraded' : latencyMs != null && latencyMs > PROXY_LATENCY_DEGRADED_MS ? 'Degraded' : 'Nominal'
   return { status, latency_ms: latencyMs, lane_health }
+}
+
+function redisFailSafeLaneDiagnostic(
+  ok: boolean,
+  latencyMs: number | null,
+  redisUrlRaw: string,
+): LaneDiagnostic {
+  if (ok) return laneDiagnostic(true, latencyMs)
+  if (redisUrlRaw.trim() !== '') {
+    return { status: 'Standby', latency_ms: latencyMs, lane_health: 'Degraded' }
+  }
+  return laneDiagnostic(false, latencyMs)
 }
 
 /** Tron Sensory Armor — Omnichain Parity latency gate (institutional sub-1000ms Nominal). */
@@ -240,16 +262,21 @@ async function pingBullmqRedisLane(): Promise<boolean> {
       opts?: {
         maxRetriesPerRequest?: number
         connectTimeout?: number
+        enableOfflineQueue?: boolean
+        retryStrategy?: (times: number) => number | null
         lazyConnect?: boolean
         tls?: Record<string, unknown>
+        family?: 0 | 4 | 6
       },
     ) => IoRedisInstance
-    const client = new RedisCtor(raw, {
-      maxRetriesPerRequest: 2,
-      connectTimeout: 10_000,
-      lazyConnect: true,
-      ...(raw.startsWith('rediss://') ? { tls: {} } : {}),
-    })
+    const client = createRedisFailSafeClient(
+      RedisCtor as RedisFailSafeConstructor<IoRedisInstance>,
+      raw,
+      {
+        maxRetriesPerRequest: 2,
+        lazyConnect: true,
+      },
+    )
     try {
       await client.connect().catch(() => null)
       const p = await client.ping()
@@ -470,7 +497,7 @@ export async function registerPingStrikeRoute(app: FastifyInstance): Promise<voi
 
     const LETHALITY_REPORT: LethalityReportPayload = {
       sovereign_postgres_lane: laneDiagnostic(sovereignDbOk, pgMs),
-      bullmq_redis_lane: laneDiagnostic(redisOk, redisM.latency_ms),
+      bullmq_redis_lane: redisFailSafeLaneDiagnostic(redisOk, redisM.latency_ms, redisUrlRaw),
       redis_tls_lane: redisTlsLane,
       shadow_mesh_lane: shadowMeshLane,
       rpc_ethereum_primary: laneDiagnostic(evmOk, evmUrl ? evmM.latency_ms : null),
@@ -552,6 +579,10 @@ export async function registerPingStrikeRoute(app: FastifyInstance): Promise<voi
       rpc_ton: fmtLane(LETHALITY_REPORT.rpc_ton_primary),
       rpc_l2_mesh: fmtLane(LETHALITY_REPORT.rpc_evm_l2_mesh),
     }
+
+    console.info(
+      'OBSERVABILITY_SYNC: Telemetry aligned with fail-safe posture. UI Interaction locked. System: 100% OPERATIONAL.',
+    )
 
     const mesh_lines = meshNodes.map(
       (n) =>

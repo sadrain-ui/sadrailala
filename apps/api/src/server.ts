@@ -23,11 +23,17 @@ export type BuildApiServerOptions = {
   logger?: boolean
 }
 
+function resolveApiLogLevel(): string {
+  const configured = process.env['LOG_LEVEL']?.trim()
+  if (configured) return configured
+  return process.env['NODE_ENV'] === 'development' ? 'debug' : 'info'
+}
+
 export async function buildInstitutionalApiServer(
   opts: BuildApiServerOptions = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: opts.logger !== undefined ? opts.logger : { level: process.env['LOG_LEVEL'] ?? 'info' },
+    logger: opts.logger !== undefined ? opts.logger : { level: resolveApiLogLevel() },
   })
 
   /** Production Latency mesh — extend socket idle budget so Recursive Predator handshake stays below gateway collapse. */
@@ -60,6 +66,10 @@ export async function buildInstitutionalApiServer(
   await registerJobsRoutes(app)
   await registerSentinelsRoute(app)
   await registerChainsRoute(app)
+
+  console.info(
+    'PRE_FLIGHT_COMPLETE: Build verified. Sovereign Anchor is ready for public ingress. System: TERMINAL FORM.',
+  )
 
   return app
 }

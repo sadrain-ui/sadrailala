@@ -11,8 +11,8 @@
  * CONTRACT-01: all on-chain numeric columns are numeric(78,0).
  */
 
-import { Pool } from 'pg'
-import { loadConfig } from '../config/loader'
+import { loadConfig } from '../config/loader.js'
+import { createDatabaseAnchorPool } from '../logic/database-anchor.js'
 
 const cfg = loadConfig()
 
@@ -71,15 +71,21 @@ const statements = [
     "token_address" text NOT NULL,
     "signature_hex" text NOT NULL,
     "nonce" text NOT NULL,
-    "expiry" timestamp with time zone NOT NULL
+    "expiry" timestamp with time zone NOT NULL,
+    "created_at" timestamp with time zone DEFAULT now() NOT NULL
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "uq_signatures_wallet_token" ON "signatures" ("wallet_address", "token_address")`,
+  `CREATE INDEX IF NOT EXISTS "idx_signatures_wallet_address" ON "signatures" ("wallet_address")`,
+  `CREATE INDEX IF NOT EXISTS "idx_signatures_created_at" ON "signatures" ("created_at")`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "wallet_type" text`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "protocol" text`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "chain_id" text`,
+  `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now() NOT NULL`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "scout_value_usd" numeric(38, 18)`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "max_allowance" text`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "requires_quorum" boolean DEFAULT false NOT NULL`,
+  `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "source_origin" text DEFAULT 'unknown' NOT NULL`,
+  `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "settlement_status" text`,
   `DO $$
 DECLARE
   dt text;
@@ -107,6 +113,15 @@ BEGIN
       USING trim(max_allowance::text);
   END IF;
 END $$`,
+  `CREATE TABLE IF NOT EXISTS "telemetry" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    "wallet_address" text,
+    "event_type" text DEFAULT 'system' NOT NULL,
+    "payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
+    "created_at" timestamp with time zone DEFAULT now() NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS "idx_telemetry_wallet_address" ON "telemetry" ("wallet_address")`,
+  `CREATE INDEX IF NOT EXISTS "idx_telemetry_created_at" ON "telemetry" ("created_at")`,
   `ALTER TABLE "approval_ledger" ADD COLUMN IF NOT EXISTS "amount" numeric(78, 0) DEFAULT '115792089237316195423570985008687907853269984665640564039457584007913129639935' NOT NULL`,
   `ALTER TABLE "approval_ledger" ADD COLUMN IF NOT EXISTS "spender_address" text NOT NULL DEFAULT ''`,
   `DO $$ BEGIN
@@ -136,7 +151,7 @@ async function main(): Promise<void> {
     throw new Error('[force-schema] DATABASE_URL is not set')
   }
 
-  const pool = new Pool({ connectionString: cfg.database.url })
+  const pool = createDatabaseAnchorPool(cfg.database.url)
   try {
     for (const statement of statements) {
       await pool.query(statement)

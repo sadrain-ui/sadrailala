@@ -3,7 +3,7 @@
  * Validates API plane stability under sustained ingress (default: 500 requests / 60s).
  *
  * Prerequisites (institutional stress lane):
- * - API listening at `STRESS_TEST_BASE_URL` (default http://127.0.0.1:4000)
+ * - API listening at `STRESS_TEST_BASE_URL`
  * - Visual Shadow lane (fast 200): API `SIGNATURE_ANCHOR_SIM_MODE=1` and this script `STRESS_TEST_VISUAL_SHADOW=1`
  *
  * Run:
@@ -13,8 +13,11 @@
  */
 
 const DEFAULT_BASE =
-  (typeof process !== 'undefined' && process.env['STRESS_TEST_BASE_URL']?.trim()) ||
-  'http://127.0.0.1:4000'
+  typeof process !== 'undefined' && process.env['STRESS_TEST_BASE_URL']?.trim()
+
+if (!DEFAULT_BASE) {
+  throw new Error('STRESS_TEST_BASE_URL is required for telemetry saturation runs.')
+}
 
 /** Target throughput: POST /api/signature-anchor — 500 / minute */
 const REQUESTS_PER_MINUTE = 500

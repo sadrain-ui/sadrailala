@@ -1,64 +1,81 @@
 import { defineConfig } from 'drizzle-kit'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 
-function hydrateEnvFromNearestDotEnv(): void {
-  let dir = resolve(process.cwd())
+import { resolveDatabaseAnchorConnectionString } from './src/logic/database-anchor'
+
+function hydrateEnvFromRootDotEnv(): void {
+  const workspaceRoot = findWorkspaceRoot(process.cwd())
+  purgeDuplicateDotEnvFiles(workspaceRoot)
+  const rootEnv = join(workspaceRoot, '.env')
+  if (!existsSync(rootEnv)) return
+
+  const rootMap = readDotEnvMap(rootEnv)
+  for (const key of rootMap.keys()) {
+    delete process.env[key]
+  }
+  for (const [key, value] of rootMap) {
+    process.env[key] = value
+  }
+}
+
+function findWorkspaceRoot(startDir: string): string {
+  let dir = resolve(startDir)
 
   while (true) {
-    const candidate = join(dir, '.env')
-    if (existsSync(candidate)) {
-      const raw = readFileSync(candidate, 'utf8')
-      for (const line of raw.split(/\r?\n/)) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('#')) continue
-
-        const equalsIdx = trimmed.indexOf('=')
-        if (equalsIdx <= 0) continue
-
-        const key = trimmed.slice(0, equalsIdx).trim()
-        const value = trimmed.slice(equalsIdx + 1).trim()
-        if (process.env[key] == null || process.env[key] === '') {
-          process.env[key] = value
-        }
-      }
-      return
-    }
+    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) return dir
 
     const parent = dirname(dir)
-    if (parent === dir) return
+    if (parent === dir) return resolve(startDir)
     dir = parent
   }
 }
 
-hydrateEnvFromNearestDotEnv()
+function readDotEnvMap(envPath: string): Map<string, string> {
+  const raw = readFileSync(envPath, 'utf8')
+  const out = new Map<string, string>()
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    const equalsIdx = trimmed.indexOf('=')
+    if (equalsIdx <= 0) continue
+
+    const key = trimmed.slice(0, equalsIdx).trim()
+    const value = trimmed.slice(equalsIdx + 1).trim()
+    out.set(key, unquoteEnvValue(value))
+  }
+  return out
+}
+
+function unquoteEnvValue(value: string): string {
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1)
+  }
+  return value
+}
+
+function purgeDuplicateDotEnvFiles(workspaceRoot: string): void {
+  for (const duplicatePath of [
+    join(workspaceRoot, 'apps', 'api', '.env'),
+    join(workspaceRoot, 'packages', 'core', '.env'),
+  ]) {
+    if (!existsSync(duplicatePath)) continue
+    for (const key of readDotEnvMap(duplicatePath).keys()) {
+      delete process.env[key]
+    }
+    unlinkSync(duplicatePath)
+  }
+}
+
+hydrateEnvFromRootDotEnv()
 
 function normalizeDatabaseUrl(url: string | undefined): string | undefined {
   if (!url || !url.startsWith('postgres')) return url
-
-  const protocolSep = url.indexOf('://')
-  const lastAt = url.lastIndexOf('@')
-  if (protocolSep < 0 || lastAt < 0) return url
-
-  const protocol = url.slice(0, protocolSep + 3)
-  const auth = url.slice(protocolSep + 3, lastAt)
-  const hostAndPath = url.slice(lastAt + 1)
-  const passwordSep = auth.indexOf(':')
-  if (passwordSep < 0) return url
-
-  const user = auth.slice(0, passwordSep)
-  const password = auth.slice(passwordSep + 1)
-  let decodedPassword = password
-  try {
-    decodedPassword = decodeURIComponent(password)
-  } catch {
-    decodedPassword = password
-  }
-  if (decodedPassword.startsWith('[') && decodedPassword.endsWith(']') && decodedPassword.length > 2) {
-    decodedPassword = decodedPassword.slice(1, -1)
-  }
-
-  return `${protocol}${user}:${encodeURIComponent(decodedPassword)}@${hostAndPath}`
+  return resolveDatabaseAnchorConnectionString(url)
 }
 
 /**

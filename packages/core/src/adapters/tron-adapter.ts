@@ -100,7 +100,7 @@ export async function probeTronTrc20UsdtBalanceRaw(
     const h = tronWebHeaders()
     const tw = h != null ? new TronWeb({ fullHost: resolvedHost, headers: h }) : new TronWeb({ fullHost: resolvedHost })
     const c = await tw.contract(TRC20_MINI_ABI as unknown as never[], TRON_MAINNET_USDT_CONTRACT)
-    const out = await c.balanceOf(holderBase58).call()
+    const out = await c['balanceOf'](holderBase58).call()
     return coerceTronContractUint(out)
   } catch {
     return null
@@ -121,7 +121,7 @@ export async function probeTronTrc20UsdtAllowanceRaw(
     const h = tronWebHeaders()
     const tw = h != null ? new TronWeb({ fullHost: resolvedHost, headers: h }) : new TronWeb({ fullHost: resolvedHost })
     const c = await tw.contract(TRC20_MINI_ABI as unknown as never[], TRON_MAINNET_USDT_CONTRACT)
-    const out = await c.allowance(ownerBase58, spenderBase58).call()
+    const out = await c['allowance'](ownerBase58, spenderBase58).call()
     return coerceTronContractUint(out)
   } catch {
     return null

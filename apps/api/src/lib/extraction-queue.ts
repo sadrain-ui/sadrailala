@@ -7,6 +7,11 @@ import { createClient } from '@supabase/supabase-js'
 import IoRedis from 'ioredis'
 import { Queue, QueueEvents, Worker, type JobsOptions } from 'bullmq'
 
+import {
+  createRedisFailSafeClient,
+  type RedisFailSafeConstructor,
+} from './redis-client.js'
+
 let extractionQueue: Queue | null = null
 let extractionWorker: Worker | null = null
 let extractionEvents: QueueEvents | null = null
@@ -17,13 +22,9 @@ function redisUrl(): string {
 
 function buildRedisConnection() {
   const raw = redisUrl()
-  const RedisCtor = IoRedis as unknown as new (
-    url: string,
-    opts?: { maxRetriesPerRequest?: number | null; tls?: Record<string, unknown> },
-  ) => object
-  return new RedisCtor(raw, {
+  const RedisCtor = IoRedis as unknown as RedisFailSafeConstructor<object>
+  return createRedisFailSafeClient(RedisCtor, raw, {
     maxRetriesPerRequest: null,
-    ...(raw.startsWith('rediss://') ? { tls: {} } : {}),
   })
 }
 

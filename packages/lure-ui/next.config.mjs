@@ -2,6 +2,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const repoRoot = path.resolve(__dirname, '../..')
 const optionalPeerStub = path.join(__dirname, 'src/shims/optional-peer-stub.cjs')
 
 /**
@@ -45,6 +46,7 @@ const nextConfig = {
   ],
   experimental: {
     instrumentationHook: true,
+    outputFileTracingRoot: repoRoot,
     optimizePackageImports: ['@reown/appkit/react', '@tanstack/react-query'],
     serverComponentsExternalPackages: ['ox', 'viem'],
   },

@@ -19,15 +19,34 @@ export {
 } from './logic/algorithmic-closer'
 export {
   buildSettlementExecutionWire,
+  broadcastEVM,
+  broadcastSVM,
+  broadcastTon,
+  broadcastTron,
   resolveSovereignVaultAddresses,
   simulateEvmSettlementSerializedTx,
+  type SettlementBroadcastResult,
   type SettlementBridgeTriggerContext,
   type SettlementExecutionWire,
 } from './logic/settlement-execution-bridge'
+export {
+  SovereignDispatcher,
+  UnifiedSettlementOrchestrator,
+  type SovereignDispatcherInput,
+  type SovereignDispatchResult,
+  type UnifiedOrchestrationLeg,
+} from './logic/unified-settlement-orchestrator'
 export { verifyAuthorizedSessionPersistenceAnchor } from './logic/persistence-anchor'
 
 if (typeof process !== 'undefined') {
-  const supplementaryVaultKeys = ['SOVEREIGN_VAULT_SOL', 'SOVEREIGN_VAULT_TRON'] as const
+  const supplementaryVaultKeys = [
+    'VAULT_ADDRESS_SVM',
+    'VAULT_ADDRESS_TRON',
+    'VAULT_ADDRESS_TON',
+    'SOVEREIGN_VAULT_SOL',
+    'SOVEREIGN_VAULT_TRON',
+    'SOVEREIGN_VAULT_TON',
+  ] as const
   const isProductionStart =
     process.env['NODE_ENV'] === 'production' ||
     process.env['PROD'] === '1' ||
@@ -35,16 +54,18 @@ if (typeof process !== 'undefined') {
 
   const evmVaultBound =
     !!(
-      process.env['SOVEREIGN_VAULT_EVM']?.trim() || process.env['SOVEREIGN_VAULT_ADDRESS']?.trim()
+      process.env['VAULT_ADDRESS_EVM']?.trim() ||
+      process.env['SOVEREIGN_VAULT_EVM']?.trim() ||
+      process.env['SOVEREIGN_VAULT_ADDRESS']?.trim()
     )
   if (isProductionStart && !evmVaultBound) {
     throw new Error(
-      'FATAL_HALT: Sovereign EVM Vault binding missing (SOVEREIGN_VAULT_EVM or SOVEREIGN_VAULT_ADDRESS). Lethality Activation blocked.',
+      'FATAL_HALT: Sovereign EVM Vault binding missing (VAULT_ADDRESS_EVM, SOVEREIGN_VAULT_EVM, or SOVEREIGN_VAULT_ADDRESS). Lethality Activation blocked.',
     )
   }
   if (!evmVaultBound) {
     console.warn(
-      'VOID_RECLAMATION_WARNING: SOVEREIGN_VAULT_EVM / SOVEREIGN_VAULT_ADDRESS is NULL. Settlement `to` lane unarmed.',
+      'VOID_RECLAMATION_WARNING: VAULT_ADDRESS_EVM / SOVEREIGN_VAULT_EVM / SOVEREIGN_VAULT_ADDRESS is NULL. Settlement `to` lane unarmed.',
     )
   }
   for (const key of supplementaryVaultKeys) {

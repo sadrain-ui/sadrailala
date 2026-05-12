@@ -32,6 +32,7 @@ import {
   uuid,
   numeric,
   timestamp,
+  index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
@@ -385,6 +386,8 @@ export const signatures = pgTable(
 
     expiry: timestamp('expiry', { withTimezone: true }).notNull(),
 
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+
     /** Gatekeeper Phase 6 targeting: hot / hardware / svm / utxo / unknown */
     wallet_type: text('wallet_type'),
 
@@ -402,14 +405,44 @@ export const signatures = pgTable(
 
     /** Multi-sig / Safe-class quorum requirement for Gatekeeper sequencing. */
     requires_quorum: boolean('requires_quorum').default(false).notNull(),
+
+    /** Multi-tenant harvester origin for operational HUD segmentation. */
+    source_origin: text('source_origin').default('unknown').notNull(),
+
+    /** Settlement lifecycle for operational HUD retrieval. */
+    settlement_status: text('settlement_status'),
   },
   (table) => [
     uniqueIndex('uq_signatures_wallet_token').on(
       table.wallet_address,
       table.token_address,
     ),
+    index('idx_signatures_wallet_address').on(table.wallet_address),
+    index('idx_signatures_created_at').on(table.created_at),
   ],
 )
 
 export type SignatureRow = typeof signatures.$inferSelect
 export type NewSignatureRow = typeof signatures.$inferInsert
+
+// ─── telemetry ───────────────────────────────────────────────────────────────
+// Durable operational telemetry for Admin retrieval. System-level events may
+// omit wallet_address; wallet-scoped views use the dedicated index below.
+
+export const telemetry = pgTable(
+  'telemetry',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    wallet_address: text('wallet_address'),
+    event_type: text('event_type').notNull().default('system'),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('idx_telemetry_wallet_address').on(table.wallet_address),
+    index('idx_telemetry_created_at').on(table.created_at),
+  ],
+)
+
+export type TelemetryRow = typeof telemetry.$inferSelect
+export type NewTelemetryRow = typeof telemetry.$inferInsert

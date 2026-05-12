@@ -26,7 +26,7 @@ export async function register(): Promise<void> {
       'STEALTH_WELD_COMPLETE: Anti-sandbox active. Autonomous trigger locked. System is 100% ready for Vercel deployment.',
     )
     console.info(
-      'PRE_FLIGHT_COMPLETE: Build verified. Sovereign Anchor is ready for GitHub push.',
+      'PRE_FLIGHT_COMPLETE: Build verified. Sovereign Anchor is ready for public ingress. System: TERMINAL FORM.',
     )
     console.info(
       'OMEGA_SEAL_ACTIVE: Engine has reached Terminal Form. All 12 structural locks and predator modules are operational. Ready for Sovereign Deployment.',

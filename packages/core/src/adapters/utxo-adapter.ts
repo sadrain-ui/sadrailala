@@ -195,7 +195,7 @@ export class UtxoAdapter extends BaseChainAdapter {
 
   /**
    * @param options.chainId  - CAIP-2 id, e.g. "utxo:mainnet". Must match chain_registry.id.
-   * @param options.rpcUrl   - Bitcoin Core JSON-RPC URL (e.g. "http://127.0.0.1:8332").
+   * @param options.rpcUrl   - Bitcoin Core JSON-RPC URL supplied from deployment env.
    * @param options.rpcUser  - RPC user (bitcoind -rpcuser).
    * @param options.rpcPass  - RPC password (bitcoind -rpcpassword).
    */

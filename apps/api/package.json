@@ -13,6 +13,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.11.0",
     "bullmq": "^5.34.5",
     "fastify": "^4.28.0",
     "@fastify/cors": "^9.0.0",
@@ -26,7 +28,8 @@
     "zod": "^3.23.0",
     "viem": "^2.0.0",
     "pino": "^9.0.0",
-    "@legion/core": "file:../../packages/core",
+    "typescript": "^5.4.0",
+    "@legion/core": "workspace:*",
     "@legion/sentinels": "workspace:*",
     "@supabase/supabase-js": "^2.49.1"
   },
@@ -36,9 +39,7 @@
     }
   },
   "devDependencies": {
-    "@types/pg": "^8.11.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   }
 }

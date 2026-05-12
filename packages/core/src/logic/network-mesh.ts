@@ -13,7 +13,7 @@ import {
   LEGION_MESH_EVENT_SETTLEMENT,
   LEGION_MESH_EVENT_WHALE_ALERT,
   type LegionMeshEventKind,
-} from './mesh-event'
+} from './mesh-event.js'
 
 const PROXY_TAINT_WINDOW_MS = 60_000
 const TIMEOUT_SIGNATURES = ['timeout', 'timed out', 'etimedout', 'und_err_connect_timeout']
@@ -27,10 +27,68 @@ let shadowMeshEmptyAnnounced = false
 const proxyAgentCache = new Map<string, ProxyAgent>()
 const proxyTaintUntilMs = new Map<string, number>()
 
+function safeDecodeProxyComponent(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function normalizeProxyAuth(auth: string): string {
+  const passwordSep = auth.indexOf(':')
+  if (passwordSep < 0) return encodeURIComponent(safeDecodeProxyComponent(auth))
+
+  const user = auth.slice(0, passwordSep)
+  const password = auth.slice(passwordSep + 1)
+  return `${encodeURIComponent(safeDecodeProxyComponent(user))}:${encodeURIComponent(
+    safeDecodeProxyComponent(password),
+  )}`
+}
+
+function normalizeProxyUrlForMesh(raw: string): string | undefined {
+  const trimmed = unquoteProxyValue(raw.trim()).trim()
+  if (!trimmed) return undefined
+
+  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+  const protocol = hasScheme ? trimmed.slice(0, trimmed.indexOf('://') + 3) : 'http://'
+  const body = hasScheme ? trimmed.slice(protocol.length) : trimmed
+  const atIdx = body.lastIndexOf('@')
+  const normalized =
+    atIdx >= 0
+      ? `${protocol}${normalizeProxyAuth(body.slice(0, atIdx))}@${body.slice(atIdx + 1)}`
+      : `${protocol}${body}`
+
+  try {
+    const url = new URL(normalized)
+    if (!url.hostname) return undefined
+    return url.toString()
+  } catch {
+    return undefined
+  }
+}
+
+function unquoteProxyValue(value: string): string {
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1)
+  }
+  return value
+}
+
+function splitProxyPoolEnv(rawPool: string): string[] {
+  return unquoteProxyValue(rawPool)
+    .split(/[\s,;|]+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+}
+
 /** Resolve HTTP(S) proxy URL fallback for Network Mesh egress. */
 export function resolveProxyUrlFromEnv(): string | undefined {
   const raw = typeof process !== 'undefined' ? process.env['PROXY_URL']?.trim() : undefined
-  return raw && raw !== '' ? raw : undefined
+  return raw && raw !== '' ? normalizeProxyUrlForMesh(raw) : undefined
 }
 
 /** Resolve Rotational Mesh proxy pool from `PROXY_POOL` (comma-separated). */
@@ -42,9 +100,10 @@ export function resolveProxyPoolFromEnv(): string[] {
 
   const parsedPool =
     rawPool
-      ?.split(/[,]+/)
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0) ?? []
+      ? splitProxyPoolEnv(rawPool)
+        .map((item) => normalizeProxyUrlForMesh(item))
+        .filter((item): item is string => item != null)
+      : []
 
   cachedProxyPool = parsedPool.length > 0 ? parsedPool : fallback ? [fallback] : []
   cachedPoolKey = cacheKey

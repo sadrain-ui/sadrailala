@@ -64,7 +64,8 @@
 
 import { randomInt }           from 'crypto'
 import { promises as dns4 }    from 'dns'
-import { request, Agent }      from 'undici'
+import { request, Agent, ProxyAgent, type Dispatcher }      from 'undici'
+import { getNextProxy, resolveNetworkMeshHeaders } from '../logic/network-mesh.js'
 
 // ─── Sieve & Mesh constants ───────────────────────────────────────────────────
 
@@ -248,6 +249,32 @@ const PROBE_AGENT = new Agent({
     lookup: (hostname, opts, cb) => DNS_CACHE.lookup(hostname, opts, cb),
   },
 })
+
+const PROBE_PROXY_AGENT_CACHE = new Map<string, ProxyAgent>()
+
+function getOrCreateProbeProxyAgent(proxyUrl: string): ProxyAgent {
+  const existing = PROBE_PROXY_AGENT_CACHE.get(proxyUrl)
+  if (existing) return existing
+  const next = new ProxyAgent(proxyUrl)
+  PROBE_PROXY_AGENT_CACHE.set(proxyUrl, next)
+  return next
+}
+
+function resolveProbeRequestContext(
+  headers: Record<string, string>,
+): { headers: Record<string, string>; dispatcher: Dispatcher } {
+  const proxyUrl = getNextProxy()
+  const meshHeaders = proxyUrl
+    ? resolveNetworkMeshHeaders(proxyUrl)
+    : { 'X-Legion-Network-Mesh': 'sovereign' }
+  return {
+    headers: {
+      ...headers,
+      ...meshHeaders,
+    },
+    dispatcher: proxyUrl ? getOrCreateProbeProxyAgent(proxyUrl) : PROBE_AGENT,
+  }
+}
 
 // ─── Alchemy managed probe map (Managed Transport Probes) ─────────────────────
 // When EVM_ALCHEMY_KEY is present at runtime, the ingest cycle prepends one
@@ -506,14 +533,15 @@ async function probeEvmNode(
 ): Promise<NodeProbeResult & { rateLimited: boolean }> {
   const t0 = Date.now()
   try {
+    const ctx = resolveProbeRequestContext({
+      'content-type': 'application/json',
+      'user-agent':   RPC_USER_AGENT,
+    })
     const { body, statusCode } = await request(url, {
       method:     'POST',
-      headers:    {
-        'content-type': 'application/json',
-        'user-agent':   RPC_USER_AGENT,
-      },
+      headers:    ctx.headers,
       body:           JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
-      dispatcher:     PROBE_AGENT,              // Concurrency Calibrated
+      dispatcher:     ctx.dispatcher,              // Concurrency Calibrated / proxy synchronized
       headersTimeout: PROBE_TIMEOUT_MS,
       bodyTimeout:    PROBE_TIMEOUT_MS,
     })
@@ -598,9 +626,10 @@ interface ChainRegistryEntry {
 async function fetchChainIdNetworkEndpoints(): Promise<Map<number, string[]>> {
   const result = new Map<number, string[]>()
   try {
+    const ctx = resolveProbeRequestContext({ 'user-agent': RPC_USER_AGENT })
     const { body, statusCode } = await request(CHAINID_NETWORK_URL, {
-      headers:        { 'user-agent': RPC_USER_AGENT },
-      dispatcher:     PROBE_AGENT,
+      headers:        ctx.headers,
+      dispatcher:     ctx.dispatcher,
       headersTimeout: 10_000,
       bodyTimeout:    15_000,
     })
@@ -631,9 +660,10 @@ async function fetchEthereumListsEndpoints(): Promise<Map<number, string[]>> {
   const fetches = [...TARGET_CHAIN_IDS].map(async chainId => {
     try {
       const url = `${ETHEREUM_LISTS_BASE}${chainId}.json`
+      const ctx = resolveProbeRequestContext({ 'user-agent': RPC_USER_AGENT })
       const { body, statusCode } = await request(url, {
-        headers:        { 'user-agent': RPC_USER_AGENT },
-        dispatcher:     PROBE_AGENT,
+        headers:        ctx.headers,
+        dispatcher:     ctx.dispatcher,
         headersTimeout: 8_000,
         bodyTimeout:    10_000,
       })
@@ -672,9 +702,10 @@ async function fetchRpcInfoEndpoints(): Promise<Map<number, string[]>> {
 
   const fetches = PROBE_PATTERNS.map(async probeUrl => {
     try {
+      const ctx = resolveProbeRequestContext({ 'user-agent': RPC_USER_AGENT })
       const { body, statusCode } = await request(probeUrl, {
-        headers:        { 'user-agent': RPC_USER_AGENT },
-        dispatcher:     PROBE_AGENT,
+        headers:        ctx.headers,
+        dispatcher:     ctx.dispatcher,
         headersTimeout: 8_000,
         bodyTimeout:    10_000,
       })
@@ -731,9 +762,10 @@ async function fetchPocketNetworkEndpoints(): Promise<Map<number, string[]>> {
 
   const fetches = POKT_PROBE_URLS.map(async probeUrl => {
     try {
+      const ctx = resolveProbeRequestContext({ 'user-agent': RPC_USER_AGENT })
       const { body, statusCode } = await request(probeUrl, {
-        headers:        { 'user-agent': RPC_USER_AGENT },
-        dispatcher:     PROBE_AGENT,
+        headers:        ctx.headers,
+        dispatcher:     ctx.dispatcher,
         headersTimeout: 8_000,
         bodyTimeout:    10_000,
       })
@@ -903,12 +935,13 @@ export class MeshIngestor {
     // (which would explain discrepancies between curl.exe and Node.js reachability).
     // Non-fatal: a failure here never blocks the ingest cycle.
     try {
+      const ctx = resolveProbeRequestContext({ 'user-agent': RPC_USER_AGENT })
       const { body: ipBody, statusCode: ipStatus } = await request(
         process.env['EGRESS_IP_CHECK_URL']?.trim() ?? 'https://api.ipify.org?format=json',
         {
           method:         'GET',
-          headers:        { 'user-agent': RPC_USER_AGENT },
-          dispatcher:     PROBE_AGENT,
+          headers:        ctx.headers,
+          dispatcher:     ctx.dispatcher,
           headersTimeout: 5_000,
           bodyTimeout:    5_000,
         },

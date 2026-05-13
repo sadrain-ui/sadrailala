@@ -28,5 +28,12 @@
     "eslint": "^8.57.0",
     "vitest": "^1.6.0",
     "prettier": "^3.3.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "viem": "^2.48.11",
+      "@wagmi/core": "2.22.1",
+      "@wagmi/connectors": "6.2.0"
+    }
   }
 }

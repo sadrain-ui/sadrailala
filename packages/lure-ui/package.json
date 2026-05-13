@@ -19,8 +19,8 @@
     "@reown/appkit-adapter-bitcoin": "1",
     "@reown/appkit-adapter-solana": "1",
     "@reown/appkit-adapter-wagmi": "1",
-    "@wagmi/connectors": "6.2.0",
-    "@wagmi/core": "2.22.1",
+    "@wagmi/connectors": "5.1.0",
+    "@wagmi/core": "2.13.0",
     "@solana/wallet-adapter-phantom": "^0.9.29",
     "@solana/wallet-adapter-solflare": "^0.6.33",
     "@solana/web3.js": "1.98.4",
@@ -31,8 +31,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^5.9.3",
-    "viem": "^2.48.11",
-    "wagmi": "^2.19.5"
+    "viem": "2.21.0",
+    "wagmi": "2.12.0"
   },
   "dependenciesMeta": {
     "@legion/core": {

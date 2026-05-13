@@ -21,6 +21,7 @@
     "./logic/tron-sensory-armor": "./dist/logic/tron-sensory-armor.js",
     "./logic/ton-sensory-armor": "./dist/logic/ton-sensory-armor.js",
     "./db/database-anchor": "./dist/db/database-anchor.js",
+    "./redis-client": "./dist/redis-client.js",
     "./network/redis-client": "./dist/network/redis-client.js",
     "./logic/sentinel": "./dist/logic/sentinel.js",
     "./logic/persistence-anchor": "./dist/logic/persistence-anchor.js",

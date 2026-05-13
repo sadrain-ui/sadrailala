@@ -1,3 +1,9 @@
+import dns from 'node:dns'
+
+if (!process.env['VERCEL']) {
+  dns.setDefaultResultOrder('ipv4first')
+}
+
 import 'dotenv/config'
 import './inject-root-env.js'
 import { verifyDatabaseAnchorOnBoot } from './lib/database-anchor.js'

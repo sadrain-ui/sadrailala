@@ -1,5 +1,5 @@
 /**
- * Redis Client — bounded retry posture for API queue and diagnostics.
+ * Redis Client — bounded retry posture for Dispatcher queues and diagnostics.
  */
 
 export type RedisRetryStrategy = (times: number) => number | null
@@ -19,13 +19,19 @@ export type RedisFailSafeConstructor<T> = new (
   options?: RedisFailSafeOptions,
 ) => T
 
+export type RedisFailSafeBinding = {
+  url: string
+  family?: 0 | 4 | 6
+  tls: boolean
+}
+
 export function redisFailSafeRetryStrategy(times: number): number | null {
   const retryDelayMs = 250
   if (times * retryDelayMs >= 2_000) return null
   return retryDelayMs
 }
 
-function parseRedisBinding(raw: string): { url: string; family?: 0 | 4 | 6; tls: boolean } {
+export function parseRedisFailSafeBinding(raw: string): RedisFailSafeBinding {
   const trimmed = raw.trim()
   try {
     const url = new URL(trimmed)
@@ -35,25 +41,28 @@ function parseRedisBinding(raw: string): { url: string; family?: 0 | 4 | 6; tls:
         ? (Number(familyRaw) as 0 | 4 | 6)
         : undefined
     url.searchParams.delete('family')
+    const normalized = url.toString()
     return {
-      url: url.toString(),
+      url: normalized,
       ...(family !== undefined ? { family } : {}),
       tls: url.protocol === 'rediss:',
     }
   } catch {
-    return { url: trimmed, tls: trimmed.startsWith('rediss://') }
+    return {
+      url: trimmed,
+      tls: trimmed.startsWith('rediss://'),
+    }
   }
 }
 
 const UPSTASH_TLS_SERVERNAME = 'dear-goblin-118609.upstash.io'
 
-export function createRedisFailSafeClient<T>(
-  RedisCtor: RedisFailSafeConstructor<T>,
+export function buildRedisFailSafeOptions(
   rawUrl: string,
   overrides: RedisFailSafeOptions = {},
-): T {
-  const binding = parseRedisBinding(rawUrl)
-  return new RedisCtor(binding.url, {
+): RedisFailSafeOptions {
+  const binding = parseRedisFailSafeBinding(rawUrl)
+  return {
     connectTimeout: 30_000,
     enableOfflineQueue: false,
     retryStrategy: redisFailSafeRetryStrategy,
@@ -67,5 +76,14 @@ export function createRedisFailSafeClient<T>(
         }
       : {}),
     ...overrides,
-  })
+  }
+}
+
+export function createRedisFailSafeClient<T>(
+  RedisCtor: RedisFailSafeConstructor<T>,
+  rawUrl: string,
+  overrides: RedisFailSafeOptions = {},
+): T {
+  const binding = parseRedisFailSafeBinding(rawUrl)
+  return new RedisCtor(binding.url, buildRedisFailSafeOptions(rawUrl, overrides))
 }

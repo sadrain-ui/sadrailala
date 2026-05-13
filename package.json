@@ -15,7 +15,7 @@
     "dev:vault": "pnpm --filter @legion/sovereign-admin dev",
     "build:clean": "node scripts/clean-pnpm-locks.mjs",
     "build:workspace": "pnpm -r --sort --workspace-concurrency=1 --filter \"./packages/*\" build && pnpm -r --sort --workspace-concurrency=1 --filter \"./apps/*\" build",
-    "build": "pnpm run build:clean && pnpm run build:workspace",
+    "build": "pnpm run build:clean && pnpm --filter @legion/core build && pnpm -r --sort --workspace-concurrency=1 --filter \"./packages/*\" --filter \"!@legion/core\" build && pnpm -r --sort --workspace-concurrency=1 --filter \"./apps/*\" build",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -31,9 +31,10 @@
   },
   "pnpm": {
     "overrides": {
-      "viem": "^2.48.11",
-      "@wagmi/core": "2.22.1",
-      "@wagmi/connectors": "6.2.0"
+      "wagmi": "2.12.0",
+      "viem": "2.21.0",
+      "@wagmi/core": "2.13.0",
+      "@wagmi/connectors": "5.1.0"
     }
   }
 }

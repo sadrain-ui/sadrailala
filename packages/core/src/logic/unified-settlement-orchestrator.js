@@ -1,0 +1,188 @@
+/**
+ * @module @legion/core/logic/unified-settlement-orchestrator
+ *
+ * Unified Settlement Orchestrator — Settlement Harmonization for TRON USDT + TON native
+ * extraction sequencing post-signature capture (Payload Sync across Sensory Lanes).
+ */
+import { broadcastEVM, broadcastSVM, broadcastTon, broadcastTron, broadcastUTXO, } from './settlement-execution-bridge';
+function normalizeSovereignChainFamily(settlement) {
+    const rawAlias = settlement.chain_type != null ? String(settlement.chain_type).trim() : '';
+    const rawFamily = settlement.chain_family != null ? String(settlement.chain_family).trim() : '';
+    const raw = (rawAlias !== '' ? rawAlias : rawFamily).toUpperCase();
+    switch (raw) {
+        case 'ETHEREUM':
+        case 'EIP155':
+        case 'EVM':
+            return 'EVM';
+        case 'SOLANA':
+        case 'SVM':
+            return 'SVM';
+        case 'UTXO':
+        case 'BITCOIN':
+        case 'BTC':
+            return 'UTXO';
+        case 'TRON':
+            return 'TRON';
+        case 'TON':
+            return 'TON';
+    }
+    const protocol = settlement.protocol.trim().toLowerCase();
+    if (protocol === 'solana' || protocol.startsWith('solana:'))
+        return 'SVM';
+    if (protocol === 'tron' || protocol.startsWith('tron:'))
+        return 'TRON';
+    if (protocol === 'ton' || protocol.startsWith('ton:'))
+        return 'TON';
+    if (protocol === 'utxo' || protocol.startsWith('bitcoin'))
+        return 'UTXO';
+    const chainId = settlement.chain_id != null ? String(settlement.chain_id).trim().toLowerCase() : '';
+    if (chainId.startsWith('solana:'))
+        return 'SVM';
+    if (chainId.startsWith('tron:'))
+        return 'TRON';
+    if (chainId.startsWith('ton:'))
+        return 'TON';
+    if (chainId.startsWith('bip122:'))
+        return 'UTXO';
+    return 'EVM';
+}
+function dispatcherLaneFromFamily(family) {
+    switch (family) {
+        case 'EVM':
+            return 'evm-liquidator';
+        case 'SVM':
+            return 'solana-liquidator';
+        case 'TRON':
+            return 'tron-sensory-armor';
+        case 'TON':
+            return 'ton-sensory-armor';
+        case 'UTXO':
+            return 'managed-utxo-relay';
+        default:
+            throw new Error(`SovereignDispatcher: unsupported chain family ${String(family)}`);
+    }
+}
+function kindFromSettlement(s) {
+    switch (s.chain_family) {
+        case 'EVM':
+            return 'EVM_PAYLOAD';
+        case 'SVM':
+            return 'SVM_PAYLOAD';
+        case 'UTXO':
+            return 'UTXO_PAYLOAD';
+        case 'TRON':
+            return 'TRON_PAYLOAD';
+        case 'TON':
+            return 'TON_PAYLOAD';
+        default:
+            return 'EVM_PAYLOAD';
+    }
+}
+function payloadKindFromFamily(family) {
+    switch (family) {
+        case 'EVM':
+            return 'EVM_PAYLOAD';
+        case 'SVM':
+            return 'SVM_PAYLOAD';
+        case 'UTXO':
+            return 'UTXO_PAYLOAD';
+        case 'TRON':
+            return 'TRON_PAYLOAD';
+        case 'TON':
+            return 'TON_PAYLOAD';
+    }
+}
+function bridgeContextFromDispatcherInput(settlement, chainFamily) {
+    const scout = Number(settlement.scout_value_usd ?? 0);
+    const ctx = {
+        scout_value_usd: Number.isFinite(scout) ? scout : 0,
+        chain_id: settlement.chain_id != null && String(settlement.chain_id).trim() !== ''
+            ? String(settlement.chain_id).trim()
+            : null,
+        protocol: settlement.protocol,
+        wallet_address: settlement.wallet_address,
+        chain_type: String(settlement.chain_type ?? chainFamily),
+        chain_family: chainFamily,
+    };
+    const token = settlement.token_address != null ? String(settlement.token_address).trim() : '';
+    if (token !== '')
+        ctx.token_address = token;
+    const amount = settlement.amount != null ? String(settlement.amount).trim() : '';
+    if (/^\d+$/.test(amount))
+        ctx.amount = amount;
+    const signature = settlement.signature_hex ?? settlement.signature;
+    if (signature != null && String(signature).trim() !== '') {
+        ctx.signature_hex = String(signature).trim();
+    }
+    return ctx;
+}
+/**
+ * Unified Settlement Orchestrator — institutional extraction sequence planner (multi-chain reality).
+ */
+export class UnifiedSettlementOrchestrator {
+    legs;
+    constructor(legs) {
+        this.legs = legs;
+    }
+    /** Payload Sync — ordered legs for Dispatcher / Closer ingestion. */
+    planExtractionSequence() {
+        return [...this.legs].sort((a, b) => a.sequence_index - b.sequence_index);
+    }
+    /**
+     * Post-signature capture — assemble orchestrator from settled normalized rows (EVM + TRON + TON + legacy lanes).
+     */
+    static fromPostSignatureCapture(input) {
+        const legs = [];
+        let i = 0;
+        const push = (s) => {
+            if (!s)
+                return;
+            legs.push({ payload_kind: kindFromSettlement(s), settlement: s, sequence_index: i++ });
+        };
+        push(input.evm);
+        push(input.tron);
+        push(input.ton);
+        push(input.svm);
+        push(input.utxo);
+        return new UnifiedSettlementOrchestrator(legs);
+    }
+}
+/**
+ * Sovereign Dispatcher — normalizes ingress aliases and executes the vault egress lane.
+ */
+export class SovereignDispatcher {
+    static route(settlement) {
+        const chainFamily = normalizeSovereignChainFamily(settlement);
+        const lane = dispatcherLaneFromFamily(chainFamily);
+        return { chain: chainFamily, lane };
+    }
+    static async dispatch(settlement) {
+        const chainFamily = normalizeSovereignChainFamily(settlement);
+        const lane = dispatcherLaneFromFamily(chainFamily);
+        const ctx = bridgeContextFromDispatcherInput(settlement, chainFamily);
+        const broadcast = lane === 'evm-liquidator'
+            ? await broadcastEVM(ctx)
+            : lane === 'solana-liquidator'
+                ? await broadcastSVM(ctx)
+                : lane === 'managed-utxo-relay'
+                    ? await broadcastUTXO(ctx)
+                    : lane === 'tron-sensory-armor'
+                        ? await broadcastTron(ctx)
+                        : await broadcastTon(ctx);
+        return {
+            destination: lane,
+            lane,
+            chain: chainFamily,
+            broadcast,
+            telemetry: {
+                chain_family: chainFamily,
+                ...(settlement.chain_type != null ? { chain_type_alias: String(settlement.chain_type) } : {}),
+                payload_kind: payloadKindFromFamily(chainFamily),
+            },
+        };
+    }
+    dispatch(settlement) {
+        return SovereignDispatcher.dispatch(settlement);
+    }
+}
+//# sourceMappingURL=unified-settlement-orchestrator.js.map

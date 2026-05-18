@@ -1,0 +1,1 @@
+{"version":3,"file":"ethereum-rpc-hot-swap.d.ts","sourceRoot":"","sources":["ethereum-rpc-hot-swap.ts"],"names":[],"mappings":"AAAA;;GAEG;AAcH,kFAAkF;AAClF,eAAO,MAAM,iCAAiC,MAAM,CAAA;AAsBpD;;GAEG;AACH,wBAAsB,+BAA+B,CAAC,MAAM,EAAE;IAC5D,UAAU,EAAE,MAAM,GAAG,SAAS,CAAA;IAC9B,SAAS,CAAC,EAAE,MAAM,CAAA;CACnB,GAAG,OAAO,CAAC,MAAM,CAAC,CAWlB"}

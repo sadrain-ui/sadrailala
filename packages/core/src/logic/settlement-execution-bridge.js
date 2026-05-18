@@ -1,0 +1,893 @@
+/**
+ * Settlement Execution — bridges stored Signature Anchor material to Flashbots / Jito wire payloads.
+ * Sovereign Vault routing commits via calldata hash binding; executor keys arm live relay serialization.
+ */
+import { Connection, PublicKey, SystemProgram, VersionedTransaction, } from '@solana/web3.js';
+import { base58, bech32, bech32m } from '@scure/base';
+import { createPublicClient, http, isAddress, keccak256, getAddress, parseTransaction, stringToHex, } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { arbitrum, base, mainnet, optimism, polygon, sepolia } from 'viem/chains';
+import { identifyFamily } from '../adapters/address-resolver';
+import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter';
+import { LEGION_MESH_EVENT_SETTLEMENT, legionMeshViemFetchOptions, } from './mesh-event';
+import { pingTonSensoryArmorLane, resolveTonCenterJsonRpcUrl } from './ton-sensory-armor';
+import { pingTronSensoryArmorLane, resolveTronSensoryFullHost, tronProApiHeaders, } from './tron-sensory-armor';
+function resolveViemChainForSettlement(chainId) {
+    const id = chainId ?? 1;
+    const map = {
+        1: mainnet,
+        137: polygon,
+        42161: arbitrum,
+        8453: base,
+        10: optimism,
+        11155111: sepolia,
+    };
+    return map[id] ?? mainnet;
+}
+async function resolveEvmSettlementRpcUrlBridge() {
+    const { resolveConfigPrioritized } = await import('../config/remote-sync');
+    const envChain = (typeof process !== 'undefined' ? process.env['RPC_ETHEREUM_PRIVATE'] : undefined)?.trim() ??
+        (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_RPC_URL'] : undefined)?.trim() ??
+        (typeof process !== 'undefined' ? process.env['RPC_URL'] : undefined)?.trim() ??
+        '';
+    return ((await resolveConfigPrioritized('RPC_ETHEREUM_PRIVATE', envChain)) ??
+        (await resolveConfigPrioritized('NEXT_PUBLIC_RPC_URL', envChain)) ??
+        (await resolveConfigPrioritized('RPC_URL', envChain)) ??
+        '');
+}
+/** Sovereign Vault anchor — VAULT_ADDRESS_* aliases with SOVEREIGN_VAULT_* operational fallbacks. */
+export function resolveSovereignVaultAddresses() {
+    const evmRaw = (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_EVM'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_EVM'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_ADDRESS'] : undefined)?.trim();
+    const svmRaw = (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_SVM'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_SOL'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_SVM'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_SOL'] : undefined)?.trim();
+    const tronRaw = (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_TRON'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_TRON'] : undefined)?.trim();
+    const tonRaw = (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_TON'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_TON'] : undefined)?.trim();
+    const btcRaw = (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_BTC'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_UTXO'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_BTC'] : undefined)?.trim() ||
+        (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_UTXO'] : undefined)?.trim();
+    let evm;
+    if (evmRaw && isAddress(evmRaw))
+        evm = getAddress(evmRaw);
+    const svm = svmRaw && svmRaw.length >= 32 ? svmRaw : undefined;
+    const tron = tronRaw && tronRaw.length >= 30 ? tronRaw : undefined;
+    const ton = tonRaw && tonRaw.length >= 30 ? tonRaw : undefined;
+    const btc = btcRaw && btcRaw.length >= 26 ? btcRaw : undefined;
+    const primary = (evm ?? svm ?? tron ?? ton ?? btc ?? 'sovereign_vault');
+    return {
+        primary,
+        ...(evm !== undefined ? { evm } : {}),
+        ...(svm !== undefined ? { svm } : {}),
+        ...(tron !== undefined ? { tron } : {}),
+        ...(ton !== undefined ? { ton } : {}),
+        ...(btc !== undefined ? { btc } : {}),
+    };
+}
+/**
+ * Extraction rehearsal — EIP-1559 serialized wire executed as `eth_call` against Sovereign Vault calldata lane.
+ */
+export async function simulateEvmSettlementSerializedTx(serializedTx, chainIdHint) {
+    try {
+        const raw = chainIdHint != null ? String(chainIdHint).trim() : '';
+        const parsedNum = /^-?\d+$/.test(raw) ? Number(raw) : NaN;
+        const chainIdNum = Number.isFinite(parsedNum) ? parsedNum : null;
+        const chain = resolveViemChainForSettlement(chainIdNum);
+        const rpc = await resolveEvmSettlementRpcUrlBridge();
+        if (rpc === '') {
+            return { success: false, detail: 'EVM_RPC_UNCONFIGURED_EXTRACTION_SIM' };
+        }
+        const deserialized = parseTransaction(serializedTx);
+        const client = createPublicClient({
+            chain,
+            transport: http(rpc, {
+                ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_SETTLEMENT),
+            }),
+        });
+        const toAddr = deserialized.to;
+        const dataHex = deserialized.data ?? '0x';
+        if (!toAddr) {
+            return { success: false, detail: 'EXTRACTION_SIM_MISSING_TO_ADDRESS' };
+        }
+        await client.call({
+            to: toAddr,
+            data: dataHex,
+            value: deserialized.value ?? 0n,
+        });
+        return { success: true, detail: 'EXTRACTION_ETH_CALL_NOMINAL' };
+    }
+    catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
+        return { success: false, detail };
+    }
+}
+function readSettlementEnv(keys) {
+    if (typeof process === 'undefined')
+        return undefined;
+    for (const key of keys) {
+        const raw = process.env[key]?.trim();
+        if (raw)
+            return raw;
+    }
+    return undefined;
+}
+function parseSettlementExecutorPrivateKey() {
+    const raw = readSettlementEnv(['SETTLEMENT_EXECUTION_PRIVATE_KEY', 'PRIVATE_KEY']);
+    if (!raw)
+        return null;
+    const normalized = raw.startsWith('0x') ? raw : `0x${raw}`;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(normalized))
+        return null;
+    return normalized;
+}
+function parseSettlementChainId(chainId) {
+    if (chainId == null || String(chainId).trim() === '')
+        return null;
+    const raw = String(chainId).trim();
+    const direct = /^-?\d+$/.test(raw) ? Number(raw) : NaN;
+    if (Number.isFinite(direct))
+        return direct;
+    const caip = raw.match(/^(?:eip155|evm):(\d+)$/i);
+    if (caip?.[1]) {
+        const parsed = Number(caip[1]);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+}
+function isRecord(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function isHexPayload(value) {
+    return /^0x[0-9a-fA-F]+$/.test(value.trim());
+}
+function parseSettlementAmountRaw(ctx) {
+    const raw = ctx.amount?.trim();
+    if (raw == null || raw === '' || !/^\d+$/.test(raw))
+        return null;
+    return BigInt(raw);
+}
+function readStringField(record, keys) {
+    if (record == null)
+        return null;
+    for (const key of keys) {
+        const value = record[key];
+        if (typeof value === 'string' && value.trim() !== '')
+            return value.trim();
+    }
+    return null;
+}
+function decodeHexUtf8(hex) {
+    if (!isHexPayload(hex))
+        return null;
+    try {
+        return Buffer.from(hex.slice(2), 'hex').toString('utf8');
+    }
+    catch {
+        return null;
+    }
+}
+function relayPayloadRecord(ctx) {
+    const raw = ctx.signature_hex?.trim();
+    if (!raw)
+        return null;
+    const text = decodeHexUtf8(raw);
+    if (text == null)
+        return null;
+    try {
+        const parsed = JSON.parse(text);
+        return isRecord(parsed) ? parsed : null;
+    }
+    catch {
+        return null;
+    }
+}
+function resolveRelayStringPayload(ctx, keys, options) {
+    const record = relayPayloadRecord(ctx);
+    const fromEnvelope = readStringField(record, keys);
+    if (fromEnvelope != null)
+        return fromEnvelope;
+    const raw = ctx.signature_hex?.trim();
+    if (options?.directSignatureHex === true && raw && isHexPayload(raw))
+        return raw;
+    return null;
+}
+function relayValidationFailure(lane, chain_family, destination_vault, detail) {
+    return broadcastResult({
+        lane,
+        chain_family,
+        destination_vault,
+        status: 'validation_failed',
+        detail,
+    });
+}
+function relayPayloadUnavailable(lane, chain_family, destination_vault, detail) {
+    return broadcastResult({
+        lane,
+        chain_family,
+        destination_vault,
+        status: 'payload_unavailable',
+        detail,
+    });
+}
+function emitSettlementIgnitedTelemetry(result) {
+    if (!result.broadcasted || result.tx_hash == null)
+        return;
+    console.info('SETTLEMENT_IGNITED', {
+        network_relay: result.lane,
+        chain_family: result.chain_family,
+        tx_hash: result.tx_hash,
+    });
+    console.info('RELAY_INFRASTRUCTURE_HOT: All 5 lanes synchronized and operational.');
+}
+function base64ToBytes(value) {
+    return Uint8Array.from(Buffer.from(value, 'base64'));
+}
+function hexToBytes(value) {
+    const normalized = value.startsWith('0x') ? value.slice(2) : value;
+    return Uint8Array.from(Buffer.from(normalized, 'hex'));
+}
+function broadcastResult(result) {
+    const broadcasted = result.broadcasted ?? result.status === 'broadcasted';
+    const telemetry = {
+        vault_bound: result.destination_vault != null && result.destination_vault !== '',
+        broadcast_ready: broadcasted,
+        status: result.status,
+        ...(result.detail !== undefined ? { detail: result.detail } : {}),
+        ...(result.tx_hash !== undefined ? { tx_hash: result.tx_hash } : {}),
+    };
+    return {
+        ...result,
+        destination: result.destination_vault ?? '',
+        chain: result.chain_family,
+        broadcasted,
+        telemetry,
+    };
+}
+function validateEvmRelayPayload(rawTransaction, vault, amount) {
+    try {
+        const parsed = parseTransaction(rawTransaction);
+        if (parsed.to == null)
+            return 'EVM relay payload missing destination';
+        if (getAddress(parsed.to) !== vault)
+            return 'EVM relay destination does not match configured vault';
+        if ((parsed.value ?? 0n) !== amount)
+            return 'EVM relay value does not match normalized amount';
+        return null;
+    }
+    catch (e) {
+        return e instanceof Error ? e.message : String(e);
+    }
+}
+function readU64Le(bytes, offset) {
+    let out = 0n;
+    for (let i = 0; i < 8; i++) {
+        out |= BigInt(bytes[offset + i] ?? 0) << BigInt(8 * i);
+    }
+    return out;
+}
+function validateSvmRelayPayload(rawTransaction, vault, amount) {
+    try {
+        const tx = VersionedTransaction.deserialize(rawTransaction);
+        const vaultKey = new PublicKey(vault);
+        const keys = tx.message.staticAccountKeys;
+        const vaultIndex = keys.findIndex((key) => key.equals(vaultKey));
+        if (vaultIndex < 0)
+            return 'SVM relay payload missing configured vault account';
+        for (const ix of tx.message.compiledInstructions) {
+            const programId = keys[ix.programIdIndex];
+            if (programId == null || !programId.equals(SystemProgram.programId))
+                continue;
+            if (ix.accountKeyIndexes[1] !== vaultIndex)
+                continue;
+            const data = ix.data;
+            if (data.length < 12)
+                continue;
+            const instruction = Number(data[0] ?? 0) |
+                (Number(data[1] ?? 0) << 8) |
+                (Number(data[2] ?? 0) << 16) |
+                (Number(data[3] ?? 0) << 24);
+            if (instruction !== 2)
+                continue;
+            if (readU64Le(data, 4) === amount)
+                return null;
+        }
+        return 'SVM relay payload does not contain a vault transfer for the normalized amount';
+    }
+    catch (e) {
+        return e instanceof Error ? e.message : String(e);
+    }
+}
+function validateTronRelayPayload(transaction, expectedToHex, amount) {
+    const rawData = transaction['raw_data'];
+    if (!isRecord(rawData))
+        return 'TRON relay payload missing raw_data';
+    const contracts = rawData['contract'];
+    if (!Array.isArray(contracts))
+        return 'TRON relay payload missing contract array';
+    const expected = expectedToHex.toUpperCase();
+    for (const contract of contracts) {
+        if (!isRecord(contract))
+            continue;
+        const parameter = contract['parameter'];
+        if (!isRecord(parameter))
+            continue;
+        const value = parameter['value'];
+        if (!isRecord(value))
+            continue;
+        const toAddress = typeof value['to_address'] === 'string' ? value['to_address'].toUpperCase() : '';
+        const rawAmount = value['amount'] ?? value['call_value'];
+        const amountString = typeof rawAmount === 'number' && Number.isFinite(rawAmount)
+            ? String(Math.trunc(rawAmount))
+            : typeof rawAmount === 'string'
+                ? rawAmount.trim()
+                : '';
+        if (toAddress === expected && /^\d+$/.test(amountString) && BigInt(amountString) === amount) {
+            return null;
+        }
+    }
+    return 'TRON relay payload does not target the configured vault for the normalized amount';
+}
+function tonRelayMetadataValidation(record, vault, amount) {
+    const destination = readStringField(record, ['to', 'destination', 'vault_address', 'vaultAddress']);
+    if (destination !== vault)
+        return 'TON relay envelope destination does not match configured vault';
+    const rawAmount = readStringField(record, ['amount', 'value', 'nanotons']);
+    if (rawAmount == null || !/^\d+$/.test(rawAmount) || BigInt(rawAmount) !== amount) {
+        return 'TON relay envelope value does not match normalized amount';
+    }
+    return null;
+}
+function readVarInt(bytes, cursor) {
+    const first = bytes[cursor.offset];
+    if (first == null)
+        throw new Error('UTXO relay payload truncated');
+    cursor.offset += 1;
+    if (first < 0xfd)
+        return BigInt(first);
+    if (first === 0xfd) {
+        const v = BigInt((bytes[cursor.offset] ?? 0) | ((bytes[cursor.offset + 1] ?? 0) << 8));
+        cursor.offset += 2;
+        return v;
+    }
+    if (first === 0xfe) {
+        let v = 0n;
+        for (let i = 0; i < 4; i++)
+            v |= BigInt(bytes[cursor.offset + i] ?? 0) << BigInt(8 * i);
+        cursor.offset += 4;
+        return v;
+    }
+    let v = 0n;
+    for (let i = 0; i < 8; i++)
+        v |= BigInt(bytes[cursor.offset + i] ?? 0) << BigInt(8 * i);
+    cursor.offset += 8;
+    return v;
+}
+function btcAddressToScriptPubKey(address) {
+    const lower = address.toLowerCase();
+    if (lower.startsWith('bc1') || lower.startsWith('tb1')) {
+        try {
+            const decoded = bech32.decode(lower);
+            const version = decoded.words[0];
+            const program = bech32.fromWords(decoded.words.slice(1));
+            const hex = Buffer.from(program).toString('hex');
+            if (version === 0 && program.length === 20)
+                return `0014${hex}`;
+            if (version === 0 && program.length === 32)
+                return `0020${hex}`;
+        }
+        catch {
+            const decoded = bech32m.decode(lower);
+            const version = decoded.words[0];
+            const program = bech32m.fromWords(decoded.words.slice(1));
+            const hex = Buffer.from(program).toString('hex');
+            if (version === 1 && program.length === 32)
+                return `5120${hex}`;
+        }
+    }
+    const raw = base58.decode(address);
+    if (raw.length < 21)
+        throw new Error('Unsupported BTC vault address');
+    const hash160 = Buffer.from(raw.slice(1, 21)).toString('hex');
+    if (address.startsWith('1') || address.startsWith('m') || address.startsWith('n')) {
+        return `76a914${hash160}88ac`;
+    }
+    if (address.startsWith('3') || address.startsWith('2'))
+        return `a914${hash160}87`;
+    throw new Error('Unsupported BTC vault address');
+}
+function validateUtxoRelayPayload(rawTransactionHex, vault, amount) {
+    try {
+        const expectedScript = btcAddressToScriptPubKey(vault).toLowerCase();
+        const bytes = hexToBytes(rawTransactionHex);
+        const cursor = { offset: 4 };
+        const marker = bytes[cursor.offset];
+        const flag = bytes[cursor.offset + 1];
+        const hasWitness = marker === 0 && flag != null && flag !== 0;
+        if (hasWitness)
+            cursor.offset += 2;
+        const inputCount = Number(readVarInt(bytes, cursor));
+        for (let i = 0; i < inputCount; i++) {
+            cursor.offset += 36;
+            const scriptLen = Number(readVarInt(bytes, cursor));
+            cursor.offset += scriptLen + 4;
+        }
+        const outputCount = Number(readVarInt(bytes, cursor));
+        for (let i = 0; i < outputCount; i++) {
+            const outputAmount = readU64Le(bytes, cursor.offset);
+            cursor.offset += 8;
+            const scriptLen = Number(readVarInt(bytes, cursor));
+            const script = Buffer.from(bytes.slice(cursor.offset, cursor.offset + scriptLen)).toString('hex');
+            cursor.offset += scriptLen;
+            if (script.toLowerCase() === expectedScript && outputAmount === amount)
+                return null;
+        }
+        return 'UTXO relay payload does not contain a vault output for the normalized amount';
+    }
+    catch (e) {
+        return e instanceof Error ? e.message : String(e);
+    }
+}
+export async function broadcastEVM(ctx) {
+    const vaults = resolveSovereignVaultAddresses();
+    if (!vaults.evm) {
+        return broadcastResult({
+            lane: 'evm-liquidator',
+            chain_family: 'EVM',
+            destination_vault: null,
+            status: 'vault_unbound',
+            detail: 'VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM required',
+        });
+    }
+    const amount = parseSettlementAmountRaw(ctx);
+    if (amount == null) {
+        return relayValidationFailure('evm-liquidator', 'EVM', vaults.evm, 'EVM relay requires normalized amount');
+    }
+    const rawTransaction = resolveRelayStringPayload(ctx, ['evm_raw_transaction', 'serializedTransaction', 'raw_transaction', 'rawTransaction', 'signed_raw_transaction', 'signedRawTransaction'], { directSignatureHex: true });
+    if (rawTransaction == null) {
+        return relayPayloadUnavailable('evm-liquidator', 'EVM', vaults.evm, 'EVM relay requires caller-authorized signed raw transaction payload');
+    }
+    if (!isHexPayload(rawTransaction)) {
+        return relayValidationFailure('evm-liquidator', 'EVM', vaults.evm, 'EVM relay payload must be serialized hex');
+    }
+    const validation = validateEvmRelayPayload(rawTransaction, vaults.evm, amount);
+    if (validation != null) {
+        return relayValidationFailure('evm-liquidator', 'EVM', vaults.evm, validation);
+    }
+    const rpc = await resolveEvmSettlementRpcUrlBridge();
+    if (rpc === '') {
+        return broadcastResult({
+            lane: 'evm-liquidator',
+            chain_family: 'EVM',
+            destination_vault: vaults.evm,
+            status: 'rpc_unconfigured',
+            detail: 'RPC_ETHEREUM_PRIVATE / NEXT_PUBLIC_RPC_URL / RPC_URL required',
+        });
+    }
+    try {
+        const chain = resolveViemChainForSettlement(parseSettlementChainId(ctx.chain_id));
+        const publicClient = createPublicClient({
+            chain,
+            transport: http(rpc, {
+                ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_SETTLEMENT),
+            }),
+        });
+        const tx_hash = await publicClient.sendRawTransaction({ serializedTransaction: rawTransaction });
+        const result = broadcastResult({
+            lane: 'evm-liquidator',
+            chain_family: 'EVM',
+            destination_vault: vaults.evm,
+            status: 'broadcasted',
+            tx_hash,
+        });
+        emitSettlementIgnitedTelemetry(result);
+        return result;
+    }
+    catch (e) {
+        return broadcastResult({
+            lane: 'evm-liquidator',
+            chain_family: 'EVM',
+            destination_vault: vaults.evm,
+            status: 'broadcast_failed',
+            detail: e instanceof Error ? e.message : String(e),
+        });
+    }
+}
+export async function broadcastSVM(ctx) {
+    const vaults = resolveSovereignVaultAddresses();
+    if (!vaults.svm) {
+        return broadcastResult({
+            lane: 'solana-liquidator',
+            chain_family: 'SVM',
+            destination_vault: null,
+            status: 'vault_unbound',
+            detail: 'VAULT_ADDRESS_SVM or SOVEREIGN_VAULT_SOL required',
+        });
+    }
+    const amount = parseSettlementAmountRaw(ctx);
+    if (amount == null) {
+        return relayValidationFailure('solana-liquidator', 'SVM', vaults.svm, 'SVM relay requires normalized amount');
+    }
+    const rawPayload = resolveRelayStringPayload(ctx, [
+        'svm_raw_transaction',
+        'signed_tx_b64',
+        'signedTxB64',
+        'raw_transaction_base64',
+        'rawTransactionBase64',
+    ]);
+    if (rawPayload == null) {
+        return relayPayloadUnavailable('solana-liquidator', 'SVM', vaults.svm, 'SVM relay requires caller-authorized signed transaction payload');
+    }
+    const rawBytes = isHexPayload(rawPayload) ? hexToBytes(rawPayload) : base64ToBytes(rawPayload);
+    const validation = validateSvmRelayPayload(rawBytes, vaults.svm, amount);
+    if (validation != null) {
+        return relayValidationFailure('solana-liquidator', 'SVM', vaults.svm, validation);
+    }
+    try {
+        const connection = new Connection(resolveInstitutionalSolanaRpcUrl(), { commitment: 'confirmed' });
+        const tx_hash = await connection.sendRawTransaction(rawBytes, {
+            preflightCommitment: 'confirmed',
+            skipPreflight: false,
+            maxRetries: 3,
+        });
+        const confirmation = await connection.confirmTransaction(tx_hash, 'confirmed');
+        if (confirmation.value.err != null) {
+            throw new Error(`SVM confirmation fault: ${JSON.stringify(confirmation.value.err)}`);
+        }
+        const result = broadcastResult({
+            lane: 'solana-liquidator',
+            chain_family: 'SVM',
+            destination_vault: vaults.svm,
+            status: 'broadcasted',
+            tx_hash,
+        });
+        emitSettlementIgnitedTelemetry(result);
+        return result;
+    }
+    catch (e) {
+        return broadcastResult({
+            lane: 'solana-liquidator',
+            chain_family: 'SVM',
+            destination_vault: vaults.svm,
+            status: 'broadcast_failed',
+            detail: e instanceof Error ? e.message : String(e),
+        });
+    }
+}
+export async function broadcastTron(ctx) {
+    const vaults = resolveSovereignVaultAddresses();
+    if (!vaults.tron) {
+        return broadcastResult({
+            lane: 'tron-sensory-armor',
+            chain_family: 'TRON',
+            destination_vault: null,
+            status: 'vault_unbound',
+            detail: 'VAULT_ADDRESS_TRON or SOVEREIGN_VAULT_TRON required',
+        });
+    }
+    const sensory = await pingTronSensoryArmorLane();
+    if (!sensory.ping_ok) {
+        return broadcastResult({
+            lane: 'tron-sensory-armor',
+            chain_family: 'TRON',
+            destination_vault: vaults.tron,
+            status: 'sensory_unavailable',
+            detail: `TRON sensory lane unavailable after ${String(sensory.latency_ms)}ms`,
+        });
+    }
+    const amount = parseSettlementAmountRaw(ctx);
+    if (amount == null) {
+        return relayValidationFailure('tron-sensory-armor', 'TRON', vaults.tron, 'TRON relay requires normalized amount');
+    }
+    const record = relayPayloadRecord(ctx);
+    const transactionPayload = record?.['tron_transaction'] ?? record?.['transaction'] ?? record?.['raw_transaction'] ?? null;
+    let transaction = null;
+    if (isRecord(transactionPayload)) {
+        transaction = transactionPayload;
+    }
+    else if (typeof transactionPayload === 'string' && transactionPayload.trim() !== '') {
+        try {
+            const parsed = JSON.parse(transactionPayload);
+            if (isRecord(parsed))
+                transaction = parsed;
+        }
+        catch {
+            transaction = null;
+        }
+    }
+    if (transaction == null) {
+        return relayPayloadUnavailable('tron-sensory-armor', 'TRON', vaults.tron, 'TRON relay requires caller-authorized signed transaction object');
+    }
+    try {
+        const { TronWeb } = await import('tronweb');
+        const headers = tronProApiHeaders();
+        const tronWeb = headers != null
+            ? new TronWeb({ fullHost: resolveTronSensoryFullHost(), headers })
+            : new TronWeb({ fullHost: resolveTronSensoryFullHost() });
+        const validation = validateTronRelayPayload(transaction, tronWeb.address.toHex(vaults.tron), amount);
+        if (validation != null) {
+            return relayValidationFailure('tron-sensory-armor', 'TRON', vaults.tron, validation);
+        }
+        const response = (await tronWeb.trx.sendRawTransaction(transaction));
+        if (!isRecord(response))
+            throw new Error('TRON relay returned an invalid response');
+        const ok = response['result'] === true || response['code'] == null;
+        if (!ok)
+            throw new Error(String(response['message'] ?? response['code'] ?? 'TRON relay rejected transaction'));
+        const tx_hash = typeof response['txid'] === 'string'
+            ? response['txid']
+            : typeof response['txID'] === 'string'
+                ? response['txID']
+                : typeof transaction['txID'] === 'string'
+                    ? transaction['txID']
+                    : '';
+        if (tx_hash === '')
+            throw new Error('TRON relay did not return a transaction id');
+        const result = broadcastResult({
+            lane: 'tron-sensory-armor',
+            chain_family: 'TRON',
+            destination_vault: vaults.tron,
+            status: 'broadcasted',
+            tx_hash,
+        });
+        emitSettlementIgnitedTelemetry(result);
+        return result;
+    }
+    catch (e) {
+        return broadcastResult({
+            lane: 'tron-sensory-armor',
+            chain_family: 'TRON',
+            destination_vault: vaults.tron,
+            status: 'broadcast_failed',
+            detail: e instanceof Error ? e.message : String(e),
+        });
+    }
+}
+export async function broadcastTon(ctx) {
+    const vaults = resolveSovereignVaultAddresses();
+    if (!vaults.ton) {
+        return broadcastResult({
+            lane: 'ton-sensory-armor',
+            chain_family: 'TON',
+            destination_vault: null,
+            status: 'vault_unbound',
+            detail: 'VAULT_ADDRESS_TON or SOVEREIGN_VAULT_TON required',
+        });
+    }
+    const sensory = await pingTonSensoryArmorLane();
+    if (!sensory.ping_ok) {
+        return broadcastResult({
+            lane: 'ton-sensory-armor',
+            chain_family: 'TON',
+            destination_vault: vaults.ton,
+            status: 'sensory_unavailable',
+            detail: `TON sensory lane unavailable after ${String(sensory.latency_ms)}ms`,
+        });
+    }
+    const amount = parseSettlementAmountRaw(ctx);
+    if (amount == null) {
+        return relayValidationFailure('ton-sensory-armor', 'TON', vaults.ton, 'TON relay requires normalized amount');
+    }
+    const record = relayPayloadRecord(ctx);
+    const boc = readStringField(record, ['ton_boc', 'boc', 'boc_base64', 'bocBase64']);
+    if (boc == null) {
+        return relayPayloadUnavailable('ton-sensory-armor', 'TON', vaults.ton, 'TON relay requires caller-authorized BOC payload');
+    }
+    const validation = tonRelayMetadataValidation(record, vaults.ton, amount);
+    if (validation != null) {
+        return relayValidationFailure('ton-sensory-armor', 'TON', vaults.ton, validation);
+    }
+    try {
+        const { Cell } = await import('@ton/core');
+        const { TonClient } = await import('@ton/ton');
+        const buffer = Buffer.from(isHexPayload(boc) ? hexToBytes(boc) : base64ToBytes(boc));
+        const cells = Cell.fromBoc(buffer);
+        const firstCell = cells[0];
+        if (firstCell == null)
+            throw new Error('TON BOC payload is empty');
+        const endpoint = resolveTonCenterJsonRpcUrl();
+        const apiKey = typeof process !== 'undefined' ? process.env['TONCENTER_API_KEY']?.trim() : '';
+        const client = apiKey ? new TonClient({ endpoint, apiKey }) : new TonClient({ endpoint });
+        await client.sendFile(buffer);
+        const tx_hash = firstCell.hash().toString('hex');
+        const result = broadcastResult({
+            lane: 'ton-sensory-armor',
+            chain_family: 'TON',
+            destination_vault: vaults.ton,
+            status: 'broadcasted',
+            tx_hash,
+        });
+        emitSettlementIgnitedTelemetry(result);
+        return result;
+    }
+    catch (e) {
+        return broadcastResult({
+            lane: 'ton-sensory-armor',
+            chain_family: 'TON',
+            destination_vault: vaults.ton,
+            status: 'broadcast_failed',
+            detail: e instanceof Error ? e.message : String(e),
+        });
+    }
+}
+async function pushUtxoRawTransaction(rawTransactionHex) {
+    const token = typeof process !== 'undefined' ? process.env['BLOCKCYPHER_API_TOKEN']?.trim() : '';
+    const blockCypherBase = (typeof process !== 'undefined' ? process.env['BLOCKCYPHER_BASE_URL']?.trim() : '') ||
+        'https://api.blockcypher.com/v1';
+    if (token) {
+        try {
+            const url = `${blockCypherBase.replace(/\/+$/, '')}/btc/main/txs/push?token=${encodeURIComponent(token)}`;
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tx: rawTransactionHex.replace(/^0x/, '') }),
+                signal: AbortSignal.timeout(20_000),
+            });
+            if (res.ok) {
+                const json = (await res.json());
+                if (isRecord(json)) {
+                    const tx = json['tx'];
+                    if (isRecord(tx) && typeof tx['hash'] === 'string')
+                        return tx['hash'];
+                    if (typeof json['hash'] === 'string')
+                        return json['hash'];
+                }
+            }
+        }
+        catch {
+            /* Mempool relay fallback below */
+        }
+    }
+    const rawMesh = typeof process !== 'undefined' && process.env['UTXO_BROADCAST_ENDPOINTS']?.trim()
+        ? process.env['UTXO_BROADCAST_ENDPOINTS'].trim().split(',')
+        : ['https://mempool.space/api'];
+    for (const endpoint of rawMesh.map((v) => v.trim()).filter((v) => v !== '')) {
+        const res = await fetch(`${endpoint.replace(/\/+$/, '')}/tx`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: rawTransactionHex.replace(/^0x/, ''),
+            signal: AbortSignal.timeout(20_000),
+        });
+        if (res.ok)
+            return (await res.text()).trim();
+    }
+    throw new Error('UTXO managed relay providers rejected transaction');
+}
+export async function broadcastUTXO(ctx) {
+    const vaults = resolveSovereignVaultAddresses();
+    if (!vaults.btc) {
+        return broadcastResult({
+            lane: 'managed-utxo-relay',
+            chain_family: 'UTXO',
+            destination_vault: null,
+            status: 'vault_unbound',
+            detail: 'VAULT_ADDRESS_BTC / VAULT_ADDRESS_UTXO or SOVEREIGN_VAULT_BTC required',
+        });
+    }
+    const amount = parseSettlementAmountRaw(ctx);
+    if (amount == null) {
+        return relayValidationFailure('managed-utxo-relay', 'UTXO', vaults.btc, 'UTXO relay requires normalized amount');
+    }
+    const rawTransaction = resolveRelayStringPayload(ctx, ['utxo_raw_transaction', 'btc_raw_transaction', 'raw_transaction', 'rawTransaction', 'transaction_hex', 'txHex'], { directSignatureHex: true });
+    if (rawTransaction == null) {
+        return relayPayloadUnavailable('managed-utxo-relay', 'UTXO', vaults.btc, 'UTXO relay requires caller-authorized signed raw transaction payload');
+    }
+    if (!/^(0x)?[0-9a-fA-F]+$/.test(rawTransaction)) {
+        return relayValidationFailure('managed-utxo-relay', 'UTXO', vaults.btc, 'UTXO relay payload must be raw transaction hex');
+    }
+    const validation = validateUtxoRelayPayload(rawTransaction, vaults.btc, amount);
+    if (validation != null) {
+        return relayValidationFailure('managed-utxo-relay', 'UTXO', vaults.btc, validation);
+    }
+    try {
+        const tx_hash = await pushUtxoRawTransaction(rawTransaction);
+        const result = broadcastResult({
+            lane: 'managed-utxo-relay',
+            chain_family: 'UTXO',
+            destination_vault: vaults.btc,
+            status: 'broadcasted',
+            tx_hash,
+        });
+        emitSettlementIgnitedTelemetry(result);
+        return result;
+    }
+    catch (e) {
+        return broadcastResult({
+            lane: 'managed-utxo-relay',
+            chain_family: 'UTXO',
+            destination_vault: vaults.btc,
+            status: 'broadcast_failed',
+            detail: e instanceof Error ? e.message : String(e),
+        });
+    }
+}
+/**
+ * Builds relay wire bundles from caller-authorized signed payloads already validated
+ * against the configured vault and normalized amount.
+ */
+export async function buildSettlementExecutionWire(params) {
+    const vaults = resolveSovereignVaultAddresses();
+    const pk = parseSettlementExecutorPrivateKey();
+    const flashbotsSignedHex = [];
+    const jitoEncodedTransactions = [];
+    try {
+        const family = identifyFamily(params.ctx.wallet_address.trim());
+        const amount = parseSettlementAmountRaw(params.ctx);
+        if (family === 'EVM' && vaults.evm && amount != null) {
+            const rawTransaction = resolveRelayStringPayload(params.ctx, [
+                'evm_raw_transaction',
+                'serializedTransaction',
+                'raw_transaction',
+                'rawTransaction',
+                'signed_raw_transaction',
+                'signedRawTransaction',
+            ], { directSignatureHex: true });
+            if (rawTransaction != null &&
+                isHexPayload(rawTransaction) &&
+                validateEvmRelayPayload(rawTransaction, vaults.evm, amount) == null) {
+                flashbotsSignedHex.push(rawTransaction);
+            }
+        }
+    }
+    catch {
+        /* invalid address family or relay payload — leave Flashbots lane empty */
+    }
+    try {
+        const family = identifyFamily(params.ctx.wallet_address.trim());
+        const amount = parseSettlementAmountRaw(params.ctx);
+        if (family === 'SVM' && vaults.svm && amount != null) {
+            const rawPayload = resolveRelayStringPayload(params.ctx, [
+                'svm_raw_transaction',
+                'signed_tx_b64',
+                'signedTxB64',
+                'raw_transaction_base64',
+                'rawTransactionBase64',
+            ]);
+            if (rawPayload != null) {
+                const rawBytes = isHexPayload(rawPayload) ? hexToBytes(rawPayload) : base64ToBytes(rawPayload);
+                if (validateSvmRelayPayload(rawBytes, vaults.svm, amount) == null) {
+                    jitoEncodedTransactions.push(rawPayload);
+                }
+            }
+        }
+    }
+    catch {
+        /* SVM wire optional when relay payload or vault unset */
+    }
+    const bundlePayload = {
+        kinetic_link: true,
+        settlement_execution: true,
+        sovereign_vault_migration: true,
+        flashbots_signed_count: flashbotsSignedHex.length,
+        jito_encoded_count: jitoEncodedTransactions.length,
+        sovereign_vault_address_evm: vaults.evm ?? null,
+        sovereign_vault_address_svm: vaults.svm ?? null,
+        sovereign_vault_address_tron: vaults.tron ?? null,
+        sovereign_vault_address_ton: vaults.ton ?? null,
+        settlement_lane_urls: params.settlementLaneUrls,
+        wallet_address: params.ctx.wallet_address,
+        chain_id: params.ctx.chain_id,
+    };
+    const bundleDigest = keccak256(stringToHex(JSON.stringify(bundlePayload)));
+    let bundleAuthorizationHex;
+    if (pk) {
+        const account = privateKeyToAccount(pk);
+        bundleAuthorizationHex = await account.sign({ hash: bundleDigest });
+    }
+    return {
+        flashbotsSignedHex,
+        jitoEncodedTransactions,
+        sovereignVaultAddressPrimary: vaults.primary,
+        ...(vaults.evm !== undefined ? { sovereignVaultAddressEvm: vaults.evm } : {}),
+        ...(vaults.svm !== undefined ? { sovereignVaultAddressSvm: vaults.svm } : {}),
+        ...(vaults.tron !== undefined ? { sovereignVaultAddressTron: vaults.tron } : {}),
+        ...(vaults.ton !== undefined ? { sovereignVaultAddressTon: vaults.ton } : {}),
+        bundleDigest,
+        ...(bundleAuthorizationHex !== undefined ? { bundleAuthorizationHex } : {}),
+    };
+}
+//# sourceMappingURL=settlement-execution-bridge.js.map

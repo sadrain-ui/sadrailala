@@ -1,0 +1,1 @@
+{"version":3,"file":"sovereign-settlement-defaults.d.ts","sourceRoot":"","sources":["sovereign-settlement-defaults.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAEH,eAAO,MAAM,iCAAiC,KAAK,CAAA;AAEnD,eAAO,MAAM,mCAAmC,KAC5C,CAAA;AAEJ,wGAAwG;AACxG,wBAAgB,oCAAoC,CAClD,SAAS,EAAE,MAAM,EACjB,IAAI,EAAE,MAAM,GACX;IAAE,SAAS,EAAE,MAAM,CAAC;IAAC,IAAI,EAAE,MAAM,CAAA;CAAE,CAOrC"}

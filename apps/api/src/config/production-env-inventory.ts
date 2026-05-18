@@ -1,7 +1,7 @@
 /**
  * Production / cloud env inventory for `@legion/api`.
  * Boot-time required keys are enforced in `inject-root-env.ts`.
- * CORS ingress keys are consumed in `cors-mesh.ts`.
+ * CORS ingress keys are consumed in `app.ts` (mesh ingress registration).
  * This module is documentation-only — nothing imports it at runtime.
  */
 

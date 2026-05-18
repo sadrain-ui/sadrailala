@@ -5,7 +5,8 @@ import './telemetry-sender.js'
 import Fastify, { type FastifyInstance } from 'fastify'
 import fjwt from '@fastify/jwt'
 
-import { registerMultiOriginMeshIngress } from './cors-mesh.js'
+import { registerMultiOriginMeshIngress } from './app.js'
+import { registerSiweAuthRoutes } from './controllers/auth.controller.js'
 import { registerAuthRoutes } from './routes/auth.js'
 import { registerChainsRoute } from './routes/chains.js'
 import { registerCommandCenterSignaturesRoute } from './routes/command-center-signatures.js'
@@ -62,6 +63,10 @@ export async function buildInstitutionalApiServer(
   await registerCommandCenterSignaturesRoute(app)
 
   await registerAuthRoutes(app)
+  await registerSiweAuthRoutes(app)
+  console.info(
+    'INFRA_HARDENED: Vercel trap bypassed. Wallet-native auth path created. Ready for Railway strike.',
+  )
   await registerSignatureAnchorRoute(app)
   await registerKineticInternalRoutes(app)
   await registerPayoutConfigRoute(app)

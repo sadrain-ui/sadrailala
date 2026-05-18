@@ -1,0 +1,1 @@
+{"version":3,"file":"integration-sync.d.ts","sourceRoot":"","sources":["integration-sync.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAIH,MAAM,MAAM,oBAAoB,GAAG,WAAW,GAAG,iBAAiB,CAAA;AAElE,MAAM,MAAM,oBAAoB,GAAG;IACjC,yEAAyE;IACzE,wBAAwB,CAAC,EAAE,OAAO,CAAA;CACnC,CAAA;AAED;;;GAGG;AACH,wBAAgB,2BAA2B,CAAC,KAAK,CAAC,EAAE,oBAAoB,GAAG,oBAAoB,CAM9F"}

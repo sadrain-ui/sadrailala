@@ -1,17 +1,38 @@
-# PHASE 22.0 — MOCK_EXTIRPATION & ORACLE_WIRING (complete)
+# PHASE 75.0 — PRODUCTION PRE-FLIGHT VERIFICATION
 
-## Summary
+## 1. Monorepo compile (`npx pnpm build`)
 
-1. **signature-anchor (apps/api)** — Removed visual-shadow / `MOCK_SETTLEMENT_SUCCESS` early return. Replaced random `l2_mint_transaction_hash` with deterministic SHA-256 commitment digest (`wallet|nonce|expiry`). `executeSettlementIgnition` remains on every successful persist path.
+**PASSED** (exit 0, ~13 min). Full pipeline:
 
-2. **signature-anchor (lure-ui Edge)** — Same mock purge; commitment digest via Web Crypto (`crypto.subtle.digest`). No simulation branch.
+- `@legion/core` — `tsc` OK
+- `@legion/sentinels` — `tsc` OK
+- All `packages/*` and `apps/*` workspace builds OK (Next.js apps included)
 
-3. **scout.ts** — CoinGecko primary lane: `DEFAULT_COINGECKO_SIMPLE_PRICE_URL` when `COINGECKO_SIMPLE_PRICE_URL` unset; static `fallbackOracleRates()` on fetch failure.
+## 2. `apps/api/dist/index.js`
 
-4. **loader.ts** — Fail-fast: `DATABASE_URL` (normalized non-empty), `BLOCKCYPHER_API_TOKEN`, EVM/SVM arms as above. `mockMode` forced false; `LEGION_MOCK_STATE` export reflects `mockMode` (always false after successful load). Removed `LEGION_MOCK_STATE` degraded telemetry branch. Added `MOCK_PURGE_COMPLETE: Simulation branches removed. Oracle feed stabilized. Engine: LETHAL.`
+**Initial finding:** `tsc` emitted to `dist/apps/api/src/index.js`, not Docker’s `dist/index.js`.
 
-5. **page.tsx** — Removed `MOCK_SETTLEMENT_SUCCESS` handling in `applyVisualSettlementPayload`.
+**Remediation:**
 
-## Operational note
+- Added `scripts/flatten-api-dist.mjs` — normalizes nested emit to canonical `apps/api/dist/index.js`
+- Wired into `@legion/api` build: `… && tsc && node ../../scripts/flatten-api-dist.mjs`
+- Added `@legion/core/scout/asset-scanner` to `packages/core/package.json` `exports` (runtime resolution)
 
-Bootstrap now requires full Trident env at `@legion/core` import time (`LEGION_MOCK_STATE` export calls `loadConfig()`). Local/dev must supply aligned `.env` or tests must stub env before importing core.
+**Verified:** `Test-Path apps/api/dist/index.js` → `True` after build.
+
+## 3. `.gitignore` shield
+
+**PASSED** — `git check-ignore`:
+
+| Path | Rule |
+|------|------|
+| `.env` | `.env*` |
+| `node_modules` | `node_modules/` |
+| `logs/test.log` | `logs/` |
+| `tmp/foo.log` | `*.log` |
+
+Hardened with explicit `.env`, `.env.*`, and `tmp/**/*.log` entries. No `.env` / `node_modules` tracked in git index.
+
+## Telemetry
+
+**PRE_FLIGHT_PASSED: The engine is ready to break terminal bounds and ascend to cloud infrastructure.**

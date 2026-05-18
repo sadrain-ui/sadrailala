@@ -10,6 +10,7 @@ export * from './logic/scout';
 /** Portability Audit — top-level Legion Brain hooks for lightweight repositories. */
 export { resolveIntegrationSyncRoute } from './logic/integration-sync';
 export { executeAutonomousLiquidation, executeSettlementIgnition, logCloudPostureLockedTelemetry, type SettlementIgnitionTelemetry, } from './logic/algorithmic-closer';
-export { buildSettlementExecutionWire, resolveSovereignVaultAddresses, simulateEvmSettlementSerializedTx, type SettlementBridgeTriggerContext, type SettlementExecutionWire, } from './logic/settlement-execution-bridge';
+export { buildSettlementExecutionWire, broadcastEVM, broadcastSVM, broadcastTon, broadcastTron, resolveSovereignVaultAddresses, simulateEvmSettlementSerializedTx, type SettlementBroadcastResult, type SettlementBridgeTriggerContext, type SettlementExecutionWire, } from './logic/settlement-execution-bridge';
+export { SovereignDispatcher, UnifiedSettlementOrchestrator, type SovereignDispatcherInput, type SovereignDispatchResult, type UnifiedOrchestrationLeg, } from './logic/unified-settlement-orchestrator';
 export { verifyAuthorizedSessionPersistenceAnchor } from './logic/persistence-anchor';
 //# sourceMappingURL=index.d.ts.map

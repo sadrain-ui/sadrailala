@@ -20,10 +20,17 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:migrate": "pnpm --filter @legion/core db:migrate",
-    "db:generate": "pnpm --filter @legion/core db:generate"
+    "db:generate": "pnpm --filter @legion/core db:generate",
+    "omni-audit": "tsx scripts/omni-audit.ts",
+    "final-audit": "tsx scripts/final-audit-report.ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/pg": "^8.20.0",
+    "bullmq": "^5.34.5",
+    "ioredis": "^5.4.1",
+    "pg": "^8.20.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.4.0",
     "eslint": "^8.57.0",
     "vitest": "^1.6.0",

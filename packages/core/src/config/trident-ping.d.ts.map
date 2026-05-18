@@ -1,0 +1,1 @@
+{"version":3,"file":"trident-ping.d.ts","sourceRoot":"","sources":["trident-ping.ts"],"names":[],"mappings":"AAAA;;;;;;;;GAQG;AAMH,MAAM,WAAW,gBAAgB;IAC/B,QAAQ,CAAC,aAAa,EAAE,MAAM,GAAG,IAAI,CAAA;IACrC,sGAAsG;IACtG,QAAQ,CAAC,gBAAgB,EAAE,MAAM,GAAG,IAAI,CAAA;IACxC,QAAQ,CAAC,mBAAmB,EAAE,MAAM,GAAG,IAAI,CAAA;CAC5C;AAED,kDAAkD;AAClD,wBAAgB,yBAAyB,CAAC,QAAQ,EAAE,gBAAgB,GAAG,IAAI,CAE1E"}

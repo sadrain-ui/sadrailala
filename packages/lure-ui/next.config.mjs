@@ -4,6 +4,19 @@ import { fileURLToPath } from 'url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '../..')
 const optionalPeerStub = path.join(__dirname, 'src/shims/optional-peer-stub.cjs')
+const isProductionBuild = process.env.NODE_ENV === 'production'
+
+/** Production API plane — bake public client origin when only server ingress vars are set at build time. */
+function pickLegionEngineApiOrigin() {
+  const raw =
+    process.env.NEXT_PUBLIC_LEGION_ENGINE_API_URL?.trim() ||
+    process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
+    process.env.LEGION_ENGINE_API_URL?.trim() ||
+    process.env.PRODUCTION_INGRESS_ORIGIN?.trim() ||
+    process.env.PUBLIC_INGRESS_ORIGIN?.trim() ||
+    ''
+  return raw.replace(/\/+$/, '')
+}
 
 /**
  * VercelProductionManifest — Lethal Deployment environment plane.
@@ -21,8 +34,19 @@ const nextConfig = {
    * Dev: PROD is unset; production build: PROD is `1`.
    */
   env: {
-    PROD: process.env.NODE_ENV === 'production' ? '1' : '',
+    PROD: isProductionBuild ? '1' : '',
+    /** Client weld + cross-origin fetch — mirrors `resolve-legion-api-origin.ts` at compile time. */
+    NEXT_PUBLIC_LEGION_ENGINE_API_URL: pickLegionEngineApiOrigin(),
   },
+  /** Asset + bundle optimization — active for static production trees (Vercel/Railway sibling deploy). */
+  images: {
+    formats: ['image/avif', 'image/webp'],
+    minimumCacheTTL: 60,
+  },
+  compiler: {
+    removeConsole: isProductionBuild ? { exclude: ['error', 'warn'] } : false,
+  },
+  productionBrowserSourceMaps: false,
   /** Build-Time Optimization — production builds do not fail on lint or type diagnostics. */
   eslint: {
     ignoreDuringBuilds: true,
@@ -31,6 +55,7 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   poweredByHeader: false,
+  /** HTTP response compression for static + SSR assets. */
   compress: true,
   /**
    * Deployment Sanity — no global Content-Security-Policy is defined in this manifest.

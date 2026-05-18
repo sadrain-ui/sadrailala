@@ -5,17 +5,15 @@ export function isSovereignCommanderEmail(email: string | null | undefined): boo
   return email?.trim().toLowerCase() === SOVEREIGN_COMMANDER_EMAIL
 }
 
+import { resolveLegionApiOrigin } from './resolve-legion-api-origin.js'
+
 /**
  * Sovereign Commander — primary HTTP base for `legion-engine-api` (Central Hub) when deployed off Lure-UI origin.
  * Empty → same-origin Next `/api/*` (Settlement View pulls relative paths). Set `NEXT_PUBLIC_LEGION_ENGINE_API_URL`
- * on Vercel to your Fastify deployment URL (no trailing slash).
+ * or `PRODUCTION_INGRESS_ORIGIN` on the host to your Fastify/Railway deployment URL (no trailing slash).
  */
 export function resolveLegionEngineApiBase(): string {
-  const raw =
-    process.env.NEXT_PUBLIC_LEGION_ENGINE_API_URL?.trim() ||
-    process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
-    ''
-  return raw.replace(/\/+$/, '')
+  return resolveLegionApiOrigin()
 }
 
 /** Cross-Tethering — Lure (public) vs Vault (admin) client role for env / logs. */

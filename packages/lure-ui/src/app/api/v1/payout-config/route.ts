@@ -3,6 +3,8 @@
  */
 import { NextResponse } from 'next/server'
 
+import { resolveLegionApiOrigin } from '../../../../lib/resolve-legion-api-origin.js'
+
 function envBaseUsd(): number {
   const raw = process.env.PAYOUT_CONFIG_BASE_USD?.trim()
   const n = raw ? Number(raw) : 1000
@@ -27,13 +29,11 @@ function chaosAllocationUsd(seed: string): number {
 }
 
 export async function GET(req: Request) {
-  const upstream =
-    process.env.NEXT_PUBLIC_LEGION_ENGINE_API_URL?.trim() ||
-    process.env.LEGION_ENGINE_API_URL?.trim()
+  const upstream = resolveLegionApiOrigin()
 
   if (upstream) {
     const u = new URL(req.url)
-    const base = upstream.replace(/\/$/, '')
+    const base = upstream
     const r = await fetch(`${base}/api/v1/payout-config${u.search}`, { cache: 'no-store' })
     return new NextResponse(await r.text(), {
       status: r.status,

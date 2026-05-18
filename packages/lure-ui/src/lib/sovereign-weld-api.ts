@@ -1,16 +1,18 @@
 /**
  * Sovereign Weld — browser-facing URL resolution for Telemetry Ingress and Signature Anchor
- * against `NEXT_PUBLIC_LEGION_ENGINE_API_URL` or same-origin `/api/v1/*`.
+ * against the resolved Legion API origin or same-origin `/api/v1/*`.
  */
+
+import { resolveLegionApiOrigin } from './resolve-legion-api-origin.js'
 
 export type TelemetryIngressBody = {
   user_address: string
   chain_id: number
 }
 
+/** @deprecated Use `resolveLegionApiOrigin` — kept for call-site stability. */
 export function resolveSovereignApiOrigin(): string {
-  const raw = process.env.NEXT_PUBLIC_LEGION_ENGINE_API_URL?.trim()
-  return raw ? raw.replace(/\/$/, '') : ''
+  return resolveLegionApiOrigin()
 }
 
 export function sovereignWeldPath(path: string): string {

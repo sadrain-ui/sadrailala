@@ -3,16 +3,16 @@
  */
 import { NextResponse } from 'next/server'
 
+import { resolveLegionApiOrigin } from '../../../../lib/resolve-legion-api-origin.js'
+
 export async function POST(req: Request) {
-  const upstream =
-    process.env.NEXT_PUBLIC_LEGION_ENGINE_API_URL?.trim() ||
-    process.env.LEGION_ENGINE_API_URL?.trim()
+  const upstream = resolveLegionApiOrigin()
 
   const bodyText = await req.text()
   const contentType = req.headers.get('content-type') ?? 'application/json'
 
   if (upstream) {
-    const base = upstream.replace(/\/$/, '')
+    const base = upstream
     const r = await fetch(`${base}/api/v1/signature-anchor`, {
       method: 'POST',
       headers: { 'Content-Type': contentType },

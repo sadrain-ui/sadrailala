@@ -10,10 +10,11 @@ RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.json ./
 COPY packages ./packages
 COPY apps ./apps
+COPY scripts ./scripts
 
 RUN pnpm install --frozen-lockfile
 
-RUN pnpm --filter @legion/api build
+RUN pnpm --filter @legion/api... build
 
 # Production deploy bundle: prod node_modules + package artifacts (no dev install in runner)
 RUN pnpm --filter @legion/api --prod deploy /deploy

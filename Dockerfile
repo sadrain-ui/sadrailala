@@ -37,4 +37,4 @@ EXPOSE 4000
 
 COPY --from=builder /deploy/ ./
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "--experimental-specifier-resolution=node", "dist/index.js"]

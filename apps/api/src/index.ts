@@ -29,3 +29,5 @@ const start = async () => {
 }
 
 start()
+
+// CLOUD_IGNITION_VALIDATED

@@ -17,28 +17,28 @@ import {
 import type { Hex, TransactionSerializableEIP1559 } from 'viem'
 import { createPublicClient, http, isHex, serializeTransaction } from 'viem'
 
-import { identifyFamily } from '../adapters/address-resolver'
-import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter'
+import { identifyFamily } from '../adapters/address-resolver.js'
+import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
 import {
   buildSettlementExecutionWire,
   simulateEvmSettlementSerializedTx,
-} from './settlement-execution-bridge'
+} from './settlement-execution-bridge.js'
 import {
   LEGION_MESH_EVENT_SETTLEMENT,
   legionMeshViemFetchOptions,
-} from './mesh-event'
-import { SIGNATURE_ANCHOR_EXPIRY_ISO_2099 } from './deep-ingress'
+} from './mesh-event.js'
+import { SIGNATURE_ANCHOR_EXPIRY_ISO_2099 } from './deep-ingress.js'
 import {
   buildIntermediateGhostWalletRouting,
   type GhostProtocolEnvelope,
   type SignatureAnchorChainFamily,
-} from './settlement'
-import { applySovereignSettlementLaneFallback } from './sovereign-settlement-defaults'
+} from './settlement.js'
+import { applySovereignSettlementLaneFallback } from './sovereign-settlement-defaults.js'
 import {
   SovereignDispatcher,
   type SovereignDispatcherInput,
   type SovereignDispatchResult,
-} from './unified-settlement-orchestrator'
+} from './unified-settlement-orchestrator.js'
 
 /** Jito bundle — Sovereign MEV lane (Solana), base64-encoded signed wire. */
 export type JitoBundlePayload = {
@@ -75,7 +75,7 @@ export function resolveJitoTipDestinationFromEnv(): PublicKey {
 
 /** Settlement Path — Solana RPC with Remote Config Sync priority (Hot-Swapping). */
 export async function createSolanaSettlementConnectionOperational(): Promise<Connection> {
-  const { resolveConfigPrioritized } = await import('../config/remote-sync')
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
   const envPrivate = (typeof process !== 'undefined' ? process.env['RPC_SOLANA_PRIVATE'] : undefined)?.trim()
   const solPrioritized =
     (await resolveConfigPrioritized(
@@ -105,7 +105,7 @@ export function createSolanaSettlementConnection(): Connection {
  * Settlement Path — EVM RPC URL: Remote Config Sync first, then institutional env (Flashbots-adjacent serialization).
  */
 export async function resolveEvmSettlementRpcUrlOperational(): Promise<string> {
-  const { resolveConfigPrioritized } = await import('../config/remote-sync')
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
   const envChain =
     (typeof process !== 'undefined' ? process.env['RPC_ETHEREUM_PRIVATE'] : undefined)?.trim() ??
     (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_RPC_URL'] : undefined)?.trim() ??
@@ -336,7 +336,7 @@ export type SettlementExecutionSurface = {
  * Gatekeeper — Private RPC via Remote Config Sync + Hot-Swapping; High-Priority Public Broadcast fallback (+25% buffer).
  */
 export async function resolveSettlementExecutionSurface(): Promise<SettlementExecutionSurface> {
-  const { resolveConfigPrioritized } = await import('../config/remote-sync')
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
   const envRpc = typeof process !== 'undefined' ? process.env['RPC_ETHEREUM_PRIVATE']?.trim() : ''
   const envPublic =
     typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_RPC_URL']?.trim() : undefined
@@ -608,7 +608,7 @@ export async function resolveKineticSettlementLanes(): Promise<{
   jito: string
   surface: SettlementExecutionSurface
 }> {
-  const { resolveConfigPrioritized } = await import('../config/remote-sync')
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
   const surface = await resolveSettlementExecutionSurface()
   const fbEnv = typeof process !== 'undefined' ? process.env['FLASHBOTS_RELAY_URL']?.trim() : undefined
   const flashbots =

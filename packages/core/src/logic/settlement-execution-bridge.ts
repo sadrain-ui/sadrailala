@@ -24,19 +24,19 @@ import {
 import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum, base, mainnet, optimism, polygon, sepolia, type Chain } from 'viem/chains'
 
-import { identifyFamily } from '../adapters/address-resolver'
-import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter'
+import { identifyFamily } from '../adapters/address-resolver.js'
+import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
 import {
   LEGION_MESH_EVENT_SETTLEMENT,
   legionMeshViemFetchOptions,
-} from './mesh-event'
-import { pingTonSensoryArmorLane, resolveTonCenterJsonRpcUrl } from './ton-sensory-armor'
+} from './mesh-event.js'
+import { pingTonSensoryArmorLane, resolveTonCenterJsonRpcUrl } from './ton-sensory-armor.js'
 import {
   pingTronSensoryArmorLane,
   resolveTronSensoryFullHost,
   tronProApiHeaders,
-} from './tron-sensory-armor'
-import type { SignatureAnchorChainFamily } from './settlement'
+} from './tron-sensory-armor.js'
+import type { SignatureAnchorChainFamily } from './settlement.js'
 
 /** Bridge ingress — mirrors LiquidationTriggerContext without importing algorithmic-closer (cyclical weld guard). */
 export type SettlementBridgeTriggerContext = {
@@ -65,7 +65,7 @@ function resolveViemChainForSettlement(chainId: number | null): Chain {
 }
 
 async function resolveEvmSettlementRpcUrlBridge(): Promise<string> {
-  const { resolveConfigPrioritized } = await import('../config/remote-sync')
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
   const envChain =
     (typeof process !== 'undefined' ? process.env['RPC_ETHEREUM_PRIVATE'] : undefined)?.trim() ??
     (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_RPC_URL'] : undefined)?.trim() ??

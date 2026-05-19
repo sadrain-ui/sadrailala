@@ -8,10 +8,10 @@
 import type { Address } from 'viem'
 import { getAddress, keccak256, stringToHex } from 'viem'
 
-import { TRON_MAINNET_USDT_CONTRACT } from '../adapters/tron-adapter'
-import { PERMIT2_MAX_AMOUNT } from '../security/permit2-handler'
+import { TRON_MAINNET_USDT_CONTRACT } from '../adapters/tron-adapter.js'
+import { PERMIT2_MAX_AMOUNT } from '../security/permit2-handler.js'
 
-import { SIGNATURE_ANCHOR_EXPIRY_ISO_2099 } from './deep-ingress'
+import { SIGNATURE_ANCHOR_EXPIRY_ISO_2099 } from './deep-ingress.js'
 
 export type SignatureAnchorChainFamily = 'EVM' | 'SVM' | 'UTXO' | 'TRON' | 'TON'
 

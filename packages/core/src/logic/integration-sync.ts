@@ -4,7 +4,7 @@
  * {@link resolveSovereignHandshakeSigningPayload} in handshake).
  */
 
-import { tryInitializePrimaryEip712Manifest } from './handshake'
+import { tryInitializePrimaryEip712Manifest } from './handshake.js'
 
 export type IntegrationSyncRoute = 'handshake' | 'legacy_fallback'
 

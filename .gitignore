@@ -46,3 +46,9 @@ coverage/
 
 # Ephemeral key material (Gatekeeper staging only)
 packages/core/src/security/temp_keys/
+
+# Stale generated emit in sentinels src (canonical output: dist/)
+packages/sentinels/src/**/*.d.ts
+packages/sentinels/src/**/*.js
+packages/sentinels/src/**/*.js.map
+packages/sentinels/src/**/*.d.ts.map

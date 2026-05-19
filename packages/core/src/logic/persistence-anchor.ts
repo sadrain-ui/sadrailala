@@ -1,7 +1,7 @@
 /**
  * Persistence Anchor — post-upsert reconciliation vs Gatekeeper drift window (authorized session class).
  */
-import { isExpiryIsoWithinDriftWindow } from '../security/signature-timestamp-drift'
+import { isExpiryIsoWithinDriftWindow } from '../security/signature-timestamp-drift.js'
 
 export type AuthorizedSessionPersistenceAnchor = {
   drift_window_ok: boolean

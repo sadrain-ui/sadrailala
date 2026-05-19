@@ -2,7 +2,7 @@
  * Sign-In with Ethereum (EIP-4361) — wallet session bridge parallel to Supabase auth.
  * Nonces: Redis (`REDIS_URL`) when available; otherwise in-memory TTL (single-instance only).
  */
-import IoRedis from 'ioredis'
+import { Redis } from 'ioredis'
 import { generateNonce, SiweMessage } from 'siwe'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getAddress, isAddress } from 'viem'
@@ -20,9 +20,9 @@ const SIWE_NONCE_PREFIX = 'siwe:nonce:'
  */
 const memoryNonceByAddress = new Map<string, { nonce: string; expiresAt: number }>()
 
-let redisSingleton: IoRedis | null | undefined
+let redisSingleton: Redis | null | undefined
 
-function siweRedis(): IoRedis | null {
+function siweRedis(): Redis | null {
   if (redisSingleton === null) return null
   if (redisSingleton !== undefined) return redisSingleton
   const raw = process.env['REDIS_URL']?.trim()
@@ -31,7 +31,7 @@ function siweRedis(): IoRedis | null {
     return null
   }
   try {
-    const RedisCtor = IoRedis as unknown as RedisFailSafeConstructor<IoRedis>
+    const RedisCtor = Redis as unknown as RedisFailSafeConstructor<Redis>
     redisSingleton = createRedisFailSafeClient(RedisCtor, raw, {})
     return redisSingleton
   } catch {

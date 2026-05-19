@@ -1,0 +1,32 @@
+[INJECTION_PATH]: C:\Users\HP\Downloads\Legion\legion-engine\.env
+OMNI_ENV_LOCKED: All hardcoded secrets purged. Master .env injection verified. System: IMPENETRABLE.
+OMNI_ENV_ABSOLUTE: Monorepo 100% sanitized. Zero hardcoded leaks remain. System: FULLY WELDED.
+ABSOLUTE_LOCK_ENGAGED: Path resolution verified. Localhost fallback purged. System: ASCENDING.
+SIMPLICITY_PROTOCOL_ACTIVE: Injection forced. Logs de-cluttered. System: STABILIZED.
+REDIS_LANE: CONNECTED TO UPSTASH
+SYNTAX_RECALIBRATED: Operator precedence locked. Compiler conflict resolved. System: READY FOR BOOT.
+FINAL_SYNC_COMPLETE: Engine pillars are modular, portable, and 100% verified for multi-repo deployment.
+OMNICHAIN_EXPANSION_LOCKED: TRON and TON lanes active. Duopoly broken. System: UNIVERSAL LIQUIDITY BLACKHOLE.
+SETTLEMENT_HARMONIZED: Multi-chain extraction paths locked. Centurion-Strike tests passing. System: LETHAL ON ALL LANES.
+CORE_LINKAGE_RESTORED: Workspace dependencies welded. Export surface aligned. System: LURE UI COMPILER NOMINAL.
+{"level":30,"time":1779231439637,"msg":"ENV_PURGE_COMPLETE: Root .env reloaded as Sovereign source.","sentinel":"Gatekeeper","module":"config/loader","env_source":"root","env_keys":62}
+{"level":30,"time":1779231439640,"msg":"PROXY_BLUEPRINT_POOL_BOUND: proxy pool normalized for mesh egress.","sentinel":"Gatekeeper","module":"config/loader","proxy_nodes":10,"proxy_nodes_skipped":0}
+{"level":40,"time":1779231439642,"msg":"PROVISIONING_SYNC: Hybrid Provisioning Sync active","sentinel":"Gatekeeper","module":"config/loader","managed_evm":"[Managed] Active","managed_svm":"[Managed] Active","managed_utxo":"[Managed] Active — BlockCypher Token Synchronized","mesh_standby":"[Mesh] Standby — Failover Protocol Locked"}
+{"level":30,"time":1779231439703,"msg":"OMNI_SYNC: Trident Aligned. Universal Vacuum Engaged.","sentinel":"Gatekeeper","module":"config/loader","trident_alignment_locked":true,"omni_protocol_synchronized":true,"force_env_rpc":true}
+{"level":30,"time":1779231439704,"msg":"SECURITY_AUDIT_LOCKED: Local state sanitized for sovereign migration.","sentinel":"Gatekeeper","module":"config/loader","signal":"Repository Security Audit","vault_master_key_in_repo":false}
+{"level":30,"time":1779231439705,"msg":"REVERSE_WELD_COMPLETE: Engine bowing to Sovereign .env. Fail-Fast bypass engaged. System: ASCENDING.","sentinel":"Gatekeeper","module":"config/loader"}
+{"level":30,"time":1779231439706,"msg":"MOCK_PURGE_COMPLETE: Simulation branches removed. Oracle feed stabilized. Engine: LETHAL.","sentinel":"Gatekeeper","module":"config/loader","trident_alignment_locked":true,"institutional_mock_lane":false}
+{"level":30,"time":1779231439706,"msg":"DEEP_TISSUE_COMPLETE: UI elements bound. DB Anchor hardened. Proxy mesh synchronized. System: LETHAL.","sentinel":"Gatekeeper","module":"config/loader"}
+{"level":30,"time":1779231439707,"msg":"FINAL_PURGE_COMPLETE: Environment ghosts exorcised. DB Anchor welded to Session Mode. System: LETHAL.","sentinel":"Gatekeeper","module":"config/loader"}
+{"level":30,"time":1779231439707,"msg":"STABILIZER_COMPLETE: Redis fail-safe armed. Proxy parser normalized. UI hydration fixed. System: LETHAL.","sentinel":"Gatekeeper","module":"config/loader"}
+LOADER_WELDED: Environment addresses visible. Redis IPv4 forced. Telegram Heartbeat: ACTIVE.
+DATABASE_ANCHOR_ATTEMPT: host=aws-1-ap-northeast-1.pooler.supabase.com port=5432 user=postgres.glawobefkoxtvuvelekz password=[REDACTED] attempt=1 mode=Session
+{"level":30,"time":1779231441462,"msg":"TRIDENT_SIGNAL: [EVM: OK] | [SVM: OK] | [UTXO: OK]","sentinel":"Gatekeeper","module":"config/trident-ping","trident_alignment_locked":true,"signal_detail":"Omni-Protocol Synchronized","evm_probe":"Alchemy Eth Mainnet — OK","svm_probe":"Managed Solana Mainnet (SOLANA_RPC_URL lane) — OK","utxo_probe":"BlockCypher Bitcoin Mainnet — OK"}
+LANE_STATUS: TELEMETRY_WEBHOOK 200
+TELEMETRY_STANDBY: Redis offline, caching notifications locally.
+POSTGRES_ANCHOR_LOCKED: Database lane active. host=aws-1-ap-northeast-1.pooler.supabase.com port=5432 user=postgres.glawobefkoxtvuvelekz attempts=1 latency_ms=3190
+GHOST_HOST_PURGED: Database anchor aligned. Latency calibrated. System: 10/10 LETHAL.
+INFRA_HARDENED: Vercel trap bypassed. Wallet-native auth path created. Ready for Railway strike.
+PRE_FLIGHT_COMPLETE: Build verified. Sovereign Anchor is ready for public ingress. System: TERMINAL FORM.
+{"level":30,"time":1779231443055,"pid":27180,"hostname":"DESKTOP-1ILHDKJ","msg":"Server listening at http://0.0.0.0:4000"}
+LANE_STATUS: API_LISTENING host=0.0.0.0 port=4000

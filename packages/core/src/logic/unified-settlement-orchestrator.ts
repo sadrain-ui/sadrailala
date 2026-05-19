@@ -8,7 +8,7 @@
 import type {
   NormalizedSignatureAnchorSettlement,
   SignatureAnchorChainFamily,
-} from './settlement'
+} from './settlement.js'
 import {
   broadcastEVM,
   broadcastSVM,
@@ -17,7 +17,7 @@ import {
   broadcastUTXO,
   type SettlementBroadcastResult,
   type SettlementBridgeTriggerContext,
-} from './settlement-execution-bridge'
+} from './settlement-execution-bridge.js'
 
 export type UnifiedPayloadKind =
   | 'EVM_PAYLOAD'

@@ -8,8 +8,8 @@
 import { and, eq, gt } from 'drizzle-orm'
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres'
 import type { Hex } from 'viem'
-import * as schema from '../db/schema'
-import { SHADOW_SIGNATURE_ENVELOPE_PREFIX, openSignatureHexFromPersistence } from './signature-shadow-envelope'
+import * as schema from '../db/schema.js'
+import { SHADOW_SIGNATURE_ENVELOPE_PREFIX, openSignatureHexFromPersistence } from './signature-shadow-envelope.js'
 
 export type LegionDb = NodePgDatabase<typeof schema>
 

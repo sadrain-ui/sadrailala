@@ -2,12 +2,12 @@
 // All EVM interactions in Legion Engine go through this module.
 import { createPublicClient, createWalletClient, http, type Chain as ViemChain } from 'viem'
 import { mainnet, polygon, arbitrum, base } from 'viem/chains'
-import type { Chain } from '../types/index'
+import type { Chain } from '../types/index.js'
 import {
   LEGION_MESH_EVENT_SETTLEMENT,
   LEGION_MESH_EVENT_WHALE_ALERT,
   legionMeshViemFetchOptions,
-} from '../logic/mesh-event'
+} from '../logic/mesh-event.js'
 
 const VIEM_CHAIN_MAP: Record<Exclude<Chain, 'solana'>, ViemChain> = {
   ethereum: mainnet,

@@ -1,7 +1,7 @@
 // Extraction Lane state machine
 // Maps the 13-state lifecycle from docs/STATE-MACHINE.md
 
-import type { AssetExtractionEvent } from '../types/index'
+import type { AssetExtractionEvent } from '../types/index.js'
 
 type Status = AssetExtractionEvent['status']
 

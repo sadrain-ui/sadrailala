@@ -9,7 +9,7 @@
 
 import { TronWeb, utils } from 'tronweb'
 
-import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter'
+import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter.js'
 
 /** Canonical mainnet USDT (TRC-20). */
 export const TRON_MAINNET_USDT_CONTRACT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'

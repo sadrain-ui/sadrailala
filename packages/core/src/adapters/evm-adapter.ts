@@ -41,9 +41,9 @@ import {
   LEGION_MESH_EVENT_SETTLEMENT,
   type LegionMeshEventKind,
   legionMeshViemFetchOptions,
-} from '../logic/mesh-event'
-import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter'
-import { GatekeeperError } from './address-resolver'
+} from '../logic/mesh-event.js'
+import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter.js'
+import { GatekeeperError } from './address-resolver.js'
 
 // ─── Public EVM RPC Fallbacks ─────────────────────────────────────────────────
 // Ordered by latency/reliability. Used when the primary RPC returns a rotatable
@@ -385,6 +385,7 @@ export class EvmAdapter extends BaseChainAdapter {
     this.rpcFallbacks   = options.rpcFallbacks ?? EVM_PUBLIC_FALLBACKS
     this.meshEventKind  = options.meshEventKind ?? LEGION_MESH_EVENT_SETTLEMENT
 
+    // @ts-expect-error TS2589 — viem PublicClient generic depth (compile-time only)
     this.client = createPublicClient({
       chain: options.viemChain,
       // retryCount / retryDelay: 43-viem-core-standard.md §Transport Resilience
@@ -393,7 +394,7 @@ export class EvmAdapter extends BaseChainAdapter {
         retryDelay: 500,
         ...legionMeshViemFetchOptions(this.meshEventKind),
       }),
-    })
+    }) as PublicClient
   }
 
   // ─── RPC Rotation ────────────────────────────────────────────────────────────
@@ -411,7 +412,7 @@ export class EvmAdapter extends BaseChainAdapter {
         retryDelay: 300,
         ...legionMeshViemFetchOptions(this.meshEventKind),
       }),
-    })
+    }) as PublicClient
   }
 
   /**

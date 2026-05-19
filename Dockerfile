@@ -13,15 +13,19 @@ COPY packages ./packages
 COPY apps ./apps
 COPY scripts ./scripts
 
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
-# Build @legion/core first so dist/ exists before api tsc resolves it
+# Deterministic workspace build order: core → sentinels → api
 RUN pnpm --filter @legion/core build
+RUN pnpm --filter @legion/sentinels build
+RUN pnpm --filter @legion/api build
 
-# Now build api (and any other dependents)
-RUN pnpm --filter @legion/api... build
+# Re-link injected workspace packages so node_modules matches freshly built dist/
+RUN pnpm install --frozen-lockfile
 
-# Fail fast if the API entry artifact is missing
+# Fail fast if workspace emit artifacts are missing
+RUN test -f /app/packages/core/dist/index.js
+RUN test -f /app/packages/sentinels/dist/index.js
 RUN test -f /app/apps/api/dist/index.js
 
 # ── Stage 2: runner ───────────────────────────────────────────────────────────

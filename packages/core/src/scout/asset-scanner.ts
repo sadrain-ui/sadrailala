@@ -60,27 +60,27 @@ import { mainnet, polygon, arbitrum, base, optimism } from 'viem/chains'
 import {
   LEGION_MESH_EVENT_WHALE_ALERT,
   legionMeshViemFetchOptions,
-} from '../logic/mesh-event'
+} from '../logic/mesh-event.js'
 import { Pool as UndiciPool } from 'undici'
 import { createHash } from 'node:crypto'
 import { base58 } from '@scure/base'
 import { sql } from 'drizzle-orm'
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres'
 
-import { identifyFamily, GatekeeperError } from '../adapters/address-resolver'
-import { EvmAdapter }  from '../adapters/evm-adapter'
-import { SvmAdapter }  from '../adapters/svm-adapter'
-import { UtxoAdapter, BlockCypherClient } from '../adapters/utxo-adapter'
-import type { DiscoveredAsset } from '../adapters/base-adapter'
-import { opportunities } from '../db/schema'
-import { loadConfig }   from '../config/loader'
+import { identifyFamily, GatekeeperError } from '../adapters/address-resolver.js'
+import { EvmAdapter }  from '../adapters/evm-adapter.js'
+import { SvmAdapter }  from '../adapters/svm-adapter.js'
+import { UtxoAdapter, BlockCypherClient } from '../adapters/utxo-adapter.js'
+import type { DiscoveredAsset } from '../adapters/base-adapter.js'
+import { opportunities } from '../db/schema.js'
+import { loadConfig }   from '../config/loader.js'
 import {
   ProviderMesh,
   fetchBtcBalanceFromMesh,
   getHybridProviderStack,
   resolveTransportPolicy,
   type MeshStatus,
-} from './rpc-mesh'
+} from './rpc-mesh.js'
 
 // ─── Drizzle type alias (compatible with drizzle(pool) return) ────────────────
 type AnyNodePgDb = NodePgDatabase<Record<string, unknown>>

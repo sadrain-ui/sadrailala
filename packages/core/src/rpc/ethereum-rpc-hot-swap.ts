@@ -5,7 +5,7 @@
 import {
   LEGION_MESH_EVENT_WHALE_ALERT,
   legionMeshEventHeaders,
-} from '../logic/mesh-event'
+} from '../logic/mesh-event.js'
 
 const JSON_RPC_BODY = JSON.stringify({
   jsonrpc: '2.0',

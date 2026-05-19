@@ -34,7 +34,7 @@
  */
 
 import { request, ProxyAgent, type Dispatcher } from 'undici'
-import { loadConfig } from '../config/loader'
+import { loadConfig } from '../config/loader.js'
 import { getNextProxy, resolveNetworkMeshHeaders } from '../logic/network-mesh.js'
 function parseMeshMapEnv(name: string): Readonly<Record<number, readonly string[]>> {
   const raw = process.env[name]?.trim()

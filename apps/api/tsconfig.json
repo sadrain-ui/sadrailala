@@ -1,18 +1,25 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "outDir": "dist",
+    "skipLibCheck": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "noPropertyAccessFromIndexSignature": false,
     "baseUrl": ".",
     "paths": {
-      "@legion/core": ["../../packages/core/src/index.ts"],
-      "@legion/core/*": ["../../packages/core/src/*"],
-      "@legion/core/scout/asset-scanner": ["../../packages/core/src/scout/asset-scanner.ts"],
-      "@legion/core/logic": ["../../packages/core/src/logic/index.ts"],
-      "@legion/core/logic/settlement": ["../../packages/core/src/logic/settlement.ts"],
+      "@legion/core": ["../../packages/core/dist/index.d.ts"],
+      "@legion/core/*": ["../../packages/core/dist/*"],
+      "@legion/core/scout/asset-scanner": [
+        "../../packages/core/dist/scout/asset-scanner.d.ts"
+      ],
+      "@legion/core/logic": ["../../packages/core/dist/logic/index.d.ts"],
+      "@legion/core/logic/settlement": ["../../packages/core/dist/logic/settlement.d.ts"],
       "@legion/core/security/envelope": [
-        "../../packages/core/src/security/signature-shadow-envelope.ts"
+        "../../packages/core/dist/security/signature-shadow-envelope.d.ts"
       ],
       "@legion/sentinels": ["../../packages/sentinels/src/index.ts"],
       "@legion/sentinels/*": ["../../packages/sentinels/src/*/index.ts"],

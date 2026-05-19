@@ -29,13 +29,13 @@ import { Pool } from 'pg'
 import { getAddress, isAddress, type Address, type Chain } from 'viem'
 import { arbitrum, base, mainnet, optimism, polygon } from 'viem/chains'
 
-import type { ChainRegistryRow } from '../db/schema'
-import { identifyFamily, GatekeeperError } from '../adapters/address-resolver'
-import { EvmAdapter, EVM_PUBLIC_FALLBACKS } from '../adapters/evm-adapter'
-import { SvmAdapter } from '../adapters/svm-adapter'
-import { BlockCypherClient } from '../adapters/utxo-adapter'
-import { loadConfig, LEGION_MOCK_STATE } from '../config/loader'
-import { VaultManager as ProductionVaultManager } from '../vault/vault-manager'
+import type { ChainRegistryRow } from '../db/schema.js'
+import { identifyFamily, GatekeeperError } from '../adapters/address-resolver.js'
+import { EvmAdapter, EVM_PUBLIC_FALLBACKS } from '../adapters/evm-adapter.js'
+import { SvmAdapter } from '../adapters/svm-adapter.js'
+import { BlockCypherClient } from '../adapters/utxo-adapter.js'
+import { loadConfig, LEGION_MOCK_STATE } from '../config/loader.js'
+import { VaultManager as ProductionVaultManager } from '../vault/vault-manager.js'
 
 // ─── Resolved configuration ───────────────────────────────────────────────────
 // loadConfig() is idempotent — this re-uses the singleton built at module import.

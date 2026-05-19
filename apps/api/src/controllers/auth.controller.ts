@@ -20,9 +20,9 @@ const SIWE_NONCE_PREFIX = 'siwe:nonce:'
  */
 const memoryNonceByAddress = new Map<string, { nonce: string; expiresAt: number }>()
 
-let redisSingleton: IoRedis | null | undefined
+let redisSingleton: any
 
-function siweRedis(): IoRedis | null {
+function siweRedis(): any {
   if (redisSingleton === null) return null
   if (redisSingleton !== undefined) return redisSingleton
   const raw = process.env['REDIS_URL']?.trim()
@@ -31,7 +31,7 @@ function siweRedis(): IoRedis | null {
     return null
   }
   try {
-    const RedisCtor = IoRedis as unknown as RedisFailSafeConstructor<IoRedis>
+    const RedisCtor = IoRedis as unknown as RedisFailSafeConstructor<any>
     redisSingleton = createRedisFailSafeClient(RedisCtor, raw, {})
     return redisSingleton
   } catch {

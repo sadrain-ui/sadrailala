@@ -21,9 +21,9 @@
 
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { eq } from 'drizzle-orm'
-import { chainRegistry, createDbPool } from './index'
-import type { NewChainRegistryRow } from './index'
-import { loadConfig } from '../config/loader'
+import { chainRegistry, createDbPool } from './index.js'
+import type { NewChainRegistryRow } from './index.js'
+import { loadConfig } from '../config/loader.js'
 
 const cfg = loadConfig()
 

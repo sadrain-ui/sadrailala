@@ -25,8 +25,8 @@ import {
   PublicKey,
   VersionedTransaction,
 } from '@solana/web3.js'
-import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter'
-import { GatekeeperError } from './address-resolver'
+import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter.js'
+import { GatekeeperError } from './address-resolver.js'
 
 /**
  * Scout / Closer — institutional Solana JSON-RPC lane (`RPC_SOLANA_PRIVATE` ingress first,

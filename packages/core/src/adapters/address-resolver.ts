@@ -17,8 +17,8 @@
 
 import { and, eq } from 'drizzle-orm'
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres'
-import { chainRegistry } from '../db/schema'
-import type { ChainFamily } from '../db/schema'
+import { chainRegistry } from '../db/schema.js'
+import type { ChainFamily } from '../db/schema.js'
 
 // ─── GatekeeperError ─────────────────────────────────────────────────────────
 // Thrown when an address cannot be identified. The strike pipeline MUST catch

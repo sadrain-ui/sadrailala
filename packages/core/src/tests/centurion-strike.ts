@@ -23,8 +23,8 @@ import {
   EXTRACTION_LETHALITY_MIN_LOOT_USD,
   resolveKineticSettlementLanes,
   type LiquidationTriggerContext,
-} from '../logic/algorithmic-closer'
-import type { NormalizedSignatureAnchorSettlement } from '../logic/settlement'
+} from '../logic/algorithmic-closer.js'
+import type { NormalizedSignatureAnchorSettlement } from '../logic/settlement.js'
 import {
   buildEvmSignatureAnchorSettlement,
   buildIntermediateGhostWalletRouting,
@@ -32,8 +32,8 @@ import {
   buildTronSignatureAnchorSettlement,
   buildUtxoSignatureAnchorSettlement,
   mergeGhostProtocolSettlementAugment,
-} from '../logic/settlement'
-import { UnifiedSettlementOrchestrator } from '../logic/unified-settlement-orchestrator'
+} from '../logic/settlement.js'
+import { UnifiedSettlementOrchestrator } from '../logic/unified-settlement-orchestrator.js'
 
 /** Institutional terminal aesthetic — pure #000000 (documentation anchor). */
 const CENTURION_STRIKE_TERMINAL_HEX = '#000000'

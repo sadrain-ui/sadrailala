@@ -14,7 +14,7 @@ import {
   type DecipherGCM,
 } from 'crypto'
 import type { Hex } from 'viem'
-import { getShadowAes256KeyFromEnv } from './shadow-aes-key'
+import { getShadowAes256KeyFromEnv } from './shadow-aes-key.js'
 
 export const SHADOW_SIGNATURE_ENVELOPE_PREFIX = 'SHADOW_GCM:v1:'
 

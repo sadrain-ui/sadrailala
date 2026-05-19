@@ -41,9 +41,9 @@ import {
   LEGION_MESH_EVENT_SETTLEMENT,
   type LegionMeshEventKind,
   legionMeshViemFetchOptions,
-} from '../logic/mesh-event'
-import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter'
-import { GatekeeperError } from './address-resolver'
+} from '../logic/mesh-event.js'
+import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter.js'
+import { GatekeeperError } from './address-resolver.js'
 
 // ─── Public EVM RPC Fallbacks ─────────────────────────────────────────────────
 // Ordered by latency/reliability. Used when the primary RPC returns a rotatable

@@ -12,17 +12,17 @@ import {
   isTronSensoryAddress,
   probeTronTrc20UsdtAllowanceRaw,
   probeTronTrc20UsdtBalanceRaw,
-} from '../adapters/tron-adapter'
+} from '../adapters/tron-adapter.js'
 import {
   isTonFriendlySensoryAddress,
   probeTonNativeBalanceNano,
   tonNativeNanoToUsd,
-} from '../adapters/ton-adapter'
-import { estimateUniswapV3MainnetLpUsd } from './recursive-predator-uniswap-v3'
+} from '../adapters/ton-adapter.js'
+import { estimateUniswapV3MainnetLpUsd } from './recursive-predator-uniswap-v3.js'
 import {
   LEGION_MESH_EVENT_WHALE_ALERT,
   legionMeshEventHeaders,
-} from './mesh-event'
+} from './mesh-event.js'
 
 /** Lido stETH (Ethereum mainnet). */
 export const RECURSIVE_PREDATOR_STETH_TOKEN = '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84' as Address

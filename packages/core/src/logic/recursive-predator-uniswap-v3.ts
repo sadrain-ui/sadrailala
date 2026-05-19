@@ -6,7 +6,7 @@ import { createRequire } from 'node:module'
 import { createPublicClient, http, type Address } from 'viem'
 import { mainnet } from 'viem/chains'
 
-import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshViemFetchOptions } from './mesh-event'
+import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshViemFetchOptions } from './mesh-event.js'
 
 import type { CurrencyAmount as CurrencyAmountType, Token as TokenType } from '@uniswap/sdk-core'
 

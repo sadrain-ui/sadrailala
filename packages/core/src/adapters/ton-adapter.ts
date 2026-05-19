@@ -10,7 +10,7 @@
 import { Address } from '@ton/core'
 import { TonClient, fromNano } from '@ton/ton'
 
-import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter'
+import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter.js'
 
 export type TonConnectIngressManifest = {
   url: string

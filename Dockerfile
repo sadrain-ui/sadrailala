@@ -16,25 +16,25 @@ RUN pnpm install --frozen-lockfile
 
 RUN pnpm --filter @legion/api... build
 
-# Production deploy bundle: prod node_modules + package artifacts (no dev install in runner)
-RUN pnpm --filter @legion/api --prod deploy /deploy
-
-# Strip workspace TypeScript sources from the deploy tree (runtime uses compiled dist only)
-RUN find /deploy -type f \( -name '*.ts' -o -name '*.tsx' \) ! -path '*/node_modules/*' -delete \
-  && find /deploy -type d \( -name src -o -name tests -o -name __tests__ \) ! -path '*/node_modules/*' -exec rm -rf {} +
-
 # Fail fast if the API entry artifact is missing
-RUN test -f /deploy/dist/index.js
+RUN test -f /app/apps/api/dist/index.js
 
-# ── Stage 2: runner — minimal production footprint ────────────────────────────
+# ── Stage 2: runner — full monorepo tree so workspace symlinks stay intact ────
 FROM node:20-bookworm-slim AS runner
 
-WORKDIR /app/apps/api
+WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=4000
 EXPOSE 4000
 
-COPY --from=builder /deploy/ ./
+# Copy full workspace: hoisted node_modules + built packages + api dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/apps/api ./apps/api
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/pnpm-workspace.yaml ./
 
-CMD ["node", "--experimental-specifier-resolution=node", "dist/index.js"]
+WORKDIR /app/apps/api
+
+CMD ["node", "dist/index.js"]

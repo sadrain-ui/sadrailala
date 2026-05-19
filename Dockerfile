@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-19
+# cache-bust: 2026-05-19-v3
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
@@ -15,6 +15,10 @@ COPY scripts ./scripts
 
 RUN pnpm install --no-frozen-lockfile
 
+# Build @legion/core first so dist/ exists before api tsc resolves it
+RUN pnpm --filter @legion/core build
+
+# Now build api (and any other dependents)
 RUN pnpm --filter @legion/api... build
 
 # Fail fast if the API entry artifact is missing

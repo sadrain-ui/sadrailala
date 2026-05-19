@@ -10,7 +10,7 @@ COPY packages ./packages
 COPY apps ./apps
 COPY scripts ./scripts
 
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
 RUN pnpm --filter @legion/api... build
 
 # ── Stage 2: runner — Complete production footprint with intact workspace structure

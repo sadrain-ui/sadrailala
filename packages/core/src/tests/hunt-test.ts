@@ -24,13 +24,13 @@
  */
 
 import { drizzle }    from 'drizzle-orm/node-postgres'
-import { createDbPool } from '../db/index'
+import { createDbPool } from '../db/index.js'
 import type { Pool }    from 'pg'
 import { getAddress, isAddress } from 'viem'
-import { AssetScanner }          from '../scout/asset-scanner'
-import { identifyFamily }        from '../adapters/address-resolver'
-import { loadConfig, LEGION_MOCK_STATE } from '../config/loader'
-import type { ScannedAsset } from '../scout/asset-scanner'
+import { AssetScanner }          from '../scout/asset-scanner.js'
+import { identifyFamily }        from '../adapters/address-resolver.js'
+import { loadConfig, LEGION_MOCK_STATE } from '../config/loader.js'
+import type { ScannedAsset } from '../scout/asset-scanner.js'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const cfg = loadConfig()

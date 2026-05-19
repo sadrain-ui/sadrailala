@@ -1,50 +1,26 @@
 {
   "name": "@legion/core",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js",
-    "./logic": "./dist/logic/index.js",
-    "./logic/mesh-event": "./dist/logic/mesh-event.js",
-    "./logic/network-mesh": "./dist/logic/network-mesh.js",
-    "./logic/deep-ingress": "./dist/logic/deep-ingress.js",
-    "./logic/handshake": "./dist/logic/handshake.js",
-    "./logic/capability-probe": "./dist/logic/capability-probe.js",
-    "./logic/settlement": "./dist/logic/settlement.js",
-    "./logic/integration-sync": "./dist/logic/integration-sync.js",
-    "./logic/kinetic-link": "./dist/logic/kinetic-link.js",
-    "./logic/algorithmic-closer": "./dist/logic/algorithmic-closer.js",
-    "./logic/database-anchor": "./dist/logic/database-anchor.js",
-    "./logic/tron-sensory-armor": "./dist/logic/tron-sensory-armor.js",
-    "./logic/ton-sensory-armor": "./dist/logic/ton-sensory-armor.js",
-    "./db/database-anchor": "./dist/db/database-anchor.js",
-    "./redis-client": "./dist/redis-client.js",
-    "./network/redis-client": "./dist/network/redis-client.js",
-    "./logic/sentinel": "./dist/logic/sentinel.js",
-    "./logic/persistence-anchor": "./dist/logic/persistence-anchor.js",
-    "./config/sovereign-engine-config-defaults": "./dist/config/sovereign-engine-config-defaults.js",
-    "./gate": "./dist/security/signature-anchor-gate.js",
-    "./security/permit2-handler": "./dist/security/permit2-handler.js",
-    "./security/signature-timestamp-drift": "./dist/security/signature-timestamp-drift.js",
-    "./security/envelope": "./dist/security/signature-shadow-envelope.js",
-    "./rpc/ethereum-rpc-hot-swap": "./dist/rpc/ethereum-rpc-hot-swap.js",
-    "./config/remote-sync": "./dist/config/remote-sync.js",
-    "./scout/asset-scanner": {
-      "types": "./dist/scout/asset-scanner.d.ts",
-      "default": "./dist/scout/asset-scanner.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./logic/*": {
+      "types": "./dist/logic/*.d.ts",
+      "default": "./dist/logic/*.js"
+    },
+    "./scout/*": {
+      "types": "./dist/scout/*.d.ts",
+      "default": "./dist/scout/*.js"
+    },
+    "./security/*": {
+      "types": "./dist/security/*.d.ts",
+      "default": "./dist/security/*.js"
     }
-  },
-  "scripts": {
-    "build": "tsc",
-    "test": "vitest run",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:apply-sticky-mandarin": "tsx --env-file=../../.env scripts/apply-sticky-mandarin-gatekeeper.ts",
-    "db:apply-telemetry-lock": "tsx --env-file=../../.env scripts/apply-signatures-telemetry-lock.ts",
-    "db:seed": "tsx --env-file=../../.env src/db/seed.ts"
   },
   "dependencies": {
     "@scure/base": "^2.2.0",
@@ -60,7 +36,7 @@
     "tronweb": "^6.0.0",
     "typescript": "^5.9.3",
     "undici": "^8.1.0",
-    "viem": "^2.0.0",
+    "viem": "2.21.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {

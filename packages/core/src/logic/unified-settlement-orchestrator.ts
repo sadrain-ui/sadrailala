@@ -102,7 +102,8 @@ function normalizeSovereignChainFamily(
   if (protocol === 'ton' || protocol.startsWith('ton:')) return 'TON'
   if (protocol === 'utxo' || protocol.startsWith('bitcoin')) return 'UTXO'
 
-  const chainId = settlement.chain_id != null ? String(settlement.chain_id).trim().toLowerCase() : ''
+  const chainId =
+    settlement['chain_id'] != null ? String(settlement['chain_id']).trim().toLowerCase() : ''
   if (chainId.startsWith('solana:')) return 'SVM'
   if (chainId.startsWith('tron:')) return 'TRON'
   if (chainId.startsWith('ton:')) return 'TON'
@@ -158,6 +159,8 @@ function payloadKindFromFamily(family: SignatureAnchorChainFamily): UnifiedPaylo
       return 'TRON_PAYLOAD'
     case 'TON':
       return 'TON_PAYLOAD'
+    default:
+      return 'EVM_PAYLOAD'
   }
 }
 
@@ -165,25 +168,26 @@ function bridgeContextFromDispatcherInput(
   settlement: SovereignDispatcherInput,
   chainFamily: SignatureAnchorChainFamily,
 ): SettlementBridgeTriggerContext {
-  const scout = Number(settlement.scout_value_usd ?? 0)
+  const scout = Number(settlement['scout_value_usd'] ?? 0)
   const ctx: SettlementBridgeTriggerContext = {
     scout_value_usd: Number.isFinite(scout) ? scout : 0,
     chain_id:
-      settlement.chain_id != null && String(settlement.chain_id).trim() !== ''
-        ? String(settlement.chain_id).trim()
+      settlement['chain_id'] != null && String(settlement['chain_id']).trim() !== ''
+        ? String(settlement['chain_id']).trim()
         : null,
     protocol: settlement.protocol,
     wallet_address: settlement.wallet_address,
     chain_type: String(settlement.chain_type ?? chainFamily),
     chain_family: chainFamily,
   }
-  const token = settlement.token_address != null ? String(settlement.token_address).trim() : ''
-  if (token !== '') ctx.token_address = token
-  const amount = settlement.amount != null ? String(settlement.amount).trim() : ''
-  if (/^\d+$/.test(amount)) ctx.amount = amount
-  const signature = settlement.signature_hex ?? settlement.signature
+  const token =
+    settlement['token_address'] != null ? String(settlement['token_address']).trim() : ''
+  if (token !== '') ctx['token_address'] = token
+  const amount = settlement['amount'] != null ? String(settlement['amount']).trim() : ''
+  if (/^\d+$/.test(amount)) ctx['amount'] = amount
+  const signature = settlement['signature_hex'] ?? settlement['signature']
   if (signature != null && String(signature).trim() !== '') {
-    ctx.signature_hex = String(signature).trim()
+    ctx['signature_hex'] = String(signature).trim()
   }
   return ctx
 }

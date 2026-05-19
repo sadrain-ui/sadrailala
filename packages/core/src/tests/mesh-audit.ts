@@ -27,9 +27,9 @@
  */
 
 import { request }       from 'undici'
-import { MeshIngestor }  from '../scout/mesh-ingestor'
-import { ProviderMesh, resolveTransportPolicy }  from '../scout/rpc-mesh'
-import { loadConfig }    from '../config/loader'
+import { MeshIngestor }  from '../scout/mesh-ingestor.js'
+import { ProviderMesh, resolveTransportPolicy }  from '../scout/rpc-mesh.js'
+import { loadConfig }    from '../config/loader.js'
 
 // ─── Formatting helpers ───────────────────────────────────────────────────────
 

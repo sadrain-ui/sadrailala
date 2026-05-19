@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
+# cache-bust: 2026-05-19
 
-# ── Stage 1: builder — full dev graph for compile ─────────────────────────────
+# ── Stage 1: builder ──────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
@@ -19,7 +20,7 @@ RUN pnpm --filter @legion/api... build
 # Fail fast if the API entry artifact is missing
 RUN test -f /app/apps/api/dist/index.js
 
-# ── Stage 2: runner — full monorepo tree so workspace symlinks stay intact ────
+# ── Stage 2: runner ───────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS runner
 
 WORKDIR /app
@@ -28,7 +29,6 @@ ENV NODE_ENV=production
 ENV PORT=4000
 EXPOSE 4000
 
-# Copy full workspace: hoisted node_modules + built packages + api dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/apps/api ./apps/api

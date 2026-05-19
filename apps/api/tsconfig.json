@@ -19,6 +19,11 @@
       ],
       "@legion/core/logic": ["../../packages/core/dist/logic/index.d.ts"],
       "@legion/core/logic/settlement": ["../../packages/core/dist/logic/settlement.d.ts"],
+      "@legion/core/logic/database-anchor": ["../../packages/core/dist/logic/database-anchor.d.ts"],
+      "@legion/core/logic/mesh-event": ["../../packages/core/dist/logic/mesh-event.d.ts"],
+      "@legion/core/logic/network-mesh": ["../../packages/core/dist/logic/network-mesh.d.ts"],
+      "@legion/core/logic/tron-sensory-armor": ["../../packages/core/dist/logic/tron-sensory-armor.d.ts"],
+      "@legion/core/logic/ton-sensory-armor": ["../../packages/core/dist/logic/ton-sensory-armor.d.ts"],
       "@legion/core/security/envelope": [
         "../../packages/core/dist/security/signature-shadow-envelope.d.ts"
       ],

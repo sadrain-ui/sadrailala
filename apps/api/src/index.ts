@@ -4,7 +4,12 @@ if (!process.env['VERCEL']) {
   dns.setDefaultResultOrder('ipv4first')
 }
 
-import 'dotenv/config'
+// dotenv only in non-production (Railway/Vercel inject env vars directly)
+if (process.env['NODE_ENV'] !== 'production') {
+  const { config } = await import('dotenv')
+  config()
+}
+
 import './inject-root-env.js'
 import { verifyDatabaseAnchorOnBoot } from './lib/database-anchor.js'
 import { buildInstitutionalApiServer } from './server.js'

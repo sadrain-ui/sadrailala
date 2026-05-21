@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v9
+# cache-bust: 2026-05-22-v10
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
@@ -16,14 +16,14 @@ COPY packages/ ./packages/
 COPY apps/ ./apps/
 COPY scripts/ ./scripts/
 
-# no-frozen-lockfile: safe in CI, avoids lockfile drift errors
+# Install all deps including dotenv (needed for tsc to resolve types)
 RUN pnpm install --no-frozen-lockfile
 
 # Build dependency chain in order
 RUN pnpm --filter @legion/core build
 RUN pnpm --filter @legion/sentinels build
 
-# api build: tsc --build + flatten (no redundant rebuilds)
+# api build: tsc --build + flatten
 RUN pnpm --filter @legion/api build
 
 # Sanity checks
@@ -32,7 +32,7 @@ RUN test -f /app/packages/sentinels/dist/index.js   || (echo "MISSING: sentinels
 RUN test -f /app/apps/api/dist/index.js             || (echo "MISSING: api/dist/index.js" && exit 1)
 
 # ── Stage 2: runner ─────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS runner
+FROM node:20-bookworm-slim AS builder2
 
 WORKDIR /app
 
@@ -43,23 +43,22 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-# Root node_modules (.pnpm store + hoisted packages)
-COPY --from=builder /app/node_modules              ./node_modules
-
-# pnpm workspace manifests (needed for pnpm ESM resolution)
+# Workspace manifests
 COPY --from=builder /app/package.json              ./
 COPY --from=builder /app/pnpm-workspace.yaml       ./
-COPY --from=builder /app/pnpm-lock.yaml            ./
 
-# packages
+# packages — dist + package.json only (no node_modules needed at runtime for these)
 COPY --from=builder /app/packages/core/dist        ./packages/core/dist
 COPY --from=builder /app/packages/core/package.json ./packages/core/package.json
 COPY --from=builder /app/packages/sentinels/dist   ./packages/sentinels/dist
 COPY --from=builder /app/packages/sentinels/package.json ./packages/sentinels/package.json
 
-# api dist + its own node_modules (pnpm keeps per-package node_modules for workspace deps)
+# api dist + package.json
 COPY --from=builder /app/apps/api/dist             ./apps/api/dist
 COPY --from=builder /app/apps/api/package.json     ./apps/api/package.json
+
+# Full node_modules from builder (includes all workspace symlinks + .pnpm store)
+COPY --from=builder /app/node_modules              ./node_modules
 COPY --from=builder /app/apps/api/node_modules     ./apps/api/node_modules
 
 WORKDIR /app/apps/api

@@ -19,10 +19,6 @@
       "@legion/sentinels/*": ["../../packages/sentinels/dist/*"]
     }
   },
-  "references": [
-    { "path": "../../packages/core" },
-    { "path": "../../packages/sentinels" }
-  ],
   "include": ["src/**/*.ts", "src/**/*.d.ts"],
   "exclude": ["src/tests/**", "vitest.config.ts"]
 }

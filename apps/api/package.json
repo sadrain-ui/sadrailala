@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/index.ts",
-    "build": "tsc --build && node ../../scripts/flatten-api-dist.mjs",
+    "build": "tsc && node ../../scripts/flatten-api-dist.mjs",
     "start": "node dist/index.js",
     "db:migrate": "pnpm --filter @legion/core db:migrate",
     "db:generate": "pnpm --filter @legion/core db:generate",

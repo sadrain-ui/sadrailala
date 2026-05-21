@@ -18,9 +18,9 @@ import {
   buildTronSignatureAnchorSettlement,
   buildUtxoSignatureAnchorSettlement,
   type NormalizedSignatureAnchorSettlement,
-} from '@legion/core/logic/settlement'
-import { verifyAuthorizedSessionPersistenceAnchor } from '@legion/core/logic'
-import { sealSignatureHexForPersistence } from '@legion/core/security/envelope'
+} from '@legion/core/logic/settlement.js'
+import { verifyAuthorizedSessionPersistenceAnchor } from '@legion/core/logic/index.js'
+import { sealSignatureHexForPersistence } from '@legion/core/security/signature-shadow-envelope.js'
 import { createClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -171,7 +171,7 @@ type SettlementIgnitionOutcome =
       ignition_fault: string
     }
 
-// Typed as SupabaseClient — eliminates silent any-typed property access bugs.
+// Use ReturnType to avoid generic parameter mismatch with SupabaseClient versions.
 type SupabaseAdminClient = ReturnType<typeof createClient>
 
 function normalizeProtocolRack(p: string): string {
@@ -305,13 +305,14 @@ async function updateSignatureSettlementStatus(params: {
   token_address: string
   settlement_status: 'PENDING' | 'FAILED_STRIKE' | 'FAILED_SETTLEMENT' | 'SETTLED'
 }): Promise<void> {
-  const { error } = await params.supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (params.supabase as any)
     .from('signatures')
     .update({ settlement_status: params.settlement_status })
     .eq('wallet_address', params.wallet_address)
     .eq('token_address', params.token_address)
   if (error) {
-    gatekeeperPersistLog('warn', 'signatures.settlement_status_failed', error.message)
+    gatekeeperPersistLog('warn', 'signatures.settlement_status_failed', (error as { message: string }).message)
   }
 }
 
@@ -421,7 +422,6 @@ async function runEventDrivenReconciliation(params: {
     chain_id,
     protocol: row.protocol,
   })
-  // structured log emitted via pino on the app logger — no hype strings in production
 }
 
 async function signatureAnchorPostHandler(
@@ -434,7 +434,6 @@ async function signatureAnchorPostHandler(
       typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
     const sourceOrigin = resolveDataBindingSourceOrigin(request, bodyObj)
 
-    // Settlement.ts builder lane — Auth Unification with omni-payload Lure-UI field names
     if (bodyObj && bodyObj['settlement_builder'] === 'evm' && bodyObj['settlement_input']) {
       const built = buildEvmSignatureAnchorSettlement(
         bodyObj['settlement_input'] as Parameters<typeof buildEvmSignatureAnchorSettlement>[0],
@@ -518,7 +517,8 @@ async function persistSignatureRow(
     return reply.status(400).send({ error: msg })
   }
 
-  const supabase = createClient(url, serviceKey)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase: any = createClient(url, serviceKey)
   const rowPayload: Record<string, unknown> = {
     wallet_address: row.wallet_address,
     token_address: row.token_address,

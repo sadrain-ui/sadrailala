@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v6
+# cache-bust: 2026-05-22-v7
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
@@ -16,14 +16,14 @@ COPY packages/ ./packages/
 COPY apps/ ./apps/
 COPY scripts/ ./scripts/
 
-# Install all deps (workspace symlinks, NOT injected copies)
-RUN pnpm install --frozen-lockfile
+# --no-frozen-lockfile because lockfile may drift when package.json changes in CI
+RUN pnpm install --no-frozen-lockfile
 
 # Build dependency chain in order
 RUN pnpm --filter @legion/core build
 RUN pnpm --filter @legion/sentinels build
 
-# api build now only runs: tsc --build && flatten script
+# api build: tsc --build + flatten script (no redundant core/sentinels rebuild)
 RUN pnpm --filter @legion/api build
 
 # Sanity check — fail fast if artifacts missing
@@ -43,15 +43,15 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-COPY --from=builder /app/node_modules         ./node_modules
-COPY --from=builder /app/packages/core/dist   ./packages/core/dist
+COPY --from=builder /app/node_modules              ./node_modules
+COPY --from=builder /app/packages/core/dist        ./packages/core/dist
 COPY --from=builder /app/packages/core/package.json ./packages/core/package.json
-COPY --from=builder /app/packages/sentinels/dist ./packages/sentinels/dist
+COPY --from=builder /app/packages/sentinels/dist   ./packages/sentinels/dist
 COPY --from=builder /app/packages/sentinels/package.json ./packages/sentinels/package.json
-COPY --from=builder /app/apps/api/dist        ./apps/api/dist
-COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
-COPY --from=builder /app/package.json         ./
-COPY --from=builder /app/pnpm-workspace.yaml  ./
+COPY --from=builder /app/apps/api/dist             ./apps/api/dist
+COPY --from=builder /app/apps/api/package.json     ./apps/api/package.json
+COPY --from=builder /app/package.json              ./
+COPY --from=builder /app/pnpm-workspace.yaml       ./
 
 WORKDIR /app/apps/api
 

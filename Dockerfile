@@ -1,31 +1,31 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v4
+# cache-bust: 2026-05-22-v5
 
-# ── Stage 1: builder ──────────────────────────────────────────────────────────
+# ── Stage 1: builder ─────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
+# Copy root workspace config first (layer cache)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.json ./
-COPY packages ./packages
-COPY apps ./apps
 
-# scripts folder is optional (dev-only utilities) — copy only if present
-COPY scripts* ./scripts/
+# Copy source — Railway sends full repo context from root
+COPY packages/ ./packages/
+COPY apps/ ./apps/
+COPY scripts/ ./scripts/
 
 RUN pnpm install --frozen-lockfile
 
-# Deterministic workspace build order: core → sentinels → api
+# Deterministic build order: core → sentinels → api
 RUN pnpm --filter @legion/core build
 RUN pnpm --filter @legion/sentinels build
 RUN pnpm --filter @legion/api build
 
-# Re-link injected workspace packages so node_modules matches freshly built dist/
 RUN pnpm install --frozen-lockfile
 
-# Fail fast if workspace emit artifacts are missing
+# Fail fast if artifacts missing
 RUN test -f /app/packages/core/dist/index.js
 RUN test -f /app/packages/sentinels/dist/index.js
 RUN test -f /app/apps/api/dist/index.js

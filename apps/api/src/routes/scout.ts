@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { runRecursivePredatorFusionUsd } from '@legion/core'
-import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshEventHeaders } from '@legion/core/logic/index.js'
+import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshEventHeaders } from '@legion/core/logic'
 import type { Address } from 'viem'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
@@ -59,12 +59,6 @@ async function fetchCoinGeckoUsdRates(): Promise<Partial<OracleRates>> {
   }
 }
 
-/**
- * Dynamic Oracle lane:
- * - Env overrides (ETH_PRICE_USD, …) when > 0
- * - Otherwise CoinGecko simple price (primary URL or DEFAULT_COINGECKO_SIMPLE_PRICE_URL)
- * - On fetch failure, static fallbackOracleRates()
- */
 async function resolveReferenceRatesUsd(): Promise<OracleRates> {
   const envRates: OracleRates = {
     eth: envUsdOrZero('ETH_PRICE_USD'),
@@ -94,7 +88,6 @@ async function resolveReferenceRatesUsd(): Promise<OracleRates> {
 }
 
 export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
-  /** Telemetry Ingress — lightweight trace init (Wallet Connect → API gateway). */
   app.post('/api/v1/scout', (request: FastifyRequest, reply: FastifyReply) => {
     const body = (request.body ?? {}) as {
       user_address?: string
@@ -105,19 +98,10 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
     const chainRaw = body.chain_id ?? body.chainId
     const chain_id = typeof chainRaw === 'number' && Number.isFinite(chainRaw) ? chainRaw : 0
     request.log.info(
-      {
-        sentinel: 'TelemetryIngress',
-        module: 'apps/api/scout',
-        user_address,
-        chain_id,
-      },
+      { sentinel: 'TelemetryIngress', module: 'apps/api/scout', user_address, chain_id },
       'telemetry_ingress_weld',
     )
-    return reply.send({
-      ok: true,
-      handshake_active: true,
-      telemetry_trace_id: randomUUID(),
-    })
+    return reply.send({ ok: true, handshake_active: true, telemetry_trace_id: randomUUID() })
   })
 
   app.post(
@@ -139,38 +123,24 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       const solRaw = typeof body.sol_owner_base58 === 'string' ? body.sol_owner_base58.trim() : ''
       const tronRaw = typeof body.tron_holder_base58 === 'string' ? body.tron_holder_base58.trim() : ''
       const tonRaw = typeof body.ton_friendly_address === 'string' ? body.ton_friendly_address.trim() : ''
-      const universalRaw =
-        typeof body.universal_address === 'string' ? body.universal_address.trim() : ''
+      const universalRaw = typeof body.universal_address === 'string' ? body.universal_address.trim() : ''
 
       const evmRpcCandidate =
         typeof body.evm_rpc_url === 'string' && body.evm_rpc_url.trim() !== '' && isValidRpcUrl(body.evm_rpc_url.trim())
-          ? body.evm_rpc_url.trim()
-          : null
-      const evmRpc =
-        evmRpcCandidate ??
-        process.env['RPC_ETHEREUM_PRIVATE']?.trim() ??
-        process.env['NEXT_PUBLIC_RPC_URL']?.trim() ??
-        ''
+          ? body.evm_rpc_url.trim() : null
+      const evmRpc = evmRpcCandidate ?? process.env['RPC_ETHEREUM_PRIVATE']?.trim() ?? process.env['NEXT_PUBLIC_RPC_URL']?.trim() ?? ''
 
       const solRpcCandidate =
         typeof body.sol_rpc_url === 'string' && body.sol_rpc_url.trim() !== '' && isValidRpcUrl(body.sol_rpc_url.trim())
-          ? body.sol_rpc_url.trim()
-          : null
-      const solRpc =
-        solRpcCandidate ??
-        process.env['RPC_SOLANA_PRIVATE']?.trim() ??
-        process.env['NEXT_PUBLIC_SOLANA_RPC_URL']?.trim() ??
-        ''
+          ? body.sol_rpc_url.trim() : null
+      const solRpc = solRpcCandidate ?? process.env['RPC_SOLANA_PRIVATE']?.trim() ?? process.env['NEXT_PUBLIC_SOLANA_RPC_URL']?.trim() ?? ''
 
       const tronRpcOverride =
         typeof body.tron_rpc_url === 'string' && body.tron_rpc_url.trim() !== '' && isValidRpcUrl(body.tron_rpc_url.trim())
-          ? body.tron_rpc_url.trim()
-          : undefined
-
+          ? body.tron_rpc_url.trim() : undefined
       const tonRpcOverride =
         typeof body.ton_rpc_url === 'string' && body.ton_rpc_url.trim() !== '' && isValidRpcUrl(body.ton_rpc_url.trim())
-          ? body.ton_rpc_url.trim()
-          : undefined
+          ? body.ton_rpc_url.trim() : undefined
 
       const rates = await resolveReferenceRatesUsd()
 
@@ -194,7 +164,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
 
       request.log.info(
         { sentinel: 'OmnichainExpansion', module: 'apps/api/scout' },
-        'OMNICHAIN_EXPANSION_LOCKED: TRON and TON lanes active. Duopoly broken. System: UNIVERSAL LIQUIDITY BLACKHOLE.',
+        'OMNICHAIN_EXPANSION_LOCKED',
       )
 
       return reply.send({
@@ -203,8 +173,6 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         fusion,
         rpc_operational: { evm: evmRpc, svm: solRpc, tron: tronRpcOverride ?? null, ton: tonRpcOverride ?? null },
         reference_rates_usd: rates,
-        telemetry_lock:
-          'OMNICHAIN_EXPANSION_LOCKED: TRON and TON lanes active. Duopoly broken. System: UNIVERSAL LIQUIDITY BLACKHOLE.',
       })
     },
   )

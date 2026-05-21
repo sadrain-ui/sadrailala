@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v8
+# cache-bust: 2026-05-22-v9
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
@@ -43,15 +43,24 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
+# Root node_modules (.pnpm store + hoisted packages)
 COPY --from=builder /app/node_modules              ./node_modules
+
+# pnpm workspace manifests (needed for pnpm ESM resolution)
+COPY --from=builder /app/package.json              ./
+COPY --from=builder /app/pnpm-workspace.yaml       ./
+COPY --from=builder /app/pnpm-lock.yaml            ./
+
+# packages
 COPY --from=builder /app/packages/core/dist        ./packages/core/dist
 COPY --from=builder /app/packages/core/package.json ./packages/core/package.json
 COPY --from=builder /app/packages/sentinels/dist   ./packages/sentinels/dist
 COPY --from=builder /app/packages/sentinels/package.json ./packages/sentinels/package.json
+
+# api dist + its own node_modules (pnpm keeps per-package node_modules for workspace deps)
 COPY --from=builder /app/apps/api/dist             ./apps/api/dist
 COPY --from=builder /app/apps/api/package.json     ./apps/api/package.json
-COPY --from=builder /app/package.json              ./
-COPY --from=builder /app/pnpm-workspace.yaml       ./
+COPY --from=builder /app/apps/api/node_modules     ./apps/api/node_modules
 
 WORKDIR /app/apps/api
 

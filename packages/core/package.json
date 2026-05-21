@@ -15,13 +15,25 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./logic": {
+      "types": "./dist/logic/index.d.ts",
+      "default": "./dist/logic/index.js"
+    },
     "./logic/*": {
       "types": "./dist/logic/*.d.ts",
       "default": "./dist/logic/*.js"
     },
+    "./scout": {
+      "types": "./dist/scout/index.d.ts",
+      "default": "./dist/scout/index.js"
+    },
     "./scout/*": {
       "types": "./dist/scout/*.d.ts",
       "default": "./dist/scout/*.js"
+    },
+    "./security": {
+      "types": "./dist/security/index.d.ts",
+      "default": "./dist/security/index.js"
     },
     "./security/*": {
       "types": "./dist/security/*.d.ts",

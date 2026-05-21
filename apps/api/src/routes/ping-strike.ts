@@ -38,6 +38,7 @@ import {
   sendTonJettonIngressTelemetry,
   sendTronWhaleIngressTelemetry,
 } from '../telemetry-sender.js'
+import { createAuthUnificationPreHandler } from '../middleware/auth-unification.js'
 
 /** Rotational Mesh — institutional expected node count for final Lethality Report telemetry (Phase 12.2). */
 const ROTATIONAL_MESH_INSTITUTIONAL_NODE_TARGET = 10
@@ -339,7 +340,8 @@ function fmtLane(d: LaneDiagnostic): string {
 }
 
 export async function registerPingStrikeRoute(app: FastifyInstance): Promise<void> {
-  app.get('/api/diagnostic/ping-strike', async () => {
+  const authPre = createAuthUnificationPreHandler(app)
+  app.get('/api/diagnostic/ping-strike', { preHandler: authPre }, async () => {
     console.info('LANE_STATUS: PING_STRIKE_RUN')
 
     const sequence: string[] = []
@@ -384,15 +386,14 @@ export async function registerPingStrikeRoute(app: FastifyInstance): Promise<voi
     }
 
     const proxyUrls = resolveProxyPoolFromEnv()
-    sequence.push('rotational_mesh_sequential')
-    const meshNodes: ProxyNodeDiagnostic[] = []
-    for (let i = 0; i < proxyUrls.length; i++) {
-      const proxyUrl = proxyUrls[i]!
-      const key = meshProxyReportKey(i + 1, proxyUrl)
-      sequence.push(key)
-      const detail = await pingRotationalMeshExitPlaneDetailed(proxyUrl)
-      meshNodes.push(proxyDiagnostic(i + 1, proxyUrl, detail.ok, detail.latency_ms))
-    }
+    sequence.push('rotational_mesh_parallel')
+    proxyUrls.forEach((proxyUrl, i) => sequence.push(meshProxyReportKey(i + 1, proxyUrl)))
+    const meshNodes: ProxyNodeDiagnostic[] = await Promise.all(
+      proxyUrls.map(async (proxyUrl, i) => {
+        const detail = await pingRotationalMeshExitPlaneDetailed(proxyUrl)
+        return proxyDiagnostic(i + 1, proxyUrl, detail.ok, detail.latency_ms)
+      })
+    )
 
     const evmUrl =
       process.env['RPC_ETHEREUM_PRIVATE']?.trim() ??

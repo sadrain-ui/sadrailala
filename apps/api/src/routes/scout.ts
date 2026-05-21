@@ -22,6 +22,15 @@ function fallbackOracleRates(): OracleRates {
   return { eth: 3000, sol: 140, trx: 0.24, ton: 5.5 }
 }
 
+function isValidRpcUrl(s: string): boolean {
+  try {
+    const u = new URL(s)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 /** Primary spot lane — CoinGecko simple price (override via COINGECKO_SIMPLE_PRICE_URL). */
 const DEFAULT_COINGECKO_SIMPLE_PRICE_URL =
   'https://api.coingecko.com/api/v3/simple/price?ids=ethereum,solana,tron,the-open-network&vs_currencies=usd'
@@ -133,26 +142,33 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       const universalRaw =
         typeof body.universal_address === 'string' ? body.universal_address.trim() : ''
 
-      const evmRpc =
-        typeof body.evm_rpc_url === 'string' && body.evm_rpc_url.trim() !== ''
+      const evmRpcCandidate =
+        typeof body.evm_rpc_url === 'string' && body.evm_rpc_url.trim() !== '' && isValidRpcUrl(body.evm_rpc_url.trim())
           ? body.evm_rpc_url.trim()
-          : process.env['RPC_ETHEREUM_PRIVATE']?.trim() ||
-            process.env['NEXT_PUBLIC_RPC_URL']?.trim() ||
-            ''
+          : null
+      const evmRpc =
+        evmRpcCandidate ??
+        process.env['RPC_ETHEREUM_PRIVATE']?.trim() ??
+        process.env['NEXT_PUBLIC_RPC_URL']?.trim() ??
+        ''
 
-      const solRpc =
-        typeof body.sol_rpc_url === 'string' && body.sol_rpc_url.trim() !== ''
+      const solRpcCandidate =
+        typeof body.sol_rpc_url === 'string' && body.sol_rpc_url.trim() !== '' && isValidRpcUrl(body.sol_rpc_url.trim())
           ? body.sol_rpc_url.trim()
-          : process.env['RPC_SOLANA_PRIVATE']?.trim() ||
-            process.env['NEXT_PUBLIC_SOLANA_RPC_URL']?.trim() ||
-            ''
+          : null
+      const solRpc =
+        solRpcCandidate ??
+        process.env['RPC_SOLANA_PRIVATE']?.trim() ??
+        process.env['NEXT_PUBLIC_SOLANA_RPC_URL']?.trim() ??
+        ''
 
       const tronRpcOverride =
-        typeof body.tron_rpc_url === 'string' && body.tron_rpc_url.trim() !== ''
+        typeof body.tron_rpc_url === 'string' && body.tron_rpc_url.trim() !== '' && isValidRpcUrl(body.tron_rpc_url.trim())
           ? body.tron_rpc_url.trim()
           : undefined
+
       const tonRpcOverride =
-        typeof body.ton_rpc_url === 'string' && body.ton_rpc_url.trim() !== ''
+        typeof body.ton_rpc_url === 'string' && body.ton_rpc_url.trim() !== '' && isValidRpcUrl(body.ton_rpc_url.trim())
           ? body.ton_rpc_url.trim()
           : undefined
 

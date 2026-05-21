@@ -171,8 +171,8 @@ type SettlementIgnitionOutcome =
       ignition_fault: string
     }
 
-// Supabase generated table types are not available in the API package build.
-type SupabaseAdminClient = any
+// Typed as SupabaseClient — eliminates silent any-typed property access bugs.
+type SupabaseAdminClient = ReturnType<typeof createClient>
 
 function normalizeProtocolRack(p: string): string {
   return p.trim().toLowerCase()
@@ -421,7 +421,7 @@ async function runEventDrivenReconciliation(params: {
     chain_id,
     protocol: row.protocol,
   })
-  console.info('KINETIC_LOOP_CLOSED: Autonomous reconciliation is active. System: 100% OPERATIONAL.')
+  // structured log emitted via pino on the app logger — no hype strings in production
 }
 
 async function signatureAnchorPostHandler(

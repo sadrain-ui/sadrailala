@@ -111,6 +111,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       typeof body.refresh_token === 'string' && body.refresh_token.trim() !== ''
         ? body.refresh_token.trim()
         : ''
+    const access_token = extractBearerToken(request.headers.authorization)
+    if (!access_token) {
+      return reply.status(400).send({ error: 'access_token required in Authorization header for logout' })
+    }
     if (!refresh_token) {
       return reply.status(400).send({ error: 'refresh_token required for session invalidation' })
     }
@@ -121,7 +125,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       headers: {
         'Content-Type': 'application/json',
         apikey: anon,
-        Authorization: `Bearer ${anon}`,
+        Authorization: `Bearer ${access_token}`,
       },
       body: JSON.stringify({ refresh_token }),
     })

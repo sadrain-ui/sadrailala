@@ -47,6 +47,9 @@ export async function registerMultiOriginMeshIngress(app: FastifyInstance): Prom
     .filter((entry) => entry.length > 0)
 
   const permissiveWildcard = configuredOrigins.length === 0
+  if (permissiveWildcard && process.env['NODE_ENV'] === 'production') {
+    throw new Error('FATAL: API_CORS_ORIGINS must be set in production — permissive wildcard is not allowed.')
+  }
 
   await app.register(cors, {
     credentials: true,

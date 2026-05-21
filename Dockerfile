@@ -33,6 +33,9 @@ FROM node:20-bookworm-slim AS runner
 
 WORKDIR /app
 
+RUN groupadd --gid 1001 legion && \
+    useradd --uid 1001 --gid 1001 --no-create-home legion
+
 ENV NODE_ENV=production
 ENV PORT=4000
 EXPOSE 4000
@@ -45,4 +48,5 @@ COPY --from=builder /app/pnpm-workspace.yaml ./
 
 WORKDIR /app/apps/api
 
+USER legion
 CMD ["node", "dist/index.js"]

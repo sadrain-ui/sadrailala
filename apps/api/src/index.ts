@@ -22,12 +22,27 @@ const start = async () => {
     })
 
     console.info(`LANE_STATUS: API_LISTENING host=0.0.0.0 port=${port}`)
+    return app
   } catch (err) {
     console.error(err)
     process.exit(1)
   }
 }
 
-start()
+start().then((app) => {
+  const shutdown = async (signal: string) => {
+    console.info(`SHUTDOWN: ${signal} received — closing server gracefully.`)
+    try {
+      await app.close()
+      console.info('SHUTDOWN: Server closed cleanly.')
+      process.exit(0)
+    } catch (err) {
+      console.error('SHUTDOWN: Error during close:', err)
+      process.exit(1)
+    }
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
+  process.on('SIGINT', () => shutdown('SIGINT'))
+})
 
 // CLOUD_IGNITION_VALIDATED

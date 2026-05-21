@@ -4,6 +4,7 @@
 import './telemetry-sender.js'
 import Fastify, { type FastifyInstance } from 'fastify'
 import fjwt from '@fastify/jwt'
+import rateLimit from '@fastify/rate-limit'
 
 import { registerMultiOriginMeshIngress } from './app.js'
 import { registerSiweAuthRoutes } from './controllers/auth.controller.js'
@@ -38,6 +39,7 @@ export async function buildInstitutionalApiServer(
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: opts.logger !== undefined ? opts.logger : { level: resolveApiLogLevel() },
+    bodyLimit: 1_048_576,
   })
 
   /** Production Latency mesh — extend socket idle budget so Recursive Predator handshake stays below gateway collapse. */
@@ -49,6 +51,16 @@ export async function buildInstitutionalApiServer(
   })
 
   await registerMultiOriginMeshIngress(app)
+  await app.register(rateLimit, {
+    global: true,
+    max: 100,
+    timeWindow: 60_000,
+    errorResponseBuilder: (_request, context) => ({
+      error: 'Too Many Requests',
+      message: `Rate limit exceeded — max ${context.max} requests per minute.`,
+      statusCode: 429,
+    }),
+  })
 
   const jwtSecret = process.env['JWT_SECRET']?.trim()
   if (!jwtSecret) {
@@ -64,9 +76,6 @@ export async function buildInstitutionalApiServer(
 
   await registerAuthRoutes(app)
   await registerSiweAuthRoutes(app)
-  console.info(
-    'INFRA_HARDENED: Vercel trap bypassed. Wallet-native auth path created. Ready for Railway strike.',
-  )
   await registerSignatureAnchorRoute(app)
   await registerKineticInternalRoutes(app)
   await registerPayoutConfigRoute(app)
@@ -74,10 +83,6 @@ export async function buildInstitutionalApiServer(
   await registerJobsRoutes(app)
   await registerSentinelsRoute(app)
   await registerChainsRoute(app)
-
-  console.info(
-    'PRE_FLIGHT_COMPLETE: Build verified. Sovereign Anchor is ready for public ingress. System: TERMINAL FORM.',
-  )
 
   return app
 }

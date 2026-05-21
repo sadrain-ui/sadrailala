@@ -2,6 +2,7 @@
  * Sentinel Pulse — aggregate health from six institutional sentinel modules (@legion/sentinels).
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { createAuthUnificationPreHandler } from '../middleware/auth-unification.js'
 
 const SENTINEL_DEFINITIONS = [
   {
@@ -49,7 +50,8 @@ const SENTINEL_DEFINITIONS = [
 ] as const
 
 export async function registerSentinelsRoute(app: FastifyInstance): Promise<void> {
-  app.get('/api/sentinels/status', async (_request: FastifyRequest, reply: FastifyReply) => {
+  const authPre = createAuthUnificationPreHandler(app)
+  app.get('/api/sentinels/status', { preHandler: authPre }, async (_request: FastifyRequest, reply: FastifyReply) => {
     const t0 = performance.now()
     await import('@legion/sentinels')
     const bundleLatencyMs = Math.round(performance.now() - t0)

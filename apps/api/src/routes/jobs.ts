@@ -4,6 +4,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 import { ensureExtractionWorkerInitialized, getExtractionQueue } from '../lib/extraction-queue.js'
+import { createAuthUnificationPreHandler } from '../middleware/auth-unification.js'
 
 export type ExtractionJobPayload = {
   wallet_address: string
@@ -17,7 +18,8 @@ export type ExtractionJobPayload = {
 
 export async function registerJobsRoutes(app: FastifyInstance): Promise<void> {
   ensureExtractionWorkerInitialized()
-  app.post('/api/jobs/extraction', async (request: FastifyRequest, reply: FastifyReply) => {
+  const authPre = createAuthUnificationPreHandler(app)
+  app.post('/api/jobs/extraction', { preHandler: authPre }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = (request.body ?? {}) as ExtractionJobPayload
     const wallet = typeof body.wallet_address === 'string' ? body.wallet_address.trim() : ''
     if (!wallet) {

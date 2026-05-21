@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v7
+# cache-bust: 2026-05-22-v8
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
@@ -16,17 +16,17 @@ COPY packages/ ./packages/
 COPY apps/ ./apps/
 COPY scripts/ ./scripts/
 
-# --no-frozen-lockfile because lockfile may drift when package.json changes in CI
+# no-frozen-lockfile: safe in CI, avoids lockfile drift errors
 RUN pnpm install --no-frozen-lockfile
 
 # Build dependency chain in order
 RUN pnpm --filter @legion/core build
 RUN pnpm --filter @legion/sentinels build
 
-# api build: tsc --build + flatten script (no redundant core/sentinels rebuild)
+# api build: tsc --build + flatten (no redundant rebuilds)
 RUN pnpm --filter @legion/api build
 
-# Sanity check — fail fast if artifacts missing
+# Sanity checks
 RUN test -f /app/packages/core/dist/index.js        || (echo "MISSING: core/dist/index.js" && exit 1)
 RUN test -f /app/packages/sentinels/dist/index.js   || (echo "MISSING: sentinels/dist/index.js" && exit 1)
 RUN test -f /app/apps/api/dist/index.js             || (echo "MISSING: api/dist/index.js" && exit 1)

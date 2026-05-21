@@ -4,14 +4,25 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist",
+    "rootDir": "src",
     "skipLibCheck": true,
     "strict": false,
     "noImplicitAny": false,
     "strictNullChecks": false,
     "exactOptionalPropertyTypes": false,
     "noPropertyAccessFromIndexSignature": false,
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@legion/core": ["../../packages/core/dist/index.d.ts"],
+      "@legion/core/*": ["../../packages/core/dist/*"],
+      "@legion/sentinels": ["../../packages/sentinels/dist/index.d.ts"],
+      "@legion/sentinels/*": ["../../packages/sentinels/dist/*"]
+    }
   },
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/sentinels" }
+  ],
   "include": ["src/**/*.ts", "src/**/*.d.ts"],
   "exclude": ["src/tests/**", "vitest.config.ts"]
 }

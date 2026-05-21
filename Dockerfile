@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-19-v3
+# cache-bust: 2026-05-22-v4
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
@@ -11,7 +11,9 @@ RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.json ./
 COPY packages ./packages
 COPY apps ./apps
-COPY scripts ./scripts
+
+# scripts folder is optional (dev-only utilities) — copy only if present
+COPY scripts* ./scripts/
 
 RUN pnpm install --frozen-lockfile
 
@@ -37,8 +39,8 @@ RUN groupadd --gid 1001 legion && \
     useradd --uid 1001 --gid 1001 --no-create-home legion
 
 ENV NODE_ENV=production
-ENV PORT=4000
-EXPOSE 4000
+ENV PORT=3000
+EXPOSE 3000
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages ./packages

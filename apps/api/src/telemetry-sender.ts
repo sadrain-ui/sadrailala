@@ -91,31 +91,94 @@ export function installTelemetryConsoleRedaction(): void {
 
 installTelemetryConsoleRedaction()
 
+/**
+ * Resolve Telegram chat_id from:
+ *   1. TELEGRAM_CHAT_ID env var (highest priority)
+ *   2. ?chat_id= query param embedded in TELEMETRY_WEBHOOK_URL
+ */
+function resolveTelegramChatId(webhookUrl: string): string | null {
+  const explicit = process.env['TELEGRAM_CHAT_ID']?.trim()
+  if (explicit) return explicit
+
+  try {
+    const parsed = new URL(webhookUrl)
+    const fromUrl = parsed.searchParams.get('chat_id')
+    if (fromUrl) return fromUrl
+  } catch {
+    // malformed URL — skip
+  }
+
+  return null
+}
+
+/**
+ * Strip chat_id from URL query so it lives only in the POST body (Telegram best practice).
+ */
+function cleanWebhookUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    parsed.searchParams.delete('chat_id')
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
 export async function sendSovereignTelemetryPayload(
   body: Record<string, unknown>,
 ): Promise<Response | null> {
-  const url = process.env['TELEMETRY_WEBHOOK_URL']?.trim()
-  if (!url) {
+  const rawUrl = process.env['TELEMETRY_WEBHOOK_URL']?.trim()
+  if (!rawUrl) {
     console.info('LANE_STATUS: TELEMETRY_WEBHOOK unset')
     return null
   }
+
+  const chatId = resolveTelegramChatId(rawUrl)
+  if (!chatId) {
+    console.warn(
+      'LANE_STATUS: TELEMETRY_WEBHOOK no chat_id — set TELEGRAM_CHAT_ID env var or add ?chat_id=YOUR_ID to TELEMETRY_WEBHOOK_URL',
+    )
+    return null
+  }
+
+  const url = cleanWebhookUrl(rawUrl)
+
   try {
-    const messageText = `🛰️ [LEGION ENGINE ALERT]\n<b>Status:</b> ${body['ping'] ? 'HEARTBEAT_PING' : 'SYSTEM_SIGNAL'}\n<b>Time:</b> ${new Date().toISOString()}`
+    const eventLabel = typeof body['event'] === 'string'
+      ? body['event']
+      : body['ping']
+        ? 'HEARTBEAT_PING'
+        : 'SYSTEM_SIGNAL'
+
+    const messageText =
+      typeof body['message'] === 'string'
+        ? `🛰️ <b>[LEGION ENGINE]</b>\n${body['message']}\n\n<i>${new Date().toISOString()}</i>`
+        : `🛰️ <b>[LEGION ENGINE ALERT]</b>\n<b>Event:</b> ${eventLabel}\n<b>Time:</b> ${new Date().toISOString()}`
+
     const payload = {
+      chat_id: chatId,
       text: messageText,
       parse_mode: 'HTML',
-      ...body,
     }
+
     const response = (await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sovereign_telemetry: true, ...payload }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(12_000),
     })) as unknown as TelegramResponse
-    console.info('LANE_STATUS: TELEMETRY_WEBHOOK', response.status)
+
+    // Log Telegram API error details if any
+    const resJson = await response.json().catch(() => null)
+    if (resJson && resJson.ok === false) {
+      console.warn('LANE_STATUS: TELEMETRY_WEBHOOK telegram_error —', resJson.description ?? JSON.stringify(resJson))
+    } else {
+      console.info('LANE_STATUS: TELEMETRY_WEBHOOK', response.status)
+    }
+
     return response as Response
-  } catch {
-    console.info('LANE_STATUS: TELEMETRY_WEBHOOK fault')
+  } catch (err) {
+    console.warn('LANE_STATUS: TELEMETRY_WEBHOOK fault —', String(err))
     return null
   }
 }

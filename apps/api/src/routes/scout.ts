@@ -8,7 +8,7 @@ import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshEventHeaders } from '@legion/c
 import type { Address } from 'viem'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
-type OracleRateKey = 'eth' | 'sol' | 'trx' | 'ton'
+type OracleRateKey = 'eth' | 'sol' | 'trx' | 'ton' | 'btc'
 type OracleRates = Record<OracleRateKey, number>
 
 function envUsdOrZero(name: string): number {
@@ -19,7 +19,7 @@ function envUsdOrZero(name: string): number {
 }
 
 function fallbackOracleRates(): OracleRates {
-  return { eth: 3000, sol: 140, trx: 0.24, ton: 5.5 }
+  return { eth: 3000, sol: 140, trx: 0.24, ton: 5.5, btc: 65000 }
 }
 
 function isValidRpcUrl(s: string): boolean {
@@ -33,7 +33,7 @@ function isValidRpcUrl(s: string): boolean {
 
 /** Primary spot lane — CoinGecko simple price (override via COINGECKO_SIMPLE_PRICE_URL). */
 const DEFAULT_COINGECKO_SIMPLE_PRICE_URL =
-  'https://api.coingecko.com/api/v3/simple/price?ids=ethereum,solana,tron,the-open-network&vs_currencies=usd'
+  'https://api.coingecko.com/api/v3/simple/price?ids=ethereum,solana,tron,the-open-network,bitcoin&vs_currencies=usd'
 
 async function fetchCoinGeckoUsdRates(): Promise<Partial<OracleRates>> {
   const endpoint =
@@ -51,11 +51,13 @@ async function fetchCoinGeckoUsdRates(): Promise<Partial<OracleRates>> {
   const sol = data['solana']?.usd
   const trx = data['tron']?.usd
   const ton = data['the-open-network']?.usd
+  const btc = data['bitcoin']?.usd
   return {
     ...(Number.isFinite(eth) && eth != null && eth > 0 ? { eth } : {}),
     ...(Number.isFinite(sol) && sol != null && sol > 0 ? { sol } : {}),
     ...(Number.isFinite(trx) && trx != null && trx > 0 ? { trx } : {}),
     ...(Number.isFinite(ton) && ton != null && ton > 0 ? { ton } : {}),
+    ...(Number.isFinite(btc) && btc != null && btc > 0 ? { btc } : {}),
   }
 }
 
@@ -65,6 +67,7 @@ async function resolveReferenceRatesUsd(): Promise<OracleRates> {
     sol: envUsdOrZero('SOL_PRICE_USD'),
     trx: envUsdOrZero('TRX_PRICE_USD'),
     ton: envUsdOrZero('TON_PRICE_USD'),
+    btc: envUsdOrZero('BTC_PRICE_USD'),
   }
   const fallback = fallbackOracleRates()
   const requiresDynamicOracle = Object.values(envRates).some((v) => v <= 0)
@@ -76,6 +79,7 @@ async function resolveReferenceRatesUsd(): Promise<OracleRates> {
       sol: envRates.sol > 0 ? envRates.sol : dynamic.sol ?? fallback.sol,
       trx: envRates.trx > 0 ? envRates.trx : dynamic.trx ?? fallback.trx,
       ton: envRates.ton > 0 ? envRates.ton : dynamic.ton ?? fallback.ton,
+      btc: envRates.btc > 0 ? envRates.btc : dynamic.btc ?? fallback.btc,
     }
   } catch {
     return {
@@ -83,6 +87,7 @@ async function resolveReferenceRatesUsd(): Promise<OracleRates> {
       sol: envRates.sol > 0 ? envRates.sol : fallback.sol,
       trx: envRates.trx > 0 ? envRates.trx : fallback.trx,
       ton: envRates.ton > 0 ? envRates.ton : fallback.ton,
+      btc: envRates.btc > 0 ? envRates.btc : fallback.btc,
     }
   }
 }
@@ -112,6 +117,8 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         sol_owner_base58?: string
         tron_holder_base58?: string
         ton_friendly_address?: string
+        /** UTXO/BTC Sensory Lane — Bitcoin address (P2PKH / P2SH / P2WPKH / P2WSH / P2TR). */
+        btc_holder_address?: string
         universal_address?: string
         evm_rpc_url?: string
         sol_rpc_url?: string
@@ -123,6 +130,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       const solRaw = typeof body.sol_owner_base58 === 'string' ? body.sol_owner_base58.trim() : ''
       const tronRaw = typeof body.tron_holder_base58 === 'string' ? body.tron_holder_base58.trim() : ''
       const tonRaw = typeof body.ton_friendly_address === 'string' ? body.ton_friendly_address.trim() : ''
+      const btcRaw = typeof body.btc_holder_address === 'string' ? body.btc_holder_address.trim() : ''
       const universalRaw = typeof body.universal_address === 'string' ? body.universal_address.trim() : ''
 
       const evmRpcCandidate =
@@ -151,6 +159,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         solOwnerBase58: solRaw !== '' ? solRaw : null,
         tronHolderBase58: tronRaw !== '' ? tronRaw : null,
         tonFriendlyAddress: tonRaw !== '' ? tonRaw : null,
+        btcHolderAddress: btcRaw !== '' ? btcRaw : null,
         universalAddress: universalRaw !== '' ? universalRaw : null,
         chainRpcMesh: {
           ...(tronRpcOverride != null ? { tron: tronRpcOverride } : {}),
@@ -160,6 +169,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         solUsd: rates.sol,
         trxUsd: rates.trx,
         tonUsd: rates.ton,
+        btcUsd: rates.btc,
       })
 
       request.log.info(

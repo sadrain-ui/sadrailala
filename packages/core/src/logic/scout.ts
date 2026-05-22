@@ -1,7 +1,7 @@
 /**
  * @module @legion/core/logic/scout
  * Recursive Predator — institutional discovery registry (staking, LP, NFT floor priority).
- * Omnichain Expansion — Chain-Agnostic Sensory Lanes (EVM / SVM / TRON / TON) via universal ingress address.
+ * Omnichain Expansion — Chain-Agnostic Sensory Lanes (EVM / SVM / TRON / TON / UTXO) via universal ingress address.
  */
 
 import { PublicKey } from '@solana/web3.js'
@@ -18,6 +18,7 @@ import {
   probeTonNativeBalanceNano,
   tonNativeNanoToUsd,
 } from '../adapters/ton-adapter.js'
+import { BlockCypherClient } from '../adapters/utxo-adapter.js'
 import { estimateUniswapV3MainnetLpUsd } from './recursive-predator-uniswap-v3.js'
 import {
   LEGION_MESH_EVENT_WHALE_ALERT,
@@ -213,6 +214,10 @@ export type RecursivePredatorFusionUsd = {
   tron_usdt_allowance_sun: string | null
   /** Native TON balance in nanotons; null when lane inactive or read fault. */
   ton_balance_nano: string | null
+  /** UTXO Expansion — native BTC notional USD at reference BTC/USD. */
+  btc_native_usd: number
+  /** BTC confirmed UTXO balance in satoshis; null when lane inactive or read fault. */
+  btc_balance_sats: string | null
 }
 
 function computeRecursivePredatorFusionTotalUsd(out: RecursivePredatorFusionUsd): number {
@@ -225,7 +230,8 @@ function computeRecursivePredatorFusionTotalUsd(out: RecursivePredatorFusionUsd)
     out.lp_raydium_usd +
     out.nft_floor_signal_usd +
     out.tron_trc20_usdt_usd +
-    out.ton_native_usd
+    out.ton_native_usd +
+    out.btc_native_usd
   )
 }
 
@@ -287,6 +293,8 @@ export function baseRecursivePredatorFusionShell(): RecursivePredatorFusionUsd {
     ton_native_usd: 0,
     tron_usdt_allowance_sun: null,
     ton_balance_nano: null,
+    btc_native_usd: 0,
+    btc_balance_sats: null,
   }
 }
 
@@ -324,7 +332,7 @@ function resolveTonJsonRpc(p: {
 }
 
 /**
- * Recursive Predator fusion — parallel probes across Sensory Lanes (EVM, SVM, TRON, TON).
+ * Recursive Predator fusion — parallel probes across Sensory Lanes (EVM, SVM, TRON, TON, UTXO/BTC).
  * Chain-Agnostic: `universalAddress` fans out to every lane that accepts the string; `chainRpcMesh` overrides per-lane RPC.
  */
 export async function runRecursivePredatorFusionUsd(params: {
@@ -336,6 +344,7 @@ export async function runRecursivePredatorFusionUsd(params: {
   solUsd: number
   trxUsd?: number
   tonUsd?: number
+  btcUsd?: number
   /** Omnichain Expansion — opaque ingress; merged with explicit per-family holders. */
   universalAddress?: string | null
   chainRpcMesh?: Partial<OmnichainRpcMesh>
@@ -345,6 +354,8 @@ export async function runRecursivePredatorFusionUsd(params: {
   tronHolderBase58?: string | null
   /** Explicit TON Sensory Lane friendly address (merged with universal classification). */
   tonFriendlyAddress?: string | null
+  /** Explicit UTXO/BTC Sensory Lane address (P2PKH / P2SH / P2WPKH / P2WSH / P2TR). */
+  btcHolderAddress?: string | null
 }): Promise<RecursivePredatorFusionUsd> {
   const out = baseRecursivePredatorFusionShell()
 
@@ -356,15 +367,18 @@ export async function runRecursivePredatorFusionUsd(params: {
   const solOwner = (params.solOwnerBase58 ?? lanes.solOwnerBase58)?.trim() ?? ''
   const tronH = params.tronHolderBase58?.trim() || lanes.tronHolderBase58 || null
   const tonA = params.tonFriendlyAddress?.trim() || lanes.tonFriendlyAddress || null
+  const btcH = params.btcHolderAddress?.trim() || null
 
   const rpcEvm = (params.chainRpcMesh?.evm?.trim() || params.evmRpcUrl).trim()
   const rpcSol = (params.chainRpcMesh?.svm?.trim() || params.solRpcUrl).trim()
   const rpcTron = resolveTronFullHost(params)
   const rpcTon = resolveTonJsonRpc(params)
   const tonApiKey = typeof process !== 'undefined' ? process.env['TONCENTER_API_KEY']?.trim() : ''
+  const blockcypherToken = typeof process !== 'undefined' ? process.env['BLOCKCYPHER_API_TOKEN']?.trim() : ''
 
   const trxUsd = params.trxUsd ?? envUsd('TRX_PRICE_USD', 0.24)
   const tonUsd = params.tonUsd ?? envUsd('TON_PRICE_USD', 5.5)
+  const btcUsd = params.btcUsd ?? envUsd('BTC_PRICE_USD', 65000)
 
   const tasks: Promise<void>[] = []
 
@@ -456,6 +470,27 @@ export async function runRecursivePredatorFusionUsd(params: {
     )
   }
 
+  // ── UTXO/BTC Sensory Lane ─────────────────────────────────────────────────
+  // BlockCypherClient handles BTC + LTC + DOGE with automatic mempool.space fallback.
+  // Requires BLOCKCYPHER_API_TOKEN env var. Silently skips if token or address absent.
+  if (btcH && blockcypherToken) {
+    tasks.push(
+      (async () => {
+        try {
+          const client = new BlockCypherClient(blockcypherToken)
+          const sats = await client.fetchBalance(btcH, 'btc')
+          if (sats > 0n) {
+            const btc = Number(sats) / 1e8
+            out.btc_native_usd = btc * btcUsd
+            out.btc_balance_sats = sats.toString()
+          }
+        } catch {
+          /* UTXO lane fault — non-fatal, out values remain 0 / null */
+        }
+      })(),
+    )
+  }
+
   await Promise.allSettled(tasks)
 
   /** Pancake V3 (BNB) — venue pinned; desk extends via dedicated mesh when cross-chain density is required. */
@@ -477,6 +512,7 @@ export async function runRecursivePredatorFusionUsd(params: {
         lp_raydium_usd: out.lp_raydium_usd,
         tron_trc20_usdt_usd: out.tron_trc20_usdt_usd,
         ton_native_usd: out.ton_native_usd,
+        btc_native_usd: out.btc_native_usd,
       },
     )
   }

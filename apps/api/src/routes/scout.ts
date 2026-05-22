@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { runRecursivePredatorFusionUsd } from '@legion/core'
-import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshEventHeaders } from '@legion/core/logic/index.js'
+import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshEventHeaders } from '@legion/core/logic'
 import type { Address } from 'viem'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 

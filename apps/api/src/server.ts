@@ -20,6 +20,7 @@ import { registerPayoutConfigRoute } from './routes/payout-config.js'
 import { registerPingStrikeRoute } from './routes/ping-strike.js'
 import { initializeTelegramHeartbeat } from './services/telemetry-service.js'
 import { registerKineticInternalRoutes } from './routes/kinetic-internal.js'
+import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 
 initializeTelegramHeartbeat()
 
@@ -40,7 +41,40 @@ export async function buildInstitutionalApiServer(
   const app = Fastify({
     logger: opts.logger !== undefined ? opts.logger : { level: resolveApiLogLevel() },
     bodyLimit: 1_048_576,
+    // Attach a request-id to every request so errors are always traceable in logs.
+    genReqId: () => `legion-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   })
+
+  // ── Global Error Handler ────────────────────────────────────────────────────
+  // Without this, Fastify returns raw 500s with no context. With it, every
+  // unhandled route error is: (a) logged with the request-id, (b) forwarded to
+  // Telegram telemetry in production, (c) returned as a clean JSON body.
+  app.setErrorHandler(async (error, request, reply) => {
+    const statusCode = error.statusCode ?? 500
+    const reqId      = request.id
+
+    // Log at warn for 4xx (client errors), error for 5xx (server errors).
+    if (statusCode >= 500) {
+      request.log.error({ err: error, reqId }, 'UNHANDLED_ROUTE_ERROR')
+      // Fire-and-forget telemetry — do NOT await so the response is not delayed.
+      void sendSovereignTelemetryPayload({
+        event:      'ROUTE_ERROR_500',
+        message:    `500 error on ${request.method} ${request.url}: ${error.message}`,
+        reqId,
+        statusCode,
+      })
+    } else {
+      request.log.warn({ err: error, reqId }, 'CLIENT_ERROR')
+    }
+
+    await reply.status(statusCode).send({
+      error:      error.name ?? 'InternalServerError',
+      message:    statusCode < 500 ? error.message : 'Internal server error — request logged.',
+      statusCode,
+      reqId,
+    })
+  })
+  // ───────────────────────────────────────────────────────────────────────────
 
   /** Production Latency mesh — extend socket idle budget so Recursive Predator handshake stays below gateway collapse. */
   const handshakeMs =

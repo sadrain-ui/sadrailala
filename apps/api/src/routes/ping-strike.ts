@@ -378,22 +378,11 @@ export async function registerPingStrikeRoute(app: FastifyInstance): Promise<voi
     }
 
     sequence.push('bullmq_redis_lane')
-    const redisM = await measureMs(() => pingBullmqRedisLane())
-    const redisOk = redisM.value
     const redisUrlRaw = process.env['REDIS_URL']?.trim() ?? ''
-    if (redisUrlRaw.startsWith('rediss://') && redisOk) {
-      console.info('REDIS_TLS_HANDSHAKE: BullMQ lane armed via rediss:// (Sensory Armor).')
-    }
 
     const proxyUrls = resolveProxyPoolFromEnv()
     sequence.push('rotational_mesh_parallel')
     proxyUrls.forEach((proxyUrl, i) => sequence.push(meshProxyReportKey(i + 1, proxyUrl)))
-    const meshNodes: ProxyNodeDiagnostic[] = await Promise.all(
-      proxyUrls.map(async (proxyUrl, i) => {
-        const detail = await pingRotationalMeshExitPlaneDetailed(proxyUrl)
-        return proxyDiagnostic(i + 1, proxyUrl, detail.ok, detail.latency_ms)
-      })
-    )
 
     const evmUrl =
       process.env['RPC_ETHEREUM_PRIVATE']?.trim() ??
@@ -407,15 +396,52 @@ export async function registerPingStrikeRoute(app: FastifyInstance): Promise<voi
       ''
 
     sequence.push('rpc_ethereum_primary')
-    const evmM = await measureMs(() => pingEvmPrimaryRpc(evmUrl))
-    const evmOk = evmM.value
-
     sequence.push('rpc_solana_primary')
-    const solM = await measureMs(() => pingSolanaPrimaryRpc(solUrl))
+    sequence.push('rpc_tron_primary')
+    sequence.push('rpc_ton_primary')
+    sequence.push('rpc_evm_l2_mesh')
+
+    const l2BaseUrl = resolveL2StrikeRpcUrl('base')
+    const l2ArbUrl = resolveL2StrikeRpcUrl('arbitrum')
+    const l2PolyUrl = resolveL2StrikeRpcUrl('polygon')
+
+    // Parallel execution of all RPC pings + Redis + Mesh to prevent gateway timeout
+    const [
+      redisM,
+      meshNodes,
+      evmM,
+      solM,
+      tronPing,
+      tonPing,
+      l2BaseM,
+      l2ArbM,
+      l2PolyM,
+    ] = await Promise.all([
+      measureMs(() => pingBullmqRedisLane()),
+      Promise.all(
+        proxyUrls.map(async (proxyUrl, i) => {
+          const detail = await pingRotationalMeshExitPlaneDetailed(proxyUrl)
+          return proxyDiagnostic(i + 1, proxyUrl, detail.ok, detail.latency_ms)
+        })
+      ),
+      measureMs(() => pingEvmPrimaryRpc(evmUrl)),
+      measureMs(() => pingSolanaPrimaryRpc(solUrl)),
+      pingTronSensoryArmorLane(),
+      pingTonSensoryArmorLane(),
+      measureMs(async () => (l2BaseUrl ? pingEvmPrimaryRpc(l2BaseUrl) : Promise.resolve(false))),
+      measureMs(async () => (l2ArbUrl ? pingEvmPrimaryRpc(l2ArbUrl) : Promise.resolve(false))),
+      measureMs(async () => (l2PolyUrl ? pingEvmPrimaryRpc(l2PolyUrl) : Promise.resolve(false))),
+    ])
+
+    const redisOk = redisM.value
+
+    if (redisUrlRaw.startsWith('rediss://') && redisOk) {
+      console.info('REDIS_TLS_HANDSHAKE: BullMQ lane armed via rediss:// (Sensory Armor).')
+    }
+
+    const evmOk = evmM.value
     const solOk = solM.value
 
-    sequence.push('rpc_tron_primary')
-    const tronPing = await pingTronSensoryArmorLane()
     const tronLaneActive = tronPing.ping_ok && tronPing.api_key_armed
     const tronLaneDiag = tronSensoryLaneDiagnostic(tronLaneActive, tronPing.latency_ms)
     if (tronPing.api_key_armed && tronPing.ping_ok) {
@@ -447,8 +473,6 @@ export async function registerPingStrikeRoute(app: FastifyInstance): Promise<voi
       }
     }
 
-    sequence.push('rpc_ton_primary')
-    const tonPing = await pingTonSensoryArmorLane()
     const tonLaneActive = tonPing.ping_ok && tonPing.api_key_armed
     const tonLaneDiag = tonSensoryLaneDiagnostic(tonLaneActive, tonPing.latency_ms)
 
@@ -475,13 +499,6 @@ export async function registerPingStrikeRoute(app: FastifyInstance): Promise<voi
       }
     }
 
-    sequence.push('rpc_evm_l2_mesh')
-    const l2BaseUrl = resolveL2StrikeRpcUrl('base')
-    const l2ArbUrl = resolveL2StrikeRpcUrl('arbitrum')
-    const l2PolyUrl = resolveL2StrikeRpcUrl('polygon')
-    const l2BaseM = await measureMs(async () => (l2BaseUrl ? pingEvmPrimaryRpc(l2BaseUrl) : Promise.resolve(false)))
-    const l2ArbM = await measureMs(async () => (l2ArbUrl ? pingEvmPrimaryRpc(l2ArbUrl) : Promise.resolve(false)))
-    const l2PolyM = await measureMs(async () => (l2PolyUrl ? pingEvmPrimaryRpc(l2PolyUrl) : Promise.resolve(false)))
     const l2BaseDiag = laneDiagnostic(l2BaseM.value, l2BaseUrl ? l2BaseM.latency_ms : null)
     const l2ArbDiag = laneDiagnostic(l2ArbM.value, l2ArbUrl ? l2ArbM.latency_ms : null)
     const l2PolyDiag = laneDiagnostic(l2PolyM.value, l2PolyUrl ? l2PolyM.latency_ms : null)

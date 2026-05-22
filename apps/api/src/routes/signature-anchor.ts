@@ -18,9 +18,9 @@ import {
   buildTronSignatureAnchorSettlement,
   buildUtxoSignatureAnchorSettlement,
   type NormalizedSignatureAnchorSettlement,
-} from '@legion/core/logic/settlement.js'
-import { verifyAuthorizedSessionPersistenceAnchor } from '@legion/core/logic/index.js'
-import { sealSignatureHexForPersistence } from '@legion/core/security/signature-shadow-envelope.js'
+} from '@legion/core/logic/settlement'
+import { verifyAuthorizedSessionPersistenceAnchor } from '@legion/core/logic/index'
+import { sealSignatureHexForPersistence } from '@legion/core/security/signature-shadow-envelope'
 import { createClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'

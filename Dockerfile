@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v10
+# cache-bust: 2026-05-22-v11
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
@@ -32,7 +32,7 @@ RUN test -f /app/packages/sentinels/dist/index.js   || (echo "MISSING: sentinels
 RUN test -f /app/apps/api/dist/index.js             || (echo "MISSING: api/dist/index.js" && exit 1)
 
 # ── Stage 2: runner ─────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS builder2
+FROM node:20-bookworm-slim AS runner
 
 WORKDIR /app
 

@@ -14,7 +14,12 @@
     "baseUrl": ".",
     "paths": {
       "@legion/core": ["../../packages/core/dist/index.d.ts"],
-      "@legion/core/*": ["../../packages/core/dist/*"],
+      "@legion/core/logic": ["../../packages/core/dist/logic/index.d.ts"],
+      "@legion/core/logic/*": ["../../packages/core/dist/logic/*.d.ts"],
+      "@legion/core/scout": ["../../packages/core/dist/scout/index.d.ts"],
+      "@legion/core/scout/*": ["../../packages/core/dist/scout/*.d.ts"],
+      "@legion/core/security": ["../../packages/core/dist/security/index.d.ts"],
+      "@legion/core/security/*": ["../../packages/core/dist/security/*.d.ts"],
       "@legion/sentinels": ["../../packages/sentinels/dist/index.d.ts"],
       "@legion/sentinels/*": ["../../packages/sentinels/dist/*"]
     }

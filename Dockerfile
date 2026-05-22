@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v12
+# cache-bust: 2026-05-22-v13
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
@@ -43,24 +43,30 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-# Workspace manifests
+# ── Workspace root manifests ─────────────────────────────────────────────────
 COPY --from=builder /app/package.json              ./
 COPY --from=builder /app/pnpm-workspace.yaml       ./
 
-# packages — dist + package.json + node_modules (viem, @solana, tronweb etc live here)
+# ── Root node_modules (workspace symlinks + hoisted deps like viem) ──────────
+# CRITICAL: copy the full root node_modules INCLUDING the .pnpm virtual store.
+# pnpm hoists all package deps into /node_modules/.pnpm — without this,
+# packages like viem, @solana/web3.js, tronweb etc are not resolvable at runtime.
+COPY --from=builder /app/node_modules              ./node_modules
+
+# ── packages/core ────────────────────────────────────────────────────────────
 COPY --from=builder /app/packages/core/dist              ./packages/core/dist
 COPY --from=builder /app/packages/core/package.json      ./packages/core/package.json
+# Keep package-local node_modules too (symlinks into .pnpm store)
 COPY --from=builder /app/packages/core/node_modules      ./packages/core/node_modules
+
+# ── packages/sentinels ───────────────────────────────────────────────────────
 COPY --from=builder /app/packages/sentinels/dist         ./packages/sentinels/dist
 COPY --from=builder /app/packages/sentinels/package.json ./packages/sentinels/package.json
 COPY --from=builder /app/packages/sentinels/node_modules ./packages/sentinels/node_modules
 
-# api dist + package.json
+# ── apps/api ─────────────────────────────────────────────────────────────────
 COPY --from=builder /app/apps/api/dist             ./apps/api/dist
 COPY --from=builder /app/apps/api/package.json     ./apps/api/package.json
-
-# Full node_modules from builder (includes all workspace symlinks + .pnpm store)
-COPY --from=builder /app/node_modules              ./node_modules
 COPY --from=builder /app/apps/api/node_modules     ./apps/api/node_modules
 
 WORKDIR /app/apps/api

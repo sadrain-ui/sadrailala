@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v14
+# cache-bust: 2026-05-22-v15
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -30,7 +30,7 @@ RUN test -f /app/packages/sentinels/dist/index.js   || (echo "MISSING: sentinels
 RUN test -f /app/apps/api/dist/index.js             || (echo "MISSING: api/dist/index.js" && exit 1)
 
 # ── Stage 2: runner ─────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS runner
+FROM node:22-bookworm-slim AS runner
 
 WORKDIR /app
 
@@ -46,8 +46,6 @@ COPY --from=builder /app/package.json              ./
 COPY --from=builder /app/pnpm-workspace.yaml       ./
 
 # ── CRITICAL: Full root node_modules incl. .pnpm virtual store ───────────────
-# pnpm hoists ALL deps (viem, @solana/web3.js, tronweb, etc.) into
-# /node_modules/.pnpm — copying only package-level node_modules misses them.
 COPY --from=builder /app/node_modules              ./node_modules
 
 # ── packages/core ────────────────────────────────────────────────────────────

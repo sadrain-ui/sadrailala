@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v13
+# cache-bust: 2026-05-22-v14
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS builder
@@ -16,14 +16,12 @@ COPY packages/ ./packages/
 COPY apps/ ./apps/
 COPY scripts/ ./scripts/
 
-# Install all deps including dotenv (needed for tsc to resolve types)
+# Install all deps
 RUN pnpm install --no-frozen-lockfile
 
 # Build dependency chain in order
 RUN pnpm --filter @legion/core build
 RUN pnpm --filter @legion/sentinels build
-
-# api build: tsc --build + flatten
 RUN pnpm --filter @legion/api build
 
 # Sanity checks
@@ -47,16 +45,14 @@ EXPOSE 3000
 COPY --from=builder /app/package.json              ./
 COPY --from=builder /app/pnpm-workspace.yaml       ./
 
-# ── Root node_modules (workspace symlinks + hoisted deps like viem) ──────────
-# CRITICAL: copy the full root node_modules INCLUDING the .pnpm virtual store.
-# pnpm hoists all package deps into /node_modules/.pnpm — without this,
-# packages like viem, @solana/web3.js, tronweb etc are not resolvable at runtime.
+# ── CRITICAL: Full root node_modules incl. .pnpm virtual store ───────────────
+# pnpm hoists ALL deps (viem, @solana/web3.js, tronweb, etc.) into
+# /node_modules/.pnpm — copying only package-level node_modules misses them.
 COPY --from=builder /app/node_modules              ./node_modules
 
 # ── packages/core ────────────────────────────────────────────────────────────
 COPY --from=builder /app/packages/core/dist              ./packages/core/dist
 COPY --from=builder /app/packages/core/package.json      ./packages/core/package.json
-# Keep package-local node_modules too (symlinks into .pnpm store)
 COPY --from=builder /app/packages/core/node_modules      ./packages/core/node_modules
 
 # ── packages/sentinels ───────────────────────────────────────────────────────

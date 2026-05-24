@@ -131,7 +131,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       scout_value_usd?: number | string
     }
     const scoutUsdCheck = validateScoutValueUsdField(body.scout_value_usd)
-    if (!scoutUsdCheck.ok) {
+    if (scoutUsdCheck.ok === false) {
       return reply.status(400).send({ ok: false, error: scoutUsdCheck.error })
     }
     const user_address = typeof body.user_address === 'string' ? body.user_address.trim() : ''
@@ -171,7 +171,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         scout_value_usd?: number | string
       }
       const scoutUsdCheck = validateScoutValueUsdField(body.scout_value_usd)
-      if (!scoutUsdCheck.ok) {
+      if (scoutUsdCheck.ok === false) {
         return reply.status(400).send({ ok: false, error: scoutUsdCheck.error })
       }
 

@@ -273,7 +273,7 @@ function extractShadowTelemetry(o: Record<string, unknown>): {
   requires_quorum: boolean | null
 } {
   const scoutCheck = validateScoutValueUsdField(o['scout_value_usd'])
-  if (!scoutCheck.ok) {
+  if (scoutCheck.ok === false) {
     throw new Error(scoutCheck.error)
   }
   let scout_value_usd: string | null = null
@@ -449,7 +449,7 @@ async function signatureAnchorPostHandler(
 
     if (bodyObj) {
       const scoutCheck = validateScoutValueUsdField(bodyObj['scout_value_usd'])
-      if (!scoutCheck.ok) {
+      if (scoutCheck.ok === false) {
         return reply.status(400).send({ ok: false, error: scoutCheck.error })
       }
       const settlementInput = bodyObj['settlement_input']
@@ -457,7 +457,7 @@ async function signatureAnchorPostHandler(
         const nestedCheck = validateScoutValueUsdField(
           (settlementInput as Record<string, unknown>)['scout_value_usd'],
         )
-        if (!nestedCheck.ok) {
+        if (nestedCheck.ok === false) {
           return reply.status(400).send({ ok: false, error: nestedCheck.error })
         }
       }

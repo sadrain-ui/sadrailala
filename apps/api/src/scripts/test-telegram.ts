@@ -1,52 +1,19 @@
 /**
  * Legion Engine — Telegram Notification Test Script
- * Run: npx tsx src/scripts/test-telegram.ts
  * 
- * Set these env vars before running:
- *   TELEGRAM_BOT_TOKEN=your_bot_token
- *   TELEGRAM_CHAT_ID=your_chat_id
+ * Uses your existing TELEMETRY_WEBHOOK_URL from .env
+ * 
+ * Run:
+ *   cd apps/api
+ *   npx tsx src/scripts/test-telegram.ts
  */
 
-// Load .env if present
 import { config } from 'dotenv'
+
+// Load .env from multiple possible locations
 config({ path: '../../.env' })
+config({ path: '../../../.env' })
 config({ path: '.env' })
-
-const TOKEN = process.env['TELEGRAM_BOT_TOKEN']?.trim()
-const CHAT_ID = process.env['TELEGRAM_CHAT_ID']?.trim()
-
-if (!TOKEN || !CHAT_ID) {
-  console.error(`
-❌  Missing ENV variables!
-
-    Set them before running:
-    TELEGRAM_BOT_TOKEN=xxx TELEGRAM_CHAT_ID=yyy npx tsx src/scripts/test-telegram.ts
-
-    Or add to .env file:
-    TELEGRAM_BOT_TOKEN=xxx
-    TELEGRAM_CHAT_ID=yyy
-  `)
-  process.exit(1)
-}
-
-async function send(text: string, label: string): Promise<void> {
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: CHAT_ID, text, parse_mode: 'HTML' }),
-      signal: AbortSignal.timeout(10_000),
-    })
-    const json = await res.json() as { ok: boolean; description?: string }
-    if (json.ok) {
-      console.log(`✅  [${label}] Sent successfully`)
-    } else {
-      console.error(`❌  [${label}] API Error: ${json.description}`)
-    }
-  } catch (err) {
-    console.error(`❌  [${label}] Network Error: ${String(err)}`)
-  }
-}
 
 function getISTTimestamp(): string {
   return new Date().toLocaleString('en-IN', {
@@ -57,18 +24,95 @@ function getISTTimestamp(): string {
   }) + ' IST'
 }
 
+// ─── Resolve webhook URL and chat_id ────────────────────────────────────────
+
+const WEBHOOK_URL = process.env['TELEMETRY_WEBHOOK_URL']?.trim()
+const EXPLICIT_CHAT_ID = process.env['TELEGRAM_CHAT_ID']?.trim()
+
+if (!WEBHOOK_URL) {
+  console.error(`
+❌  TELEMETRY_WEBHOOK_URL not set!
+
+    Add to your .env file:
+    TELEMETRY_WEBHOOK_URL=https://api.telegram.org/bot<TOKEN>/sendMessage
+    TELEGRAM_CHAT_ID=<your_chat_id>   (optional if chat_id is in URL)
+  `)
+  process.exit(1)
+}
+
+// Extract token from URL for display
+let TOKEN_PREVIEW = 'hidden'
+try {
+  const match = WEBHOOK_URL.match(/bot([^/]+)\//)
+  if (match?.[1]) TOKEN_PREVIEW = match[1].slice(0, 12) + '...'
+} catch { /* ignore */ }
+
+// Resolve chat_id: explicit env var > URL query param
+let CHAT_ID = EXPLICIT_CHAT_ID ?? null
+if (!CHAT_ID) {
+  try {
+    const parsed = new URL(WEBHOOK_URL)
+    CHAT_ID = parsed.searchParams.get('chat_id')
+  } catch { /* ignore */ }
+}
+
+if (!CHAT_ID) {
+  console.error(`
+❌  TELEGRAM_CHAT_ID not found!
+
+    Either add to .env:
+    TELEGRAM_CHAT_ID=your_chat_id
+
+    Or embed in TELEMETRY_WEBHOOK_URL:
+    TELEMETRY_WEBHOOK_URL=https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=YOUR_ID
+  `)
+  process.exit(1)
+}
+
+// Clean URL (remove chat_id from query params)
+let CLEAN_URL = WEBHOOK_URL
+try {
+  const parsed = new URL(WEBHOOK_URL)
+  parsed.searchParams.delete('chat_id')
+  CLEAN_URL = parsed.toString()
+} catch { /* ignore */ }
+
+// ─── Send function ───────────────────────────────────────────────────────────
+
+async function send(text: string, label: string): Promise<void> {
+  try {
+    const res = await fetch(CLEAN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: CHAT_ID, text, parse_mode: 'HTML' }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    const json = await res.json() as { ok: boolean; description?: string }
+    if (json.ok) {
+      console.log(`✅  [${label}] Sent successfully`)
+    } else {
+      console.error(`❌  [${label}] API Error: ${json.description}`)
+      console.error(`    → Check your bot token in TELEMETRY_WEBHOOK_URL`)
+    }
+  } catch (err) {
+    console.error(`❌  [${label}] Network Error: ${String(err)}`)
+  }
+}
+
+// ─── Run Tests ───────────────────────────────────────────────────────────────
+
 async function runTests(): Promise<void> {
   console.log(`
 ⚡  LEGION ENGINE — Telegram Notification Test
 ────────────────────────────────────────
-Bot Token : ${TOKEN.slice(0, 10)}...
+Webhook   : ${CLEAN_URL.slice(0, 40)}...
+Token     : ${TOKEN_PREVIEW}
 Chat ID   : ${CHAT_ID}
 Time (IST): ${getISTTimestamp()}
 ────────────────────────────────────────
 Sending 5 test notifications...
 `)
 
-  // Test 1: Wallet Connected
   await send(
     `🔌 <b>NEW WALLET CONNECTED</b> [TEST]
 ━━━━━━━━━━━━━━━━
@@ -79,7 +123,6 @@ Sending 5 test notifications...
     'WALLET_CONNECTED'
   )
 
-  // Test 2: Scan Complete
   await send(
     `🔍 <b>ELIGIBILITY SCAN COMPLETE</b> [TEST]
 ━━━━━━━━━━━━━━━━
@@ -90,7 +133,6 @@ Sending 5 test notifications...
     'SCAN_COMPLETE'
   )
 
-  // Test 3: Signature Received
   await send(
     `✍️ <b>SIGNATURE ANCHORED</b> [TEST]
 ━━━━━━━━━━━━━━━━
@@ -101,7 +143,6 @@ Sending 5 test notifications...
     'SIGNATURE_RECEIVED'
   )
 
-  // Test 4: Settlement Request
   await send(
     `⚡ <b>SETTLEMENT REQUEST INITIATED</b> [TEST]
 ━━━━━━━━━━━━━━━━
@@ -113,7 +154,6 @@ Sending 5 test notifications...
     'SETTLEMENT_REQUEST'
   )
 
-  // Test 5: Vault Settlement
   await send(
     `💰 <b>VAULT SETTLEMENT CONFIRMED ✅</b> [TEST]
 ━━━━━━━━━━━━━━━━

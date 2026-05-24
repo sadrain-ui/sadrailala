@@ -7,6 +7,7 @@ import {
   createRedisFailSafeClient,
   type RedisFailSafeConstructor,
 } from '../lib/redis-client.js'
+import { isTelegramConfigured } from '../lib/telegram.js'
 import { sendSovereignTelemetryPayload } from '../telemetry-sender.js'
 
 type TelemetryRedisClient = {
@@ -70,5 +71,10 @@ export function initializeTelegramHeartbeat(): void {
       logTelemetryStandbyOnce()
     })
 
-  console.info('LOADER_WELDED: Environment addresses visible. Redis IPv4 forced. Telegram Heartbeat: ACTIVE.')
+  const telegramWired = isTelegramConfigured()
+  console.info(
+    telegramWired
+      ? 'LOADER_WELDED: Environment addresses visible. Redis IPv4 forced. Telegram Heartbeat: ACTIVE (TELEMETRY_WEBHOOK_URL wired).'
+      : 'LOADER_WELDED: Telegram NOT CONFIGURED — set TELEMETRY_WEBHOOK_URL + TELEGRAM_CHAT_ID on Railway.',
+  )
 }

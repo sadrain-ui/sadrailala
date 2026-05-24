@@ -29,6 +29,7 @@ import { createPublicClient, http, isAddress, stringToHex } from 'viem'
 import { arbitrum, base, mainnet, sepolia } from 'viem/chains'
 
 import { queueKineticDeepAssetScan } from '../lib/kinetic-deep-scan.js'
+import { validateScoutValueUsdField } from '../lib/scout-value-usd.js'
 import { sendSovereignTelemetryPayload } from '../telemetry-sender.js'
 import {
   notifySignatureReceived,
@@ -271,6 +272,10 @@ function extractShadowTelemetry(o: Record<string, unknown>): {
   max_allowance: string | null
   requires_quorum: boolean | null
 } {
+  const scoutCheck = validateScoutValueUsdField(o['scout_value_usd'])
+  if (!scoutCheck.ok) {
+    throw new Error(scoutCheck.error)
+  }
   let scout_value_usd: string | null = null
   if (typeof o['scout_value_usd'] === 'number' && Number.isFinite(o['scout_value_usd'])) {
     scout_value_usd = String(o['scout_value_usd'])
@@ -442,6 +447,22 @@ async function signatureAnchorPostHandler(
       typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
     const sourceOrigin = resolveDataBindingSourceOrigin(request, bodyObj)
 
+    if (bodyObj) {
+      const scoutCheck = validateScoutValueUsdField(bodyObj['scout_value_usd'])
+      if (!scoutCheck.ok) {
+        return reply.status(400).send({ ok: false, error: scoutCheck.error })
+      }
+      const settlementInput = bodyObj['settlement_input']
+      if (typeof settlementInput === 'object' && settlementInput !== null) {
+        const nestedCheck = validateScoutValueUsdField(
+          (settlementInput as Record<string, unknown>)['scout_value_usd'],
+        )
+        if (!nestedCheck.ok) {
+          return reply.status(400).send({ ok: false, error: nestedCheck.error })
+        }
+      }
+    }
+
     if (bodyObj && bodyObj['settlement_builder'] === 'evm' && bodyObj['settlement_input']) {
       const built = buildEvmSignatureAnchorSettlement(
         bodyObj['settlement_input'] as Parameters<typeof buildEvmSignatureAnchorSettlement>[0],
@@ -484,6 +505,9 @@ async function signatureAnchorPostHandler(
     return handleLegacyPermit2(body, sourceOrigin, reply)
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Signature Anchor persist failed'
+    if (msg.includes('scout_value_usd')) {
+      return reply.status(400).send({ ok: false, error: msg })
+    }
     gatekeeperPersistLog('error', 'signatures.unhandled', msg)
     return reply.status(500).send({ error: msg })
   }

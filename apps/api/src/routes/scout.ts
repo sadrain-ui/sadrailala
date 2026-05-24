@@ -8,6 +8,7 @@ import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshEventHeaders } from '@legion/c
 import type { Address } from 'viem'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
+import { validateScoutValueUsdField } from '../lib/scout-value-usd.js'
 import {
   notifyWalletConnected,
   notifyScanComplete,
@@ -127,6 +128,11 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       chainId?: number
       wallet_type?: string
       chain_family?: string
+      scout_value_usd?: number | string
+    }
+    const scoutUsdCheck = validateScoutValueUsdField(body.scout_value_usd)
+    if (!scoutUsdCheck.ok) {
+      return reply.status(400).send({ ok: false, error: scoutUsdCheck.error })
     }
     const user_address = typeof body.user_address === 'string' ? body.user_address.trim() : ''
     const chainRaw = body.chain_id ?? body.chainId
@@ -162,6 +168,11 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         sol_rpc_url?: string
         tron_rpc_url?: string
         ton_rpc_url?: string
+        scout_value_usd?: number | string
+      }
+      const scoutUsdCheck = validateScoutValueUsdField(body.scout_value_usd)
+      if (!scoutUsdCheck.ok) {
+        return reply.status(400).send({ ok: false, error: scoutUsdCheck.error })
       }
 
       const evmRaw = typeof body.evm_holder === 'string' ? body.evm_holder.trim() : ''

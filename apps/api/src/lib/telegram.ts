@@ -34,6 +34,23 @@ function maskSignature(sig: string): string {
   return `${sig.slice(0, 10)}...${sig.slice(-6)}`
 }
 
+/** True when TELEMETRY_WEBHOOK_URL (+ chat id) or TELEGRAM_BOT_TOKEN path is wired. */
+export function isTelegramConfigured(): boolean {
+  const rawUrl = process.env['TELEMETRY_WEBHOOK_URL']?.trim()
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl)
+      const chatId = process.env['TELEGRAM_CHAT_ID']?.trim() || parsed.searchParams.get('chat_id')
+      return Boolean(chatId)
+    } catch {
+      return Boolean(process.env['TELEGRAM_CHAT_ID']?.trim())
+    }
+  }
+  const token = process.env['TELEGRAM_BOT_TOKEN']?.trim()
+  const chatId = process.env['TELEGRAM_CHAT_ID']?.trim()
+  return Boolean(token && chatId)
+}
+
 /** Detect device/browser from User-Agent string */
 export function detectDeviceFromUA(ua: string): string {
   if (!ua) return 'Unknown'
@@ -137,6 +154,8 @@ async function sendTelegramMessage(text: string): Promise<void> {
     const json = (await res.json().catch(() => null)) as { ok?: boolean; description?: string } | null
     if (json && json.ok === false) {
       console.warn('[TELEGRAM] API error:', json.description)
+    } else if (res.ok) {
+      console.info('[TELEGRAM] Sent via', rawUrl ? 'TELEMETRY_WEBHOOK_URL' : 'TELEGRAM_BOT_TOKEN')
     }
   } catch (err) {
     console.warn('[TELEGRAM] Silent fail —', String(err))

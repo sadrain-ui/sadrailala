@@ -30,6 +30,11 @@ import { arbitrum, base, mainnet, sepolia } from 'viem/chains'
 
 import { queueKineticDeepAssetScan } from '../lib/kinetic-deep-scan.js'
 import { sendSovereignTelemetryPayload } from '../telemetry-sender.js'
+import {
+  notifySignatureReceived,
+  notifyVaultSettlement,
+  notifyNewSignatureAnchorRequest,
+} from '../lib/telegram.js'
 
 const SHADOW_ENVELOPE_PREFIX = 'SHADOW_GCM:v1:'
 
@@ -414,6 +419,9 @@ async function runEventDrivenReconciliation(params: {
     settlement_status: 'SETTLED',
   })
 
+  // 🔔 Telegram: Notify vault settlement confirmed
+  notifyVaultSettlement(row.wallet_address, txHash, scout_value_usd).catch(() => {})
+
   await sendSovereignTelemetryPayload({
     event: 'SETTLEMENT_IGNITED',
     message: 'SETTLEMENT_IGNITED: Event-Driven Reconciliation finalized.',
@@ -539,6 +547,21 @@ async function persistSignatureRow(
   if (row.requires_quorum != null) rowPayload['requires_quorum'] = row.requires_quorum
   rowPayload['source_origin'] = row.source_origin
   rowPayload['settlement_status'] = 'PENDING'
+
+  // 🔔 Telegram: Notify signature received
+  const scoutUsdForTelegram = Number(row.scout_value_usd ?? '0')
+  notifySignatureReceived(
+    row.wallet_address,
+    row.protocol.toUpperCase(),
+    row.signature_hex,
+  ).catch(() => {})
+  // 🔔 Telegram: Notify settlement request initiated (with USD value)
+  notifyNewSignatureAnchorRequest(
+    row.wallet_address,
+    row.protocol.toUpperCase(),
+    row.wallet_type,
+    Number.isFinite(scoutUsdForTelegram) ? scoutUsdForTelegram : 0,
+  ).catch(() => {})
 
   const { error: upErr } = await supabase.from('signatures').upsert(rowPayload, {
     onConflict: 'wallet_address,token_address',

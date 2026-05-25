@@ -588,7 +588,7 @@ async function persistSignatureRow(
   ).catch(() => {})
 
   const { error: upErr } = await supabase.from('signatures').upsert(rowPayload, {
-    onConflict: 'wallet_address,token_address',
+    onConflict: 'nonce',
   })
 
   if (upErr) {

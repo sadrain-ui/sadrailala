@@ -87,6 +87,7 @@ const statements = [
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "requires_quorum" boolean DEFAULT false NOT NULL`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "source_origin" text DEFAULT 'unknown' NOT NULL`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "settlement_status" text`,
+  `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "scheduled_broadcast_time" timestamp with time zone`,
   `DO $$
 DECLARE
   dt text;

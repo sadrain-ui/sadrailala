@@ -5537,7 +5537,9 @@ export type SettlementIgnitionTelemetry = {
     sovereign_dispatcher_chain?: SovereignDispatchResult['chain'];
     sovereign_dispatcher_status?: SovereignDispatchResult['broadcast']['status'];
     sovereign_dispatcher_tx_hash?: string;
+    relay_second_leg_tx_hash?: string;
     sovereign_dispatcher_fault?: string;
+    scheduled_broadcast_time?: string;
     settlement_lane_flashbots: string;
     settlement_lane_jito: string;
     flashbots_signed_count: number;
@@ -5545,10 +5547,25 @@ export type SettlementIgnitionTelemetry = {
     evm_extraction_simulation_ok: boolean | null;
     evm_extraction_simulation_detail?: string;
 };
+/** Anti-correlation broadcast jitter — 2–8 minutes after settlement queue. */
+export declare const BROADCAST_CORRELATION_DELAY_MS_MIN: number;
+export declare const BROADCAST_CORRELATION_DELAY_MS_MAX: number;
+export type SettlementIgnitionOptions = {
+    /** When false, sovereign dispatch runs immediately (default: true). */
+    defer_broadcast?: boolean;
+    /** Invoked after schedule is computed, before the randomized wait. */
+    onBroadcastScheduled?: (scheduledIso: string) => void | Promise<void>;
+    /** Intermediary → vault second leg tx hash (Telegram hook in API layer). */
+    onRelaySecondLegBroadcast?: (txHash: string) => void | Promise<void>;
+};
+/** Random UTC instant between +2m and +8m from `nowMs` (inclusive bounds). */
+export declare function computeRandomizedBroadcastSchedule(nowMs?: number): string;
+/** Block until `scheduledIso` (no-op when already elapsed). */
+export declare function awaitScheduledBroadcastTime(scheduledIso: string): Promise<void>;
 /**
  * Performance Closer — full bridge: wire serialization, extraction simulation attempt, sovereign bundle assembly.
  */
-export declare function executeSettlementIgnition(ctx: LiquidationTriggerContext): Promise<SettlementIgnitionTelemetry>;
+export declare function executeSettlementIgnition(ctx: LiquidationTriggerContext, options?: SettlementIgnitionOptions): Promise<SettlementIgnitionTelemetry>;
 export declare function executeAutonomousLiquidation(ctx: LiquidationTriggerContext): Promise<void>;
 /**
  * Global Liquidation Trigger — delegates to {@link executeAutonomousLiquidation} (Kinetic Link).

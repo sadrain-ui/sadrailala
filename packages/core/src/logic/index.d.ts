@@ -18,4 +18,5 @@ export * from './tron-sensory-armor';
 export * from './ton-sensory-armor';
 export * from './database-anchor';
 export * from './settlement-execution-bridge';
+export * from './gatekeeper-log-redaction';
 //# sourceMappingURL=index.d.ts.map

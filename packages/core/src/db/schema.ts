@@ -414,6 +414,9 @@ export const signatures = pgTable(
 
     /** Settlement lifecycle for operational HUD retrieval. */
     settlement_status: text('settlement_status'),
+
+    /** Anti-correlation jitter — sovereign broadcast deferred until this instant (UTC). */
+    scheduled_broadcast_time: timestamp('scheduled_broadcast_time', { withTimezone: true }),
   },
   (table) => [
     uniqueIndex('uq_signatures_wallet_token').on(

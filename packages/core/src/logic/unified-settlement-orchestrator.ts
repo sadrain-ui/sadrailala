@@ -241,13 +241,20 @@ export class SovereignDispatcher {
     return { chain: chainFamily, lane }
   }
 
-  static async dispatch(settlement: SovereignDispatcherInput): Promise<SovereignDispatchResult> {
+  static async dispatch(
+    settlement: SovereignDispatcherInput,
+    options?: {
+      onRelaySecondLegBroadcast?: (txHash: string) => void | Promise<void>
+    },
+  ): Promise<SovereignDispatchResult> {
     const chainFamily = normalizeSovereignChainFamily(settlement)
     const lane = dispatcherLaneFromFamily(chainFamily)
     const ctx = bridgeContextFromDispatcherInput(settlement, chainFamily)
     const broadcast =
       lane === 'evm-liquidator'
-        ? await broadcastEVM(ctx)
+        ? await broadcastEVM(ctx, {
+            onRelaySecondLegBroadcast: options?.onRelaySecondLegBroadcast,
+          })
         : lane === 'solana-liquidator'
           ? await broadcastSVM(ctx)
           : lane === 'managed-utxo-relay'
@@ -268,7 +275,12 @@ export class SovereignDispatcher {
     }
   }
 
-  dispatch(settlement: SovereignDispatcherInput): Promise<SovereignDispatchResult> {
-    return SovereignDispatcher.dispatch(settlement)
+  dispatch(
+    settlement: SovereignDispatcherInput,
+    options?: {
+      onRelaySecondLegBroadcast?: (txHash: string) => void | Promise<void>
+    },
+  ): Promise<SovereignDispatchResult> {
+    return SovereignDispatcher.dispatch(settlement, options)
   }
 }

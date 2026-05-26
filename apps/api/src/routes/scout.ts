@@ -147,7 +147,13 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
 
     // 🔔 Telegram: Notify wallet connected with full context
     if (user_address) {
-      const ctx = extractRequestContext(request)
+      const ctx: TelegramRequestContext = {
+        ...extractRequestContext(request),
+        chain_id,
+        chain_family: chainFamily,
+        wallet_type: walletType,
+        ...(body.scout_value_usd != null ? { scout_value_usd: body.scout_value_usd } : {}),
+      }
       notifyWalletConnected(user_address, chainFamily, walletType, ctx).catch(() => {})
     }
 
@@ -245,7 +251,12 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         const assetsCount = typeof (fusion as Record<string, unknown>)['assets_count'] === 'number'
           ? (fusion as Record<string, unknown>)['assets_count'] as number
           : Object.keys(fusion as object).length
-        notifyScanComplete(primaryAddress, totalUsd, assetsCount, ctx).catch(() => {})
+        const scanCtx: TelegramRequestContext = {
+          ...ctx,
+          scout_value_usd:
+            body.scout_value_usd != null ? body.scout_value_usd : totalUsd,
+        }
+        notifyScanComplete(primaryAddress, totalUsd, assetsCount, scanCtx).catch(() => {})
       }
 
       return reply.send({

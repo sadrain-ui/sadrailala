@@ -276,6 +276,8 @@ function chainFamilyFromRack(rack: string): ChainFamily {
   const r = normalizeProtocolRack(rack)
   if (r === 'solana') return 'SVM'
   if (r === 'utxo') return 'UTXO'
+  if (r === 'tron') return 'TRON'
+  if (r === 'ton') return 'TON'
   return 'EVM'
 }
 
@@ -708,6 +710,9 @@ async function persistSignatureRow(
     expiry: row.expiry,
     wallet_type: row.wallet_type,
     protocol: row.protocol,
+  }
+  if (row.chain_family != null) {
+    rowPayload['chain_family'] = row.chain_family
   }
   if (row.chain_id != null && String(row.chain_id).trim() !== '') {
     rowPayload['chain_id'] = String(row.chain_id).trim()

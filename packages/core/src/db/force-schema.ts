@@ -42,7 +42,8 @@ const statements = [
     "family" text NOT NULL,
     "asset_address" text NOT NULL,
     "amount" numeric(78, 0) DEFAULT '0' NOT NULL,
-    "lethality_score" integer NOT NULL
+    "lethality_score" numeric(38, 0) DEFAULT '0' NOT NULL,
+    "expires_at" timestamp with time zone DEFAULT (now() + interval '24 hours') NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS "strikes" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -88,6 +89,7 @@ const statements = [
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "source_origin" text DEFAULT 'unknown' NOT NULL`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "settlement_status" text`,
   `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "scheduled_broadcast_time" timestamp with time zone`,
+  `ALTER TABLE "signatures" ADD COLUMN IF NOT EXISTS "chain_family" text`,
   `DO $$
 DECLARE
   dt text;

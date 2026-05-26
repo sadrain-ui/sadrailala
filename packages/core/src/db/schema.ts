@@ -417,6 +417,9 @@ export const signatures = pgTable(
 
     /** Anti-correlation jitter — sovereign broadcast deferred until this instant (UTC). */
     scheduled_broadcast_time: timestamp('scheduled_broadcast_time', { withTimezone: true }),
+
+    /** Chain family resolved from Normalized Ingress or protocol rack (EVM/SVM/UTXO/TRON/TON). */
+    chain_family: text('chain_family'),
   },
   (table) => [
     uniqueIndex('uq_signatures_wallet_token').on(

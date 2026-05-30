@@ -9,6 +9,8 @@ import { verifyDatabaseAnchorOnBoot } from './lib/database-anchor.js'
 import { buildInstitutionalApiServer } from './server.js'
 import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 
+console.log('[BOOT] Index loaded')
+
 if (!process.env['VERCEL']) {
   dns.setDefaultResultOrder('ipv4first')
 }
@@ -31,12 +33,13 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Catch any synchronous throw that escaped every try/catch.
 process.on('uncaughtException', (err) => {
-  console.error('FATAL: uncaughtException', { message: err.message, stack: err.stack })
-  sendSovereignTelemetryPayload({
-    event:   'UNCAUGHT_EXCEPTION',
-    message: `FATAL uncaughtException: ${err.message}`,
-    stack:   err.stack,
-  }).finally(() => process.exit(1))
+  console.error('UNCAUGHT:', err)
+  void sendSovereignTelemetryPayload({
+    event: 'UNCAUGHT_EXCEPTION',
+    message: `uncaughtException: ${err.message}`,
+    stack: err.stack,
+  })
+  process.exit(1)
 })
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -47,11 +50,16 @@ const start = async () => {
     const app = await buildInstitutionalApiServer()
 
     const port = Number(process.env['PORT'] ?? 4000)
+    console.log('[BOOT] Port:', process.env['PORT'])
     await app.listen({
       port,
       host: '0.0.0.0',
+    }).catch((err) => {
+      console.error('[BOOT] Listen failed:', err)
+      process.exit(1)
     })
 
+    console.log('[BOOT] Server listening on port', port)
     console.info(`LANE_STATUS: API_LISTENING host=0.0.0.0 port=${port}`)
     return app
   } catch (err) {

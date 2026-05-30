@@ -64,6 +64,8 @@ const nextConfig = {
    */
   transpilePackages: [
     '@legion/core',
+    '@ledgerhq/connect-kit',
+    '@trezor/connect-web',
     '@reown/appkit',
     '@reown/appkit-adapter-wagmi',
     '@reown/appkit-adapter-solana',

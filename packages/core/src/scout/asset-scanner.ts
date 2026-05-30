@@ -239,6 +239,18 @@ function buildEvmChainMetas(
   ]
 }
 
+/** Explicit viem client config — avoids TS2589 deep generic instantiation on createPublicClient. */
+type LegionPublicClientConfig = {
+  chain: ViemChain
+  transport: ReturnType<typeof http>
+}
+
+/** Wraps createPublicClient with a fixed return type (viem chain generics can recurse past TS limits). */
+function createLegionPublicClient(config: LegionPublicClientConfig): PublicClient {
+  const createClient = createPublicClient as (params: LegionPublicClientConfig) => PublicClient
+  return createClient(config)
+}
+
 // ─── Resilience helpers ───────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {
@@ -574,11 +586,13 @@ async function scanEvmChain(
           ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_WHALE_ALERT),
         }),
       })
-      const mcRes = await l3Client.multicall({
+      const mcRes = (await (l3Client as unknown as {
+        multicall: (args: unknown) => Promise<Array<{ status: 'success' | 'failure'; result?: unknown }>>
+      }).multicall({
         contracts:        [...uniCalls, ...oneCalls],
         allowFailure:     true,
         multicallAddress: MULTICALL3_ADDR,
-      }) as Array<{ status: 'success' | 'failure'; result?: unknown }>
+      })) as Array<{ status: 'success' | 'failure'; result?: unknown }>
 
       const half = tokenAssets.length
       for (let i = 0; i < half; i++) {
@@ -1248,14 +1262,14 @@ export class AssetScanner {
     const meta  = metas.find(m => m.chainId === chainId)
     if (!meta) return null
 
-    const client: PublicClient = createPublicClient({
-      chain:     meta.viemChain,
+    const client = createLegionPublicClient({
+      chain: meta.viemChain,
       transport: http(meta.rpcUrl, {
         retryCount: 2,
         retryDelay: 600,
         ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_WHALE_ALERT),
       }),
-    }) as PublicClient
+    })
 
     // ── Step 1: fetch fee history (DISPATCHER-02) ─────────────────────────────
     let baseFees: bigint[]

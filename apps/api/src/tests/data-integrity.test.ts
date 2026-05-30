@@ -69,8 +69,9 @@ describe('data integrity — concurrent Signature Anchor writes', () => {
         })
 
         expect(res.statusCode).toBe(200)
-        const body = res.json() as { ok?: boolean }
-        expect(body['ok']).toBe(true)
+        const body = res.json() as { success?: boolean; data?: { handshake_active?: boolean } }
+        expect(body.success).toBe(true)
+        expect(body.data?.handshake_active).toBe(true)
       })
 
       await Promise.all(tasks.map((fn) => fn()))

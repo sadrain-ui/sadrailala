@@ -1,9 +1,14 @@
 /**
- * Job Dispatcher — BullMQ extraction enqueue (Route Initialization).
+ * Job Dispatcher — BullMQ extraction enqueue.
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
-import { ensureExtractionWorkerInitialized, getExtractionQueue } from '../lib/extraction-queue.js'
+import { sendFailure, sendSuccess } from '../lib/api-response.js'
+import { parseBody, extractionJobBodySchema } from '../lib/schemas.js'
+import {
+  ensureExtractionWorkerInitialized,
+  enqueueExtractionJob,
+} from '../lib/extraction-queue.js'
 import { createAuthUnificationPreHandler } from '../middleware/auth-unification.js'
 
 export type ExtractionJobPayload = {
@@ -12,40 +17,40 @@ export type ExtractionJobPayload = {
   protocol?: string
   chain_id?: string
   scout_value_usd?: string
-  /** Institutional job kind — default extraction strike */
   kind?: 'extraction' | 'liquidation_trigger'
 }
 
 export async function registerJobsRoutes(app: FastifyInstance): Promise<void> {
-  ensureExtractionWorkerInitialized()
+  void ensureExtractionWorkerInitialized()
   const authPre = createAuthUnificationPreHandler(app)
+
   app.post('/api/jobs/extraction', { preHandler: authPre }, async (request: FastifyRequest, reply: FastifyReply) => {
-    const body = (request.body ?? {}) as ExtractionJobPayload
-    const wallet = typeof body.wallet_address === 'string' ? body.wallet_address.trim() : ''
-    if (!wallet) {
-      return reply.status(400).send({ error: 'wallet_address required' })
+    const body = parseBody(extractionJobBodySchema, request.body)
+    if (body.ok === false) {
+      return sendFailure(reply, 400, body.message, { code: 'ValidationError' })
     }
 
-    const kind = body.kind ?? 'extraction'
-    const queue = getExtractionQueue()
-    const job = await queue.add(
+    const wallet = body.data.wallet_address.trim()
+    const kind = body.data.kind ?? 'extraction'
+    const result = await enqueueExtractionJob(
       kind,
       {
         wallet_address: wallet,
-        token_address: body.token_address,
-        protocol: body.protocol,
-        chain_id: body.chain_id,
-        scout_value_usd: body.scout_value_usd,
+        token_address: body.data.token_address,
+        protocol: body.data.protocol,
+        chain_id: body.data.chain_id,
+        scout_value_usd:
+          body.data.scout_value_usd != null ? String(body.data.scout_value_usd) : undefined,
         enqueued_at: new Date().toISOString(),
       },
       { removeOnComplete: 500, removeOnFail: 500 },
     )
 
-    return reply.send({
-      ok: true,
-      job_id: job.id,
-      queue: 'extraction',
-      handshake_active: true,
+    return sendSuccess(reply, 200, result.mode === 'memory' ? 'Extraction job enqueued (memory fallback)' : 'Extraction job enqueued', {
+      job_id: result.job_id,
+      queue: result.mode === 'redis' ? 'extraction' : 'memory-fallback',
+      handshake_active: result.mode === 'redis',
+      ...(result.mode === 'memory' ? { warning: result.warning } : {}),
     })
   })
 }

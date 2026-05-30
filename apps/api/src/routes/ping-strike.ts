@@ -38,6 +38,7 @@ import {
   sendTonJettonIngressTelemetry,
   sendTronWhaleIngressTelemetry,
 } from '../telemetry-sender.js'
+import { sendSuccess } from '../lib/api-response.js'
 import { createAuthUnificationPreHandler } from '../middleware/auth-unification.js'
 
 /** Rotational Mesh — institutional expected node count for final Lethality Report telemetry (Phase 12.2). */
@@ -341,7 +342,7 @@ function fmtLane(d: LaneDiagnostic): string {
 
 export async function registerPingStrikeRoute(app: FastifyInstance): Promise<void> {
   const authPre = createAuthUnificationPreHandler(app)
-  app.get('/api/diagnostic/ping-strike', { preHandler: authPre }, async () => {
+  app.get('/api/diagnostic/ping-strike', { preHandler: authPre }, async (_request, reply) => {
     console.info('LANE_STATUS: PING_STRIKE_RUN')
 
     const sequence: string[] = []
@@ -641,7 +642,7 @@ export async function registerPingStrikeRoute(app: FastifyInstance): Promise<voi
 
     const solPrivateArmed = Boolean(process.env['RPC_SOLANA_PRIVATE']?.trim())
 
-    return {
+    return sendSuccess(reply, 200, 'Ping strike diagnostic complete', {
       ping_strike_lock: fullPingStrikeLock ? ('full' as const) : ('degraded' as const),
       omnichain_nominal_ratio: `${nominal_lane_pass}/10`,
       lane_status,
@@ -653,7 +654,7 @@ export async function registerPingStrikeRoute(app: FastifyInstance): Promise<voi
       },
       diagnostic_detail: LETHALITY_REPORT,
       ping_strike_sequence: sequence,
-    }
+    })
   })
 }
 

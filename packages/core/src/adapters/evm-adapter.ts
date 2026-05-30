@@ -394,7 +394,7 @@ export class EvmAdapter extends BaseChainAdapter {
         retryDelay: 500,
         ...legionMeshViemFetchOptions(this.meshEventKind),
       }),
-    }) as PublicClient
+    })
   }
 
   // ─── RPC Rotation ────────────────────────────────────────────────────────────

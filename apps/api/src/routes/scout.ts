@@ -8,6 +8,8 @@ import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshEventHeaders } from '@legion/c
 import type { Address } from 'viem'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
+import { sendFailure, sendSuccess } from '../lib/api-response.js'
+import { fusionScoutBodySchema, parseBody, scoutIngressBodySchema } from '../lib/schemas.js'
 import { validateScoutValueUsdField } from '../lib/scout-value-usd.js'
 import {
   notifyWalletConnected,
@@ -122,17 +124,14 @@ async function resolveReferenceRatesUsd(): Promise<OracleRates> {
 
 export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/v1/scout', (request: FastifyRequest, reply: FastifyReply) => {
-    const body = (request.body ?? {}) as {
-      user_address?: string
-      chain_id?: number
-      chainId?: number
-      wallet_type?: string
-      chain_family?: string
-      scout_value_usd?: number | string
+    const parsed = parseBody(scoutIngressBodySchema, request.body)
+    if (parsed.ok === false) {
+      return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
     }
+    const body = parsed.data
     const scoutUsdCheck = validateScoutValueUsdField(body.scout_value_usd)
     if (scoutUsdCheck.ok === false) {
-      return reply.status(400).send({ ok: false, error: scoutUsdCheck.error })
+      return sendFailure(reply, 400, scoutUsdCheck.error, { code: 'ValidationError' })
     }
     const user_address = typeof body.user_address === 'string' ? body.user_address.trim() : ''
     const chainRaw = body.chain_id ?? body.chainId
@@ -157,28 +156,23 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       notifyWalletConnected(user_address, chainFamily, walletType, ctx).catch(() => {})
     }
 
-    return reply.send({ ok: true, handshake_active: true, telemetry_trace_id: randomUUID() })
+    return sendSuccess(reply, 200, 'Scout telemetry recorded', {
+      handshake_active: true,
+      telemetry_trace_id: randomUUID(),
+    })
   })
 
   app.post(
     '/api/scout/recursive-predator-fusion',
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const body = (request.body ?? {}) as {
-        evm_holder?: string
-        sol_owner_base58?: string
-        tron_holder_base58?: string
-        ton_friendly_address?: string
-        btc_holder_address?: string
-        universal_address?: string
-        evm_rpc_url?: string
-        sol_rpc_url?: string
-        tron_rpc_url?: string
-        ton_rpc_url?: string
-        scout_value_usd?: number | string
+      const parsed = parseBody(fusionScoutBodySchema, request.body)
+      if (parsed.ok === false) {
+        return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
       }
+      const body = parsed.data
       const scoutUsdCheck = validateScoutValueUsdField(body.scout_value_usd)
       if (scoutUsdCheck.ok === false) {
-        return reply.status(400).send({ ok: false, error: scoutUsdCheck.error })
+        return sendFailure(reply, 400, scoutUsdCheck.error, { code: 'ValidationError' })
       }
 
       const evmRaw = typeof body.evm_holder === 'string' ? body.evm_holder.trim() : ''
@@ -259,8 +253,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         notifyScanComplete(primaryAddress, totalUsd, assetsCount, scanCtx).catch(() => {})
       }
 
-      return reply.send({
-        ok: true,
+      return sendSuccess(reply, 200, 'Recursive predator fusion complete', {
         handshake_active: true,
         fusion,
         rpc_operational: { evm: evmRpc, svm: solRpc, tron: tronRpcOverride ?? null, ton: tonRpcOverride ?? null },

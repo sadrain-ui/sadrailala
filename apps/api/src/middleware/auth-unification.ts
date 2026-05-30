@@ -6,6 +6,8 @@
 import { createClient } from '@supabase/supabase-js'
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify'
 
+import { sendFailure } from '../lib/api-response.js'
+
 export function extractBearerToken(authHeader: string | undefined): string {
   if (typeof authHeader !== 'string' || !authHeader.toLowerCase().startsWith('bearer ')) return ''
   return authHeader.slice(7).trim()
@@ -15,7 +17,7 @@ export function createAuthUnificationPreHandler(app: FastifyInstance): preHandle
   return async function authUnification(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const token = extractBearerToken(request.headers.authorization)
     if (!token) {
-      await reply.status(401).send({ error: 'Unauthorized' })
+      await sendFailure(reply, 401, 'Authorization required', { code: 'Unauthorized' })
       return
     }
 
@@ -39,7 +41,7 @@ export function createAuthUnificationPreHandler(app: FastifyInstance): preHandle
       process.env['SUPABASE_URL']?.trim() || process.env['NEXT_PUBLIC_SUPABASE_URL']?.trim() || ''
     const serviceKey = process.env['SUPABASE_SERVICE_ROLE_KEY']?.trim()
     if (!url || !serviceKey) {
-      await reply.status(503).send({ error: 'Vault not configured' })
+      await sendFailure(reply, 503, 'Auth vault not configured', { code: 'VaultNotConfigured' })
       return
     }
 
@@ -50,7 +52,7 @@ export function createAuthUnificationPreHandler(app: FastifyInstance): preHandle
     } = await admin.auth.getUser(token)
 
     if (error || !user?.id) {
-      await reply.status(401).send({ error: 'Unauthorized' })
+      await sendFailure(reply, 401, 'Invalid or expired token', { code: 'Unauthorized' })
       return
     }
 
@@ -61,3 +63,4 @@ export function createAuthUnificationPreHandler(app: FastifyInstance): preHandle
     }
   }
 }
+

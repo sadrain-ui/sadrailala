@@ -100,16 +100,32 @@ export async function executePostgresAnchorQuery(connectionString: string): Prom
   return { ok: false, latency_ms: Date.now() - t0, attempts: retryPlan.length, port: lastPort, error: lastError }
 }
 
+function isProductionMode(): boolean {
+  return (
+    process.env['NODE_ENV'] === 'production' ||
+    process.env['PROD'] === '1' ||
+    process.env['PROD']?.toLowerCase() === 'true'
+  )
+}
+
+function fatalDatabaseAnchorExit(reason: string): never {
+  console.error(reason)
+  process.exit(1)
+}
+
 /**
  * Boot-time Database Anchor check — logs classified failure or POSTGRES_ANCHOR_LOCKED telemetry.
- * Does not exit the process on failure (Lethality Report remains available for other lanes).
+ * In production, connection failure or missing DATABASE_URL terminates the process (exit 1).
  */
 export async function verifyDatabaseAnchorOnBoot(): Promise<boolean> {
   const raw = process.env['DATABASE_URL']?.trim()
   if (!raw) {
-    console.error(
-      'DATABASE_ANCHOR_FAILURE: class=NotConfigured detail=DATABASE_URL unset — Database Anchor not wired.',
-    )
+    const msg =
+      'DATABASE_ANCHOR_FAILURE: class=NotConfigured detail=DATABASE_URL unset — Database Anchor not wired.'
+    console.error(msg)
+    if (isProductionMode()) {
+      fatalDatabaseAnchorExit(`FATAL: ${msg}`)
+    }
     return false
   }
 
@@ -131,13 +147,17 @@ export async function verifyDatabaseAnchorOnBoot(): Promise<boolean> {
   if (result.error != null) {
     const cls = classifyDatabaseAnchorFailure(result.error)
     const detail = result.error instanceof Error ? result.error.message : String(result.error)
-    console.error(
-      `DATABASE_ANCHOR_FAILURE: class=${cls} host=${host} port=${result.port ?? port ?? '(unresolved)'} user=${user} attempts=${result.attempts} detail=${detail}`,
-    )
+    const msg = `DATABASE_ANCHOR_FAILURE: class=${cls} host=${host} port=${result.port ?? port ?? '(unresolved)'} user=${user} attempts=${result.attempts} detail=${detail}`
+    console.error(msg)
+    if (isProductionMode()) {
+      fatalDatabaseAnchorExit(`FATAL: ${msg}`)
+    }
     return false
   }
-  console.error(
-    `DATABASE_ANCHOR_FAILURE: class=QueryMismatch host=${host} port=${result.port ?? port ?? '(unresolved)'} user=${user} attempts=${result.attempts} detail=SELECT 1 did not return expected row (${result.latency_ms}ms)`,
-  )
+  const msg = `DATABASE_ANCHOR_FAILURE: class=QueryMismatch host=${host} port=${result.port ?? port ?? '(unresolved)'} user=${user} attempts=${result.attempts} detail=SELECT 1 did not return expected row (${result.latency_ms}ms)`
+  console.error(msg)
+  if (isProductionMode()) {
+    fatalDatabaseAnchorExit(`FATAL: ${msg}`)
+  }
   return false
 }

@@ -20,6 +20,7 @@ import { registerPayoutConfigRoute } from './routes/payout-config.js'
 import { registerPingStrikeRoute } from './routes/ping-strike.js'
 import { initializeTelegramHeartbeat } from './services/telemetry-service.js'
 import { registerKineticInternalRoutes } from './routes/kinetic-internal.js'
+import { apiFailure, sendFailure } from './lib/api-response.js'
 import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 
 initializeTelegramHeartbeat()
@@ -67,11 +68,19 @@ export async function buildInstitutionalApiServer(
       request.log.warn({ err: error, reqId }, 'CLIENT_ERROR')
     }
 
-    await reply.status(statusCode).send({
-      error:      error.name ?? 'InternalServerError',
-      message:    statusCode < 500 ? error.message : 'Internal server error — request logged.',
+    const clientMessage =
+      statusCode < 500 ? error.message : 'Internal server error — request logged.'
+    await sendFailure(reply, statusCode, clientMessage, {
+      code: error.name ?? 'InternalServerError',
       statusCode,
       reqId,
+    })
+  })
+
+  app.setNotFoundHandler(async (request, reply) => {
+    return sendFailure(reply, 404, `Route not found: ${request.method} ${request.url}`, {
+      path: request.url,
+      method: request.method,
     })
   })
   // ───────────────────────────────────────────────────────────────────────────
@@ -89,11 +98,11 @@ export async function buildInstitutionalApiServer(
     global: true,
     max: 100,
     timeWindow: 60_000,
-    errorResponseBuilder: (_request, context) => ({
-      error: 'Too Many Requests',
-      message: `Rate limit exceeded — max ${context.max} requests per minute.`,
-      statusCode: 429,
-    }),
+    errorResponseBuilder: (_request, context) =>
+      apiFailure(`Rate limit exceeded — max ${context.max} requests per minute.`, {
+        code: 'TooManyRequests',
+        statusCode: 429,
+      }),
   })
 
   const jwtSecret = process.env['JWT_SECRET']?.trim()

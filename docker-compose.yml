@@ -1,8 +1,13 @@
 # ─── Legion Engine — Local Dev Infrastructure ────────────────────────────────
-# Starts Postgres 15 + Redis 7 (AOF-persisted) for Phase 1.1 testing.
+# Postgres 15 + Redis 7 (AOF-persisted) for local development and testing.
 #
-# Usage:
-#   docker compose up -d          # start in background
+# Quick start (Redis only — use when Upstash quota is exhausted):
+#   docker compose up -d redis
+#   copy .env.development overrides → REDIS_URL=redis://localhost:6379
+#   see docs/REDIS_DEV_SETUP.md
+#
+# Full stack:
+#   docker compose up -d
 #   docker compose down -v        # stop and wipe volumes
 #
 # Credentials match .env.example defaults — do NOT use in production.

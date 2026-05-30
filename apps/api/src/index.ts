@@ -1,19 +1,17 @@
+/**
+ * Env loads first — ESM hoists imports; `./inject-root-env.js` must stay line 1.
+ * It calls loadEnvironment() before any other application modules initialize.
+ */
+import './inject-root-env.js'
+
 import dns from 'node:dns'
+import { verifyDatabaseAnchorOnBoot } from './lib/database-anchor.js'
+import { buildInstitutionalApiServer } from './server.js'
+import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 
 if (!process.env['VERCEL']) {
   dns.setDefaultResultOrder('ipv4first')
 }
-
-// dotenv only in non-production (Railway/Vercel inject env vars directly)
-if (process.env['NODE_ENV'] !== 'production') {
-  const { config } = await import('dotenv')
-  config()
-}
-
-import './inject-root-env.js'
-import { verifyDatabaseAnchorOnBoot } from './lib/database-anchor.js'
-import { buildInstitutionalApiServer } from './server.js'
-import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 
 // ── Production Safety Guards ──────────────────────────────────────────────────
 // Catch any promise rejection that nobody awaited — without these, Node will

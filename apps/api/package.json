@@ -5,7 +5,9 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch --env-file=../../.env src/index.ts",
+    "predev": "pnpm --filter @legion/core build",
+    "dev": "tsx watch --env-file=../../.env --env-file=../../.env.development src/index.ts",
+    "prebuild": "pnpm --filter @legion/core build",
     "build": "tsc && node ../../scripts/flatten-api-dist.mjs",
     "start": "node dist/index.js",
     "db:migrate": "pnpm --filter @legion/core db:migrate",

@@ -27,20 +27,18 @@ import {
 } from '@solana/web3.js'
 import { BaseChainAdapter, type DiscoveredAsset, type Uint256 } from './base-adapter.js'
 import { GatekeeperError } from './address-resolver.js'
+import { resolveSolanaNetwork, resolveSolanaRpcUrl } from '../lib/chain-rpc.js'
 
 /**
  * Scout / Closer — institutional Solana JSON-RPC lane (`RPC_SOLANA_PRIVATE` ingress first,
  * then QuickNode `SOLANA_RPC_URL`, public mirrors, Chainstack, sovereign mesh fallback).
+ * When unset, falls back to `SOLANA_NETWORK` default cluster RPC (mainnet/devnet/testnet).
  */
 export function resolveInstitutionalSolanaRpcUrl(): string {
-  const pick =
-    (typeof process !== 'undefined' ? process.env['RPC_SOLANA_PRIVATE']?.trim() : '') ||
-    (typeof process !== 'undefined' ? process.env['SOLANA_RPC_URL']?.trim() : '') ||
-    (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_SOLANA_RPC_URL']?.trim() : '') ||
-    (typeof process !== 'undefined' ? process.env['SOLANA_CHAINSTACK_URL']?.trim() : '') ||
-    ''
-  return pick
+  return resolveSolanaRpcUrl()
 }
+
+export { resolveSolanaNetwork }
 
 // ─── SPL Token Program constants ─────────────────────────────────────────────
 // Hard-coded well-known program addresses — no external dependency required.

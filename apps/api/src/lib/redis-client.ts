@@ -1,6 +1,12 @@
 /**
  * Redis Client — bounded retry posture for API queue and diagnostics.
+ * BullMQ / resilient options delegated to @legion/core/lib/redis-wrapper.
  */
+import {
+  buildApiRedisOptions,
+  buildBullMqRedisOptions,
+  redisWrapperRetryStrategy,
+} from '@legion/core/lib/redis-wrapper'
 
 export type RedisRetryStrategy = (times: number) => number | null
 
@@ -19,11 +25,7 @@ export type RedisFailSafeConstructor<T> = new (
   options?: RedisFailSafeOptions,
 ) => T
 
-export function redisFailSafeRetryStrategy(times: number): number | null {
-  const retryDelayMs = 250
-  if (times * retryDelayMs >= 2_000) return null
-  return retryDelayMs
-}
+export { redisWrapperRetryStrategy as redisFailSafeRetryStrategy }
 
 function parseRedisBinding(raw: string): { url: string; family?: 0 | 4 | 6; tls: boolean } {
   const trimmed = raw.trim()
@@ -53,11 +55,11 @@ export function createRedisFailSafeClient<T>(
   overrides: RedisFailSafeOptions = {},
 ): T {
   const binding = parseRedisBinding(rawUrl)
+  const baseOptions = overrides.maxRetriesPerRequest === null
+    ? buildBullMqRedisOptions(rawUrl)
+    : buildApiRedisOptions(rawUrl)
   return new RedisCtor(binding.url, {
-    connectTimeout: 30_000,
-    enableOfflineQueue: false,
-    retryStrategy: redisFailSafeRetryStrategy,
-    family: 4,
+    ...baseOptions,
     ...(binding.tls
       ? {
           tls: {

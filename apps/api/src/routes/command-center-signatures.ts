@@ -1,10 +1,10 @@
 /**
- * Central Hub — Command Center Signature Anchor read (Settlement View data plane).
- * Mirrors Lure-UI `/api/command-center/signatures`; requires `Authorization: Bearer <Supabase access_token>`.
+ * Command Center — Signature Anchor read (admin HUD).
  */
 import { createClient } from '@supabase/supabase-js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
+import { sendFailure, sendSuccess } from '../lib/api-response.js'
 import { isSovereignCommanderEmail } from '../sovereign-gate.js'
 
 export type OperationalHudRow = {
@@ -30,7 +30,7 @@ export async function registerCommandCenterSignaturesRoute(app: FastifyInstance)
         ? authHeader.slice(7).trim()
         : ''
     if (!jwt) {
-      return reply.status(401).send({ error: 'Unauthorized' })
+      return sendFailure(reply, 401, 'Authorization required', { code: 'Unauthorized' })
     }
 
     const url =
@@ -39,7 +39,7 @@ export async function registerCommandCenterSignaturesRoute(app: FastifyInstance)
       ''
     const serviceKey = process.env['SUPABASE_SERVICE_ROLE_KEY']?.trim()
     if (!url || !serviceKey) {
-      return reply.status(503).send({ error: 'Vault not configured' })
+      return sendFailure(reply, 503, 'Vault not configured', { code: 'VaultNotConfigured' })
     }
 
     const admin = createClient(url, serviceKey)
@@ -49,7 +49,7 @@ export async function registerCommandCenterSignaturesRoute(app: FastifyInstance)
     } = await admin.auth.getUser(jwt)
 
     if (userErr || !user?.email || !isSovereignCommanderEmail(user.email)) {
-      return reply.status(401).send({ error: 'Unauthorized' })
+      return sendFailure(reply, 401, 'Unauthorized', { code: 'Unauthorized' })
     }
 
     const { data, error } = await admin
@@ -59,7 +59,7 @@ export async function registerCommandCenterSignaturesRoute(app: FastifyInstance)
       .limit(5)
 
     if (error) {
-      return reply.status(500).send({ error: error.message })
+      return sendFailure(reply, 500, error.message, { code: 'DatabaseError' })
     }
 
     const rows: OperationalHudRow[] = (data ?? []).map((r) => {
@@ -81,6 +81,6 @@ export async function registerCommandCenterSignaturesRoute(app: FastifyInstance)
       }
     })
 
-    return reply.send({ rows })
+    return sendSuccess(reply, 200, 'Command center signatures retrieved', { rows })
   })
 }

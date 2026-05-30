@@ -3,13 +3,15 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
+import { sendFailure, sendSuccess } from '../lib/api-response.js'
+import { parseQuery, payoutConfigQuerySchema } from '../lib/schemas.js'
+
 function envBaseUsd(): number {
   const raw = process.env['PAYOUT_CONFIG_BASE_USD']?.trim()
   const n = raw ? Number(raw) : 1000
   return Number.isFinite(n) && n > 0 ? n : 1000
 }
 
-/** Deterministic pseudo-random in [0,1) from seed string (stable per session/day usage). */
 function ratioFromSeed(seed: string): number {
   let h = 2166136261
   for (let i = 0; i < seed.length; i++) {
@@ -29,14 +31,18 @@ function chaosAllocationUsd(seed: string): number {
 
 export async function registerPayoutConfigRoute(app: FastifyInstance): Promise<void> {
   app.get('/api/v1/payout-config', (request: FastifyRequest, reply: FastifyReply) => {
-    const q = request.query as { trace?: string }
+    const q = parseQuery(payoutConfigQuerySchema, request.query)
+    if (q.ok === false) {
+      return sendFailure(reply, 400, q.message, { code: 'ValidationError' })
+    }
+
     const trace =
-      typeof q.trace === 'string' && q.trace.trim() !== ''
-        ? q.trace.trim()
+      typeof q.data.trace === 'string' && q.data.trace.trim() !== ''
+        ? q.data.trace.trim()
         : `chaos:${Date.now()}`
     const allocation_usd = chaosAllocationUsd(trace)
-    return reply.send({
-      ok: true,
+
+    return sendSuccess(reply, 200, 'Payout config retrieved', {
       handshake_active: true,
       allocation_usd,
       chaos_algorithm: 'active',

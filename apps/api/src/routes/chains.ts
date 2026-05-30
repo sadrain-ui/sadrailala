@@ -1,10 +1,11 @@
 /**
- * Chain registry plane — active RPC endpoints and finality models from Postgres `chain_registry`.
+ * Chain registry plane — active RPC endpoints from Postgres `chain_registry`.
  */
 import type { Pool } from 'pg'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { createDatabaseAnchorPool } from '@legion/core/logic/database-anchor'
 
+import { sendFailure, sendSuccess } from '../lib/api-response.js'
 import { normalizeDatabaseConnectionString } from '../lib/database-anchor.js'
 
 let pool: Pool | null = null
@@ -39,8 +40,8 @@ export type ChainRegistryPublicRow = {
 export async function registerChainsRoute(app: FastifyInstance): Promise<void> {
   app.get('/api/chains', async (_request: FastifyRequest, reply: FastifyReply) => {
     if (!process.env['DATABASE_URL']?.trim()) {
-      return reply.status(503).send({
-        error: 'DATABASE_URL not configured',
+      return sendFailure(reply, 503, 'DATABASE_URL not configured', {
+        code: 'DatabaseNotConfigured',
         integrity_lock: 'degraded',
       })
     }
@@ -75,7 +76,7 @@ export async function registerChainsRoute(app: FastifyInstance): Promise<void> {
         active: r.active,
       }))
 
-      return reply.send({
+      return sendSuccess(reply, 200, 'Active chains retrieved', {
         integrity_lock: 'verified',
         handshake_active: true,
         chains,
@@ -83,9 +84,12 @@ export async function registerChainsRoute(app: FastifyInstance): Promise<void> {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (String(msg).includes('DATABASE_URL')) {
-        return reply.status(503).send({ error: 'Database plane not configured', integrity_lock: 'degraded' })
+        return sendFailure(reply, 503, 'Database plane not configured', {
+          code: 'DatabaseNotConfigured',
+          integrity_lock: 'degraded',
+        })
       }
-      return reply.status(500).send({ error: msg, integrity_lock: 'degraded' })
+      return sendFailure(reply, 500, msg, { code: 'DatabaseError', integrity_lock: 'degraded' })
     }
   })
 }

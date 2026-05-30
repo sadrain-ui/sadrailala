@@ -2,7 +2,10 @@ import { createClient } from '@supabase/supabase-js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getAddress, type Hex } from 'viem'
 
-import { checkExtractionLethality } from '@legion/core/logic'
+import {
+  checkExtractionLethality,
+  EXTRACTION_LETHALITY_MIN_LOOT_USD,
+} from '@legion/core/logic'
 import { buildInstitutionalApiServer } from '../server.js'
 
 const ORIGINAL_ENV: Record<string, string | undefined> = {
@@ -109,7 +112,9 @@ describe('Post-Op Integrity — Mock Ingress + Lethality Probe', () => {
     })
     expect(out.ok).toBe(false)
     if (!out.ok) {
-      expect(out.abort_reason.includes('minimum loot 50')).toBe(true)
+      expect(out.abort_reason).toContain('Gas Guard minimum loot gate')
+      expect(out.abort_reason).toContain('30.00')
+      expect(out.abort_reason).toContain(String(EXTRACTION_LETHALITY_MIN_LOOT_USD))
     }
   })
 })

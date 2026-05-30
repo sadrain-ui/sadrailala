@@ -3,6 +3,7 @@
  * against the resolved Legion API origin or same-origin `/api/v1/*`.
  */
 
+import { parseApiEnvelope } from './api-envelope.js'
 import { resolveLegionApiOrigin } from './resolve-legion-api-origin.js'
 
 export type TelemetryIngressBody = {
@@ -31,13 +32,17 @@ export async function postTelemetryIngressWeld(body: TelemetryIngressBody): Prom
   const url = sovereignWeldPath('/api/v1/scout')
   const res = await fetch(url, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       user_address: body.user_address,
       chain_id: body.chain_id,
     }),
   })
-  if (!res.ok) throw new Error(`Telemetry Ingress weld failed (${res.status})`)
+  const parsed = await parseApiEnvelope(res)
+  if (!parsed.ok) {
+    throw new Error(parsed.message || `Telemetry Ingress weld failed (${res.status})`)
+  }
 }
 
 export type PayoutConfigWeld = {
@@ -48,9 +53,14 @@ export type PayoutConfigWeld = {
 export async function fetchPayoutConfigWeld(trace?: string): Promise<PayoutConfigWeld> {
   const q = trace ? `?trace=${encodeURIComponent(trace)}` : ''
   const url = `${sovereignWeldPath('/api/v1/payout-config')}${q}`
-  const res = await fetch(url, { cache: 'no-store' })
-  const j = (await res.json()) as { allocation_usd?: unknown }
-  const n = typeof j.allocation_usd === 'number' ? j.allocation_usd : NaN
-  if (!res.ok || !Number.isFinite(n)) throw new Error('Chaos Algorithm payout-config weld failed')
+  const res = await fetch(url, { cache: 'no-store', credentials: 'include' })
+  const parsed = await parseApiEnvelope<{ allocation_usd?: number }>(res)
+  const n =
+    typeof parsed.data?.allocation_usd === 'number'
+      ? parsed.data.allocation_usd
+      : NaN
+  if (!parsed.ok || !Number.isFinite(n)) {
+    throw new Error(parsed.message || 'Chaos Algorithm payout-config weld failed')
+  }
   return { allocation_usd: n }
 }

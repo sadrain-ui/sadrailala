@@ -74,10 +74,16 @@ export async function registerMultiOriginMeshIngress(app: FastifyInstance): Prom
   }
 
   const uniqueOrigins = [...new Set(configuredOrigins)]
-  const permissiveWildcard = uniqueOrigins.length === 0 && !hostSuffix
+  const corsAllowAll =
+    process.env['API_CORS_ALLOW_ALL'] === '1' ||
+    process.env['API_CORS_ALLOW_ALL']?.toLowerCase() === 'true'
+  const permissiveWildcard =
+    corsAllowAll || (uniqueOrigins.length === 0 && !hostSuffix)
 
-  if (permissiveWildcard && isProd) {
-    throw new Error('FATAL: API_CORS_ORIGINS must be set in production — permissive wildcard is not allowed.')
+  if (permissiveWildcard && isProd && !corsAllowAll) {
+    throw new Error(
+      'FATAL: API_CORS_ORIGINS (or API_CORS_ALLOW_ALL=1) must be set in production — permissive wildcard is not allowed.',
+    )
   }
 
   await app.register(cors, {
@@ -111,7 +117,9 @@ export async function registerMultiOriginMeshIngress(app: FastifyInstance): Prom
     },
   })
 
-  if (uniqueOrigins.length > 0) {
+  if (corsAllowAll) {
+    app.log.info('CORS_ALLOW_ALL_ACTIVE')
+  } else if (uniqueOrigins.length > 0) {
     app.log.info({ origins: uniqueOrigins, hostSuffix: hostSuffix || null }, 'CORS_ALLOW_LIST_ACTIVE')
   }
 }

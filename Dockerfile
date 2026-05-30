@@ -1,10 +1,17 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-05-22-v15
+# cache-bust: 2026-05-31-railway-native-build
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
+
+# Native addons (tiny-secp256k1, bigint-buffer, etc.) need node-gyp toolchain.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
@@ -16,8 +23,8 @@ COPY packages/ ./packages/
 COPY apps/ ./apps/
 COPY scripts/ ./scripts/
 
-# Install all deps
-RUN pnpm install --no-frozen-lockfile
+# Install only @legion/api and its workspace dependencies (core, sentinels)
+RUN pnpm install --filter @legion/api... --no-frozen-lockfile
 
 # Build dependency chain in order
 RUN pnpm --filter @legion/core build

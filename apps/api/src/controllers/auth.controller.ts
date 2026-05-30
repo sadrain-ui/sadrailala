@@ -78,6 +78,8 @@ function resolveSiweRedis(): Redis | null {
   }
 }
 
+const SIWE_REDIS_PING_TIMEOUT_MS = 8_000
+
 async function initializeSiweRedisAtBoot(): Promise<void> {
   assertSiweRedisConfiguredAtBoot()
   if (!isProductionMode()) {
@@ -85,9 +87,24 @@ async function initializeSiweRedisAtBoot(): Promise<void> {
   }
   const client = resolveSiweRedis()
   if (client == null) {
-    throw new Error('FATAL: SIWE Redis client unavailable in production')
+    console.error('[BOOT] SIWE Redis client unavailable — SIWE nonce routes will return 503')
+    return
   }
-  await client.ping()
+  try {
+    await Promise.race([
+      client.ping(),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`SIWE Redis ping timed out after ${SIWE_REDIS_PING_TIMEOUT_MS}ms`)),
+          SIWE_REDIS_PING_TIMEOUT_MS,
+        )
+      }),
+    ])
+    console.info('[BOOT] SIWE Redis ping: PONG')
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    console.error(`[BOOT] SIWE Redis ping failed (non-fatal): ${detail}`)
+  }
 }
 
 function pruneMemoryNonces(): void {

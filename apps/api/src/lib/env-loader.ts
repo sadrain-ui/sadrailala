@@ -65,15 +65,26 @@ function loadEnvFiles(): void {
   }
 }
 
+function hasGatekeeperOrShadowVaultKey(): boolean {
+  const shadow = process.env['SHADOW_VAULT_KEY']?.trim()
+  if (shadow) return true
+  const gatekeeper = process.env['GATEKEEPER_SECRET']?.trim()
+  return Boolean(gatekeeper)
+}
+
 function validateRequiredEnv(): void {
   const modeLabel = isProductionMode() ? 'production' : 'development'
   const required = {
     development: ['DATABASE_URL'],
-    production: ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'SHADOW_VAULT_KEY'],
+    production: ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET'],
   }
 
   const requiredVars = isProductionMode() ? required.production : required.development
   const missing = requiredVars.filter((v) => !process.env[v]?.trim())
+
+  if (isProductionMode() && !hasGatekeeperOrShadowVaultKey()) {
+    missing.push('SHADOW_VAULT_KEY or GATEKEEPER_SECRET')
+  }
 
   if (missing.length > 0) {
     console.error(

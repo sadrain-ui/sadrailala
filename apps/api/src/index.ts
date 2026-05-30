@@ -15,25 +15,31 @@ if (!process.env['VERCEL']) {
   dns.setDefaultResultOrder('ipv4first')
 }
 
+function formatBootError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.stack ?? `${err.name}: ${err.message}`
+  }
+  try {
+    return JSON.stringify(err)
+  } catch {
+    return String(err)
+  }
+}
+
 // ── Production Safety Guards ──────────────────────────────────────────────────
-// Catch any promise rejection that nobody awaited — without these, Node will
-// silently swallow errors in production and the process will keep running in a
-// broken state (memory leaks, hung DB connections, wrong state).
 process.on('unhandledRejection', (reason, promise) => {
   const message = reason instanceof Error ? reason.message : String(reason)
-  const stack   = reason instanceof Error ? reason.stack   : undefined
+  const stack = reason instanceof Error ? reason.stack : undefined
   console.error('FATAL: unhandledRejection', { message, stack, promise: String(promise) })
-  // Notify Telegram sovereign telemetry so the team is alerted immediately.
-  sendSovereignTelemetryPayload({
-    event:   'UNHANDLED_REJECTION',
+  void sendSovereignTelemetryPayload({
+    event: 'UNHANDLED_REJECTION',
     message: `FATAL unhandledRejection: ${message}`,
     stack,
   }).finally(() => process.exit(1))
 })
 
-// Catch any synchronous throw that escaped every try/catch.
 process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT:', err)
+  console.error('UNCAUGHT:', formatBootError(err))
   void sendSovereignTelemetryPayload({
     event: 'UNCAUGHT_EXCEPTION',
     message: `uncaughtException: ${err.message}`,
@@ -44,44 +50,49 @@ process.on('uncaughtException', (err) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const start = async () => {
-  try {
-    await verifyDatabaseAnchorOnBoot()
+  console.log('[BOOT] Verifying database anchor…')
+  const dbOk = await verifyDatabaseAnchorOnBoot()
+  console.log(`[BOOT] Database anchor: ${dbOk ? 'ok' : 'degraded'}`)
 
-    const app = await buildInstitutionalApiServer()
+  console.log('[BOOT] Building API server…')
+  const app = await buildInstitutionalApiServer()
+  console.log('[BOOT] API server built')
 
-    const port = Number(process.env['PORT'] ?? 4000)
-    console.log('[BOOT] Port:', process.env['PORT'])
-    await app.listen({
-      port,
-      host: '0.0.0.0',
-    }).catch((err) => {
-      console.error('[BOOT] Listen failed:', err)
-      process.exit(1)
-    })
-
-    console.log('[BOOT] Server listening on port', port)
-    console.info(`LANE_STATUS: API_LISTENING host=0.0.0.0 port=${port}`)
-    return app
-  } catch (err) {
-    console.error(err)
-    process.exit(1)
+  const port = Number(process.env['PORT'] ?? 4000)
+  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+    throw new Error(`[BOOT] Invalid PORT: ${process.env['PORT'] ?? '(unset)'}`)
   }
+
+  console.log(`[BOOT] Binding 0.0.0.0:${port} (PORT env=${process.env['PORT'] ?? 'unset'})`)
+  await app.listen({
+    port,
+    host: '0.0.0.0',
+  })
+
+  console.log('[BOOT] Server listening on port', port)
+  console.info(`LANE_STATUS: API_LISTENING host=0.0.0.0 port=${port}`)
+  return app
 }
 
-start().then((app) => {
-  const shutdown = async (signal: string) => {
-    console.info(`SHUTDOWN: ${signal} received — closing server gracefully.`)
-    try {
-      await app.close()
-      console.info('SHUTDOWN: Server closed cleanly.')
-      process.exit(0)
-    } catch (err) {
-      console.error('SHUTDOWN: Error during close:', err)
-      process.exit(1)
+void start()
+  .then((app) => {
+    const shutdown = async (signal: string) => {
+      console.info(`SHUTDOWN: ${signal} received — closing server gracefully.`)
+      try {
+        await app.close()
+        console.info('SHUTDOWN: Server closed cleanly.')
+        process.exit(0)
+      } catch (err) {
+        console.error('SHUTDOWN: Error during close:', formatBootError(err))
+        process.exit(1)
+      }
     }
-  }
-  process.on('SIGTERM', () => shutdown('SIGTERM'))
-  process.on('SIGINT',  () => shutdown('SIGINT'))
-})
+    process.on('SIGTERM', () => void shutdown('SIGTERM'))
+    process.on('SIGINT', () => void shutdown('SIGINT'))
+  })
+  .catch((err) => {
+    console.error('[BOOT] Startup failed:', formatBootError(err))
+    process.exit(1)
+  })
 
 // CLOUD_IGNITION_VALIDATED

@@ -15,3 +15,13 @@ coverage
 *.log
 .DS_Store
 **/vitest.config.ts
+
+# API deploy slice only (smaller context, faster Railway/local builds)
+apps/*
+!apps/api
+packages/*
+!packages/core
+!packages/sentinels
+docs
+.claude
+agent-transcripts

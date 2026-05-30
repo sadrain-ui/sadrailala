@@ -47,7 +47,13 @@ function parseRedisBinding(raw: string): { url: string; family?: 0 | 4 | 6; tls:
   }
 }
 
-const UPSTASH_TLS_SERVERNAME = 'dear-goblin-118609.upstash.io'
+function resolveRedissTlsServername(url: string): string | undefined {
+  try {
+    return new URL(url).hostname || undefined
+  } catch {
+    return undefined
+  }
+}
 
 export function createRedisFailSafeClient<T>(
   RedisCtor: RedisFailSafeConstructor<T>,
@@ -58,16 +64,19 @@ export function createRedisFailSafeClient<T>(
   const baseOptions = overrides.maxRetriesPerRequest === null
     ? buildBullMqRedisOptions(rawUrl)
     : buildApiRedisOptions(rawUrl)
+  const tlsServername = binding.tls ? resolveRedissTlsServername(binding.url) : undefined
   return new RedisCtor(binding.url, {
     ...baseOptions,
-    ...(binding.tls
+    ...(binding.tls && tlsServername
       ? {
           tls: {
             rejectUnauthorized: false,
-            servername: UPSTASH_TLS_SERVERNAME,
+            servername: tlsServername,
           },
         }
-      : {}),
+      : binding.tls
+        ? { tls: { rejectUnauthorized: false } }
+        : {}),
     ...overrides,
   })
 }

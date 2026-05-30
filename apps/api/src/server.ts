@@ -93,7 +93,9 @@ export async function buildInstitutionalApiServer(
     done()
   })
 
+  app.log.info('[BOOT] Registering CORS ingress')
   await registerMultiOriginMeshIngress(app)
+  app.log.info('[BOOT] Registering rate limit')
   await app.register(rateLimit, {
     global: true,
     max: 100,
@@ -109,23 +111,37 @@ export async function buildInstitutionalApiServer(
   if (!jwtSecret) {
     throw new Error('FATAL_ENV_VALIDATION: JWT_SECRET is required for API boot.')
   }
+  app.log.info('[BOOT] Registering JWT')
   await app.register(fjwt, {
     secret: jwtSecret,
   })
 
+  app.log.info('[BOOT] Registering /health')
   await registerHealthRoute(app)
+  app.log.info('[BOOT] Registering ping-strike')
   await registerPingStrikeRoute(app)
+  app.log.info('[BOOT] Registering command-center signatures')
   await registerCommandCenterSignaturesRoute(app)
 
+  app.log.info('[BOOT] Registering Supabase auth routes')
   await registerAuthRoutes(app)
+  app.log.info('[BOOT] Registering SIWE auth routes')
   await registerSiweAuthRoutes(app)
+  app.log.info('[BOOT] Registering signature-anchor')
   await registerSignatureAnchorRoute(app)
+  app.log.info('[BOOT] Registering kinetic-internal')
   await registerKineticInternalRoutes(app)
+  app.log.info('[BOOT] Registering payout-config')
   await registerPayoutConfigRoute(app)
+  app.log.info('[BOOT] Registering scout')
   await registerScoutRoutes(app)
+  app.log.info('[BOOT] Registering jobs')
   await registerJobsRoutes(app)
+  app.log.info('[BOOT] Registering sentinels')
   await registerSentinelsRoute(app)
+  app.log.info('[BOOT] Registering chains')
   await registerChainsRoute(app)
 
+  app.log.info('[BOOT] All routes registered')
   return app
 }

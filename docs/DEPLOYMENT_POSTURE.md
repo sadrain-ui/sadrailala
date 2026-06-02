@@ -33,9 +33,10 @@ Local `.env` is **not** baked into the image (see `.dockerignore`). All producti
 | **Builder** | Dockerfile |
 | **Dockerfile path** | `Dockerfile` (repo root) |
 | **Root directory** | `/` (monorepo root — required for `pnpm-workspace.yaml` and workspace packages) |
-| **Start command** | *(leave empty — image `CMD` is `node dist/index.js` in `apps/api`)* |
+| **Start command** | *(leave empty — Dockerfile `CMD` runs `node dist/index.js` with `WORKDIR /app/apps/api`)* |
+| **Config as code** | Repo root `railway.toml` sets `healthcheckPath = "/health"`, `healthcheckTimeout = 300` |
 
-Railway sets `PORT` automatically. The image defaults `PORT=4000` and `EXPOSE 4000`; Railway’s injected `PORT` takes precedence at runtime (`apps/api/src/index.ts` listens on `0.0.0.0`).
+Railway injects **`PORT`** at runtime (dynamic, e.g. `8080`). The app binds **`0.0.0.0:$PORT`** immediately on boot (`apps/api/src/index.ts`). **Do not** set a fixed `PORT` in the Dockerfile or map “Target port” to `4000` in the dashboard — use Railway’s generated **`PORT`** variable only.
 
 ### Step 3 — Data plane plugins
 
@@ -53,10 +54,15 @@ Configure all **mandatory** keys in §3 before first deploy. Use Railway **Share
 
 | Check | Configuration |
 |-------|----------------|
-| **Health endpoint** | `GET /health` → `200` with `{ "status": "ok", "service": "legion-engine-api" }` |
+| **Health endpoint** | `GET /health` → `200` with `{ "success": true, "data": { "status": "ok" } }` |
+| **Health check path (dashboard)** | `/health` — must match `railway.toml` `healthcheckPath` |
+| **Health check timeout** | `300` seconds (slow Postgres anchor runs *after* listen) |
+| **Public networking** | Service → **Settings → Networking** → generate domain; **do not** hardcode target port `4000` |
+| **Target port** | Leave default / use **`$PORT`** — Railway routes to the same port the process listens on |
 | **Optional heartbeat** | `GET /health?ping=true` (fires `TELEMETRY_WEBHOOK_URL` if set) |
-| **Public domain** | Generate Railway domain or attach custom domain |
-| **HTTPS** | Terminated at Railway edge; API binds HTTP on `PORT` inside the container |
+| **HTTPS** | Terminated at Railway edge; API binds HTTP on `0.0.0.0:$PORT` inside the container |
+
+**If you see 502 on `/health` but logs show “Server listening”:** open **Settings → Networking** and remove any manual “Port” override (e.g. `4000`). Redeploy after `railway.toml` is picked up so health checks use `/health` with a 300s timeout.
 
 ### Step 6 — Deploy and verify
 

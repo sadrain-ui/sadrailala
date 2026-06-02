@@ -55,27 +55,30 @@ process.on('uncaughtException', (err) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const start = async () => {
-  console.log('[BOOT] Verifying database anchor…')
-  const dbOk = await verifyDatabaseAnchorOnBoot()
-  console.log(`[BOOT] Database anchor: ${dbOk ? 'ok' : 'degraded'}`)
-
   console.log('[BOOT] Building API server…')
   const app = await buildInstitutionalApiServer()
   console.log('[BOOT] API server built')
 
+  // Railway injects PORT at runtime — bind immediately so /health answers before slow boot work.
   const port = Number(process.env['PORT'] ?? 4000)
   if (!Number.isFinite(port) || port < 1 || port > 65535) {
     throw new Error(`[BOOT] Invalid PORT: ${process.env['PORT'] ?? '(unset)'}`)
   }
 
-  console.log(`[BOOT] Binding 0.0.0.0:${port} (PORT env=${process.env['PORT'] ?? 'unset'})`)
-  await app.listen({
-    port,
-    host: '0.0.0.0',
-  })
+  const host = process.env['HOST']?.trim() || '0.0.0.0'
+  console.log(`[BOOT] Binding ${host}:${port} (PORT env=${process.env['PORT'] ?? 'unset'})`)
+  await app.listen({ port, host })
 
-  console.log('[BOOT] Server listening on port', port)
-  console.info(`LANE_STATUS: API_LISTENING host=0.0.0.0 port=${port}`)
+  console.log(`[BOOT] Server listening on http://${host}:${port}`)
+  console.info(`LANE_STATUS: API_LISTENING host=${host} port=${port}`)
+
+  void verifyDatabaseAnchorOnBoot()
+    .then((dbOk) => {
+      console.log(`[BOOT] Database anchor: ${dbOk ? 'ok' : 'degraded'}`)
+    })
+    .catch((err) => {
+      console.warn('[BOOT] Database anchor check failed:', formatBootError(err))
+    })
 
   void startTelegramControlBot().catch((err) => {
     console.warn('[TELEGRAM_BOT] Failed to start:', err instanceof Error ? err.message : String(err))

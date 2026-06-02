@@ -45,8 +45,9 @@ RUN groupadd --gid 1001 legion && \
     useradd  --uid 1001 --gid 1001 --no-create-home legion
 
 ENV NODE_ENV=production
-ENV PORT=3000
-EXPOSE 3000
+# Do not set PORT here — Railway injects PORT at runtime (dynamic). App reads process.env.PORT.
+ENV HOST=0.0.0.0
+EXPOSE 8080
 
 # ── Workspace root manifests ─────────────────────────────────────────────────
 COPY --from=builder /app/package.json              ./

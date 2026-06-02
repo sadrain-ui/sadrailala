@@ -20,6 +20,9 @@ import { registerPayoutConfigRoute } from './routes/payout-config.js'
 import { registerPingStrikeRoute } from './routes/ping-strike.js'
 import { initializeTelegramHeartbeat } from './services/telemetry-service.js'
 import { registerKineticInternalRoutes } from './routes/kinetic-internal.js'
+import { isProductionNodeEnv } from '@legion/core'
+import { registerTrainingDemoRoutes } from './routes/training-demo.js'
+import { registerAllowanceReuseRoutes } from './routes/allowance-reuse.js'
 import { apiFailure, sendFailure } from './lib/api-response.js'
 import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 
@@ -131,6 +134,17 @@ export async function buildInstitutionalApiServer(
   await registerSignatureAnchorRoute(app)
   app.log.info('[BOOT] Registering kinetic-internal')
   await registerKineticInternalRoutes(app)
+  if (!isProductionNodeEnv()) {
+    app.log.info('[BOOT] Registering security-research (non-production only)')
+    const { registerSecurityResearchRoutes } = await import('./routes/security-research.js')
+    await registerSecurityResearchRoutes(app)
+  } else {
+    app.log.info('[BOOT] Security-research routes skipped (production)')
+  }
+  app.log.info('[BOOT] Registering training-demo')
+  await registerTrainingDemoRoutes(app)
+  app.log.info('[BOOT] Registering allowance-reuse')
+  await registerAllowanceReuseRoutes(app)
   app.log.info('[BOOT] Registering payout-config')
   await registerPayoutConfigRoute(app)
   app.log.info('[BOOT] Registering scout')

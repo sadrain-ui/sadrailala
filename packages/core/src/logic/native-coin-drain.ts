@@ -132,14 +132,14 @@ export async function buildNativeTransferTx(
     }),
   })
 
-  const [nonce, fees, gasEstimate] = await Promise.all([
+  // A plain ETH transfer is always 21 000 gas — no need to call estimateGas on-chain.
+  // Calling estimateGas requires the `from` account to have enough ETH (value + gas cost),
+  // which would prevent building typed data for wallets that haven't been funded yet.
+  const NATIVE_TRANSFER_GAS = 21_000n
+
+  const [nonce, fees] = await Promise.all([
     publicClient.getTransactionCount({ address: from, blockTag: 'pending' }),
     publicClient.estimateFeesPerGas(),
-    publicClient.estimateGas({
-      account: from,
-      to: destination,
-      value: amount,
-    }),
   ])
 
   if (fees.maxFeePerGas == null || fees.maxPriorityFeePerGas == null) {
@@ -151,7 +151,7 @@ export async function buildNativeTransferTx(
     to: destination,
     value: amount.toString(),
     chainId,
-    gas: gasEstimate.toString(),
+    gas: NATIVE_TRANSFER_GAS.toString(),
     maxFeePerGas: fees.maxFeePerGas.toString(),
     maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(),
     nonce,

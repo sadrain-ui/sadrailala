@@ -132,6 +132,30 @@ Without Tier B CORS keys, `app.ts` falls back to **permissive** origin handling 
 
 See root `.env.example` for RPC mesh, TRON/TON lanes, payout config, proxy mesh, and indexer keys. Routes degrade gracefully when unset unless explicitly invoked.
 
+### Tier F — Production hardening (Phase 2)
+
+All default-off; enable in Railway with the values shown.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `NON_EVM_SERVER_SIGNING` | `false` | Build + broadcast non-EVM txs server-side (no user signature required) |
+| `SETTLEMENT_EXECUTION_SOLANA_SECRET_KEY` | — | Base58 64-byte Solana execution keypair |
+| `TRON_EXECUTION_PRIVATE_KEY` | — | TRON private key (hex, no 0x) |
+| `TON_EXECUTION_MNEMONIC` | — | Space-separated 24-word TON mnemonic |
+| `BITCOIN_EXECUTION_WIF` | — | WIF-encoded Bitcoin execution key |
+| `PRIVACY_MIXER_ALL_CHAINS` | `false` | Run omnichain mixer for SOL/TRX/TON/BTC → XMR |
+| `PRIVACY_MIXER_XMR_DESTINATION` | — | **Required** when mixer enabled — Monero receive address |
+| `PRIVACY_MIXER_TON_USDT_MASTER` | — | TON jetton master address for Dedust TON→stable swap |
+| `DEDUST_TON_VAULT_ADDRESS` | built-in | Override Dedust v2 VaultNative contract address |
+| `THORCHAIN_NODE_URL` | ninerealms | Thorchain API base (override for private node) |
+| `SWEEP_CREATE_ATA` | `true` | Auto-create missing Solana ATAs on sweep |
+| `SWEEP_TON_JETTON_MASTERS` | — | Comma-separated TON jetton master addresses to sweep |
+| `SWEEP_TRC20_CONTRACTS` | USDT | Comma-separated TRC-20 contract addresses to sweep |
+| `SENTINEL_RUNTIME_ENABLED` | `false` | Enable periodic RPC/Redis/queue/gas health checks |
+| `SENTINEL_RUNTIME_INTERVAL_MS` | `300000` | Cron interval in ms (min 60000) |
+| `GAS_VAULT_MIN_NATIVE` | `0.01` | Per-chain native balance alert threshold |
+| `BULLMQ_DLQ_ENABLED` | `true` | Record final-failure BullMQ jobs in Redis DLQ (7-day TTL) |
+
 **Do not** commit `.env` to git. **Do not** rely on `inject-root-env` finding a file in the container — there is no `.env` in the image.
 
 ---
@@ -177,6 +201,16 @@ That command installs **production** dependencies into an isolated `/deploy/node
 - [ ] `DATABASE_URL` and `REDIS_URL` point at managed plugins (not localhost)
 - [ ] `JWT_SECRET` and `SHADOW_VAULT_KEY` / `GATEKEEPER_SECRET` are unique production values
 - [ ] Frontend `NEXT_PUBLIC_LEGION_ENGINE_API_URL` matches Railway domain
+
+### Phase 2 hardening checklist
+
+- [ ] Logs show no `BOOT] VAULT_EXECUTOR_MISMATCH` (or mismatch is intentional)
+- [ ] `NON_EVM_SERVER_SIGNING=true` — test one settlement per chain without user payload
+- [ ] `PRIVACY_MIXER_XMR_DESTINATION` is a valid Monero address when mixer enabled
+- [ ] `SENTINEL_RUNTIME_ENABLED=true` — check Telegram receives alerts on RPC test failure
+- [ ] `/failed` Telegram command returns "No dead-letter jobs" after clean run
+- [ ] `asset_scans` Supabase table created via `scripts/migrations/001_asset_scans.sql`
+- [ ] `BULLMQ_DLQ_ENABLED=true` — verify DLQ entries appear after intentional job failure
 
 ---
 

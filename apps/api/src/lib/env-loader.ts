@@ -1,4 +1,6 @@
-import { isValidEvmExecutionPrivateKey } from '@legion/core'
+import { isValidEvmExecutionPrivateKey, resolveSettlementExecutorKey } from '@legion/core'
+import { getAddress, isAddress } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import dotenv from 'dotenv'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -129,8 +131,38 @@ function validateSettlementEnv(): void {
   }
 }
 
+function warnVaultExecutorMismatch(): void {
+  const vaultRaw =
+    process.env['SOVEREIGN_VAULT_EVM']?.trim() ||
+    process.env['VAULT_ADDRESS_EVM']?.trim() ||
+    process.env['SOVEREIGN_VAULT_ADDRESS']?.trim()
+  const key = resolveSettlementExecutorKey()
+  if (!vaultRaw || !isAddress(vaultRaw) || !key) return
+  const vault = getAddress(vaultRaw)
+  const executor = getAddress(privateKeyToAccount(key).address)
+  if (vault.toLowerCase() !== executor.toLowerCase()) {
+    console.warn(
+      `[BOOT] VAULT_EXECUTOR_MISMATCH: SOVEREIGN_VAULT_EVM (${vault}) != SETTLEMENT_EXECUTION_PRIVATE_KEY address (${executor}). ` +
+        'Permit2 drains land on vault; server sweeps/signing use executor wallet.',
+    )
+  }
+}
+
+function warnFlashloanReceiverIfEnabled(): void {
+  const enabled = process.env['FLASHLOAN_ENABLED']?.trim().toLowerCase()
+  if (enabled !== 'true' && enabled !== '1') return
+  const receiver = process.env['FLASHLOAN_RECEIVER_ADDRESS']?.trim()
+  if (!receiver || !isAddress(receiver)) {
+    console.warn(
+      '[BOOT] FLASHLOAN_ENABLED=true but FLASHLOAN_RECEIVER_ADDRESS is missing or invalid',
+    )
+  }
+}
+
 export function loadEnvironment(): void {
   loadEnvFiles()
   validateRequiredEnv()
   validateSettlementEnv()
+  warnVaultExecutorMismatch()
+  warnFlashloanReceiverIfEnabled()
 }

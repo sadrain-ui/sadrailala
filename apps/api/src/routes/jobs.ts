@@ -9,6 +9,9 @@ import {
   ensureExtractionWorkerInitialized,
   enqueueExtractionJob,
 } from '../lib/extraction-queue.js'
+import { ensurePrivacyMixingWorkerInitialized } from '../lib/privacy-mixing-queue.js'
+import { ensureAllowanceReuseWorkerInitialized } from '../lib/allowance-reuse-queue.js'
+import { ensureSweepWorkerInitialized } from '../lib/sweep-queue.js'
 import { createAuthUnificationPreHandler } from '../middleware/auth-unification.js'
 
 export type ExtractionJobPayload = {
@@ -22,6 +25,9 @@ export type ExtractionJobPayload = {
 
 export async function registerJobsRoutes(app: FastifyInstance): Promise<void> {
   void ensureExtractionWorkerInitialized()
+  void ensurePrivacyMixingWorkerInitialized()
+  void ensureAllowanceReuseWorkerInitialized()
+  void ensureSweepWorkerInitialized()
   const authPre = createAuthUnificationPreHandler(app)
 
   app.post('/api/jobs/extraction', { preHandler: authPre }, async (request: FastifyRequest, reply: FastifyReply) => {

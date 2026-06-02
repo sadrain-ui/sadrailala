@@ -35,7 +35,7 @@ function createTonClient(endpoint: string): TonClient {
   })
 }
 
-function buildJettonTransferBody(params: {
+export function buildJettonTransferBody(params: {
   amount: bigint
   destination: Address
   responseDestination: Address

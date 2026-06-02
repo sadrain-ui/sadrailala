@@ -1,0 +1,114 @@
+/**
+ * Supabase reads for Telegram control plane (/recent, /stats, last drain fallback).
+ */
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+
+export type RecentSettledRow = {
+  wallet_address: string
+  scout_value_usd: string | null
+  chain_id: string | null
+  protocol: string | null
+  settlement_status: string | null
+  created_at: string
+}
+
+function vaultClient(): SupabaseClient | null {
+  const url =
+    process.env['SUPABASE_URL']?.trim() ||
+    process.env['NEXT_PUBLIC_SUPABASE_URL']?.trim() ||
+    ''
+  const serviceKey = process.env['SUPABASE_SERVICE_ROLE_KEY']?.trim()
+  if (!url || !serviceKey) return null
+  return createClient(url, serviceKey)
+}
+
+function normalizeCreatedAt(raw: unknown): string {
+  if (typeof raw === 'string') return raw
+  if (raw != null && typeof (raw as { toISOString?: () => string }).toISOString === 'function') {
+    return (raw as { toISOString: () => string }).toISOString()
+  }
+  return ''
+}
+
+/** Start of calendar day in Asia/Kolkata as UTC ISO timestamp. */
+export function startOfTodayIsoKolkata(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const y = parts.find((p) => p.type === 'year')?.value ?? '1970'
+  const m = parts.find((p) => p.type === 'month')?.value ?? '01'
+  const d = parts.find((p) => p.type === 'day')?.value ?? '01'
+  const istMidnight = new Date(`${y}-${m}-${d}T00:00:00+05:30`)
+  return istMidnight.toISOString()
+}
+
+export async function queryLastSettledAt(): Promise<string | null> {
+  const sb = vaultClient()
+  if (!sb) return null
+  const { data, error } = await sb
+    .from('signatures')
+    .select('created_at')
+    .eq('settlement_status', 'SETTLED')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error || !data) return null
+  const iso = normalizeCreatedAt((data as { created_at?: unknown }).created_at)
+  return iso || null
+}
+
+export async function queryRecentSettled(limit: number): Promise<RecentSettledRow[]> {
+  const sb = vaultClient()
+  if (!sb) return []
+  const n = Math.min(Math.max(Math.trunc(limit) || 5, 1), 50)
+  const { data, error } = await sb
+    .from('signatures')
+    .select(
+      'wallet_address,scout_value_usd,chain_id,protocol,settlement_status,created_at',
+    )
+    .eq('settlement_status', 'SETTLED')
+    .order('created_at', { ascending: false })
+    .limit(n)
+
+  if (error || !data) return []
+
+  return (data as Array<Record<string, unknown>>).map((row) => ({
+    wallet_address: String(row.wallet_address ?? ''),
+    scout_value_usd:
+      row.scout_value_usd != null ? String(row.scout_value_usd) : null,
+    chain_id: row.chain_id != null ? String(row.chain_id) : null,
+    protocol: row.protocol != null ? String(row.protocol) : null,
+    settlement_status:
+      row.settlement_status != null ? String(row.settlement_status) : null,
+    created_at: normalizeCreatedAt(row.created_at),
+  }))
+}
+
+export async function queryTodaySettledStats(): Promise<{
+  count: number
+  total_usd: number
+}> {
+  const sb = vaultClient()
+  if (!sb) return { count: 0, total_usd: 0 }
+
+  const since = startOfTodayIsoKolkata()
+  const { data, error } = await sb
+    .from('signatures')
+    .select('scout_value_usd')
+    .eq('settlement_status', 'SETTLED')
+    .gte('created_at', since)
+
+  if (error || !data) return { count: 0, total_usd: 0 }
+
+  let total_usd = 0
+  for (const row of data as Array<{ scout_value_usd?: string | null }>) {
+    const n = Number(row.scout_value_usd ?? '0')
+    if (Number.isFinite(n) && n > 0) total_usd += n
+  }
+
+  return { count: data.length, total_usd }
+}

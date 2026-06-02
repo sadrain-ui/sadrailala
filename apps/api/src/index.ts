@@ -6,8 +6,13 @@ import './inject-root-env.js'
 
 import dns from 'node:dns'
 import { verifyDatabaseAnchorOnBoot } from './lib/database-anchor.js'
+import { closeSettlementPauseRedis } from './lib/settlement-pause.js'
 import { buildInstitutionalApiServer } from './server.js'
 import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
+import { startVaultGasWarningCron, stopVaultGasWarningCron } from './cron/gas-warning.js'
+import { startVaultSweepCron, stopVaultSweepCron } from './cron/vault-sweep.js'
+import { startSentinelRuntimeCron, stopSentinelRuntimeCron } from './lib/sentinel-runtime.js'
+import { startTelegramControlBot, stopTelegramControlBot } from './telegram-bot.js'
 
 console.log('[BOOT] Index loaded')
 
@@ -71,6 +76,15 @@ const start = async () => {
 
   console.log('[BOOT] Server listening on port', port)
   console.info(`LANE_STATUS: API_LISTENING host=0.0.0.0 port=${port}`)
+
+  void startTelegramControlBot().catch((err) => {
+    console.warn('[TELEGRAM_BOT] Failed to start:', err instanceof Error ? err.message : String(err))
+  })
+
+  startVaultGasWarningCron()
+  startVaultSweepCron()
+  startSentinelRuntimeCron()
+
   return app
 }
 
@@ -79,6 +93,11 @@ void start()
     const shutdown = async (signal: string) => {
       console.info(`SHUTDOWN: ${signal} received — closing server gracefully.`)
       try {
+        stopVaultGasWarningCron()
+        stopVaultSweepCron()
+        stopSentinelRuntimeCron()
+        await stopTelegramControlBot()
+        await closeSettlementPauseRedis()
         await app.close()
         console.info('SHUTDOWN: Server closed cleanly.')
         process.exit(0)

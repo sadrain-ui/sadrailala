@@ -17,6 +17,8 @@ import { createClient } from '@supabase/supabase-js'
 import IoRedis from 'ioredis'
 import { Queue, QueueEvents, Worker, type ConnectionOptions, type Job, type JobsOptions } from 'bullmq'
 
+import { registerWorkerDlqHandlers } from './bullmq-dlq.js'
+
 type RedisClient = RedisPingClient & {
   duplicate(): RedisClient
 }
@@ -213,6 +215,7 @@ export async function ensureExtractionWorkerInitialized(): Promise<Worker | null
       connection: buildRedisConnection(true),
     })
     attachWorkerErrorHandlers(extractionWorker, extractionEvents)
+    registerWorkerDlqHandlers(extractionWorker, 'extraction')
   }
   return extractionWorker
 }
@@ -262,6 +265,36 @@ export async function enqueueMockExtractionJob(
   opts: JobsOptions = { removeOnComplete: 50, removeOnFail: 50 },
 ): Promise<EnqueueExtractionResult> {
   return enqueueExtractionJob('extraction', payload, opts)
+}
+
+export type ExtractionQueueJobCounts = {
+  waiting: number
+  active: number
+  delayed: number
+  failed: number
+  pending: number
+}
+
+/** BullMQ job counts for Telegram /status and ops dashboards. */
+export async function getExtractionQueueJobCounts(): Promise<ExtractionQueueJobCounts | null> {
+  const queue = await getExtractionQueue()
+  if (!queue) return null
+  try {
+    const counts = await queue.getJobCounts('waiting', 'active', 'delayed', 'failed')
+    const waiting = counts.waiting ?? 0
+    const active = counts.active ?? 0
+    const delayed = counts.delayed ?? 0
+    const failed = counts.failed ?? 0
+    return {
+      waiting,
+      active,
+      delayed,
+      failed,
+      pending: waiting + active + delayed,
+    }
+  } catch {
+    return null
+  }
 }
 
 /** @deprecated Use enqueueExtractionJob — kept for compatibility. */

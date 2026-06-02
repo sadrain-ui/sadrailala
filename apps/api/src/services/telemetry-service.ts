@@ -75,6 +75,6 @@ export function initializeTelegramHeartbeat(): void {
   console.info(
     telegramWired
       ? 'LOADER_WELDED: Environment addresses visible. Redis IPv4 forced. Telegram Heartbeat: ACTIVE (TELEMETRY_WEBHOOK_URL wired).'
-      : 'LOADER_WELDED: Telegram NOT CONFIGURED — set TELEMETRY_WEBHOOK_URL + TELEGRAM_CHAT_ID on Railway.',
+      : 'LOADER_WELDED: Telegram NOT CONFIGURED — set TELEMETRY_WEBHOOK_URL + TELEGRAM_CHAT_IDS (or TELEGRAM_CHAT_ID) on Railway.',
   )
 }

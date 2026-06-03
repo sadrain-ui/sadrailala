@@ -12,6 +12,8 @@
 export declare function getRemoteConfigValue(keyName: string): Promise<string | undefined>;
 /** Invalidate cache entry (e.g. after Hot-Swapping writes). */
 export declare function invalidateRemoteConfigCache(keyName?: string): void;
+/** True for empty, template, or placeholder values (e.g. Alchemy URLs ending in `/YOUR_KEY`). */
+export declare function isUnusableConfigValue(value: string | undefined): boolean;
 /**
  * Hybrid Layer Logic — Remote Config Sync row first, then `process.env[keyName]` so the engine
  * remains operational when a key is absent from Supabase.

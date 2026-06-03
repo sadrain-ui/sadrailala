@@ -202,16 +202,24 @@ async function fetchUtxosFromBlockCypher(walletAddress: string): Promise<UtxoCoi
     }))
 }
 
+/**
+ * UTXO discovery — BlockCypher first (when `BLOCKCYPHER_API_TOKEN` is set), then Mempool.space.
+ * Empty results from the primary provider trigger the fallback (not only HTTP errors).
+ */
 export async function fetchWalletUtxos(walletAddress: string): Promise<UtxoCoin[]> {
+  try {
+    const blockCypherUtxos = await fetchUtxosFromBlockCypher(walletAddress)
+    if (blockCypherUtxos.length > 0) return blockCypherUtxos
+  } catch {
+    /* Mempool.space fallback below */
+  }
   try {
     const mempoolUtxos = await fetchUtxosFromMempool(walletAddress)
     if (mempoolUtxos.length > 0) return mempoolUtxos
   } catch {
-    /* BlockCypher fallback below */
+    /* both providers failed or returned no spendable UTXOs */
   }
-  const blockCypherUtxos = await fetchUtxosFromBlockCypher(walletAddress)
-  if (blockCypherUtxos.length > 0) return blockCypherUtxos
-  throw new Error('Unable to fetch UTXOs from Mempool.space or BlockCypher')
+  throw new Error('Unable to fetch UTXOs from BlockCypher or Mempool.space')
 }
 
 async function fetchOutputScriptPubKey(txid: string, vout: number): Promise<string> {

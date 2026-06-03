@@ -12,10 +12,18 @@ export const TRON_SENSORY_NOMINAL_CEILING_MS = 3_000
 const USD_THRESHOLD_DEFAULT = 100_000
 const USDT_DECIMALS = 6
 
+/**
+ * Resolve Tron full node URL: TRON_FULL_NODE_URL → TRON_BACKUP_NODE → public TronGrid.
+ */
 export function resolveTronSensoryFullHost(): string {
-  const env = typeof process !== 'undefined' ? process.env['TRON_FULL_NODE_URL']?.trim() : ''
-  const base = env || TRON_GRID_PUBLIC_HOST
-  return base.replace(/\/+$/, '')
+  const primary = typeof process !== 'undefined' ? process.env['TRON_FULL_NODE_URL']?.trim() : ''
+  if (primary) return primary.replace(/\/+$/, '')
+  const backup = typeof process !== 'undefined' ? process.env['TRON_BACKUP_NODE']?.trim() : ''
+  if (backup) {
+    console.warn('[RPC] TRON_FULL_NODE_URL unset — using TRON_BACKUP_NODE')
+    return backup.replace(/\/+$/, '')
+  }
+  return TRON_GRID_PUBLIC_HOST
 }
 
 function resolveTronSensoryProbeHosts(): string[] {

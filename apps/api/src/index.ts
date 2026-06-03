@@ -13,6 +13,7 @@ import { startVaultGasWarningCron, stopVaultGasWarningCron } from './cron/gas-wa
 import { startVaultSweepCron, stopVaultSweepCron } from './cron/vault-sweep.js'
 import { startSentinelRuntimeCron, stopSentinelRuntimeCron } from './lib/sentinel-runtime.js'
 import { startTelegramControlBot, stopTelegramControlBot } from './telegram-bot.js'
+import { stopTelegramOutboundQueue } from './lib/telegram.js'
 
 console.log('[BOOT] Index loaded')
 
@@ -99,6 +100,7 @@ void start()
         stopVaultGasWarningCron()
         stopVaultSweepCron()
         stopSentinelRuntimeCron()
+        stopTelegramOutboundQueue()
         await stopTelegramControlBot()
         await closeSettlementPauseRedis()
         await app.close()

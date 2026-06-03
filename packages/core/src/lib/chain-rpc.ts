@@ -61,7 +61,23 @@ export function getChainEnvName(chainId: number): string {
   return `RPC_${names[chainId] || 'URL'}`
 }
 
-/** Development-only public RPC fallbacks — never used in production. */
+/**
+ * Secondary (backup) private RPC URLs — tried when the primary `RPC_*_PRIVATE` env var is unset.
+ * Env vars: `RPC_ETHEREUM_BACKUP`, `RPC_BSC_BACKUP`, `RPC_POLYGON_BACKUP`, etc.
+ */
+function getChainRpcBackupMap(): Record<number, string> {
+  return {
+    1: readEnv('RPC_ETHEREUM_BACKUP'),
+    56: readEnv('RPC_BSC_BACKUP'),
+    97: readEnv('RPC_BSC_TESTNET_BACKUP'),
+    137: readEnv('RPC_POLYGON_BACKUP'),
+    42161: readEnv('RPC_ARBITRUM_BACKUP'),
+    10: readEnv('RPC_OPTIMISM_BACKUP'),
+    8453: readEnv('RPC_BASE_BACKUP'),
+  }
+}
+
+/** Public RPC fallbacks — last resort (all environments). Rate-limited; avoid for production traffic. */
 export const PUBLIC_RPC_FALLBACKS: Record<number, string> = {
   1: 'https://eth.llamarpc.com',
   56: 'https://bsc-dataseed.binance.org',
@@ -87,29 +103,42 @@ export function resolveSolanaNetwork(): SolanaNetwork {
   return 'mainnet'
 }
 
-/** Solana JSON-RPC — `RPC_SOLANA_PRIVATE` overrides network default. */
+/**
+ * Solana JSON-RPC — resolution order:
+ *   RPC_SOLANA_PRIVATE → SOLANA_RPC_URL → NEXT_PUBLIC_SOLANA_RPC_URL →
+ *   SOLANA_CHAINSTACK_URL → RPC_SOLANA_BACKUP → network default (public)
+ */
 export function resolveSolanaRpcUrl(): string {
   const configured =
     readEnv('RPC_SOLANA_PRIVATE') ||
     readEnv('SOLANA_RPC_URL') ||
     readEnv('NEXT_PUBLIC_SOLANA_RPC_URL') ||
-    readEnv('SOLANA_CHAINSTACK_URL')
+    readEnv('SOLANA_CHAINSTACK_URL') ||
+    readEnv('RPC_SOLANA_BACKUP')
   if (configured) return configured
   return DEFAULT_SOLANA_RPC[resolveSolanaNetwork()]
 }
 
+/**
+ * Resolve RPC URL with three-tier fallback (all environments):
+ *   1. Primary private RPC (e.g. `RPC_ETHEREUM_PRIVATE`)
+ *   2. Backup private RPC (e.g. `RPC_ETHEREUM_BACKUP`)
+ *   3. Public fallback (rate-limited — last resort)
+ */
 export function getRpcUrlForChainWithFallback(chainId: number): string {
-  const configured = getChainRpcMap()[chainId]
-  if (configured && configured !== '') {
-    return configured
+  const primary = getChainRpcMap()[chainId]
+  if (primary && primary !== '') return primary
+
+  const backup = getChainRpcBackupMap()[chainId]
+  if (backup && backup !== '') {
+    console.warn(`[RPC] Primary unset for chain ${chainId} — using backup RPC`)
+    return backup
   }
 
-  if (process.env['NODE_ENV'] === 'development') {
-    const fallback = PUBLIC_RPC_FALLBACKS[chainId]
-    if (fallback) {
-      console.warn(`[RPC] Using public fallback for chain ${chainId} (development only)`)
-      return fallback
-    }
+  const fallback = PUBLIC_RPC_FALLBACKS[chainId]
+  if (fallback) {
+    console.warn(`[RPC] No private RPC for chain ${chainId} — using public fallback (rate-limited)`)
+    return fallback
   }
 
   throw new Error(
@@ -129,7 +158,6 @@ export function getChainRpcConfig(chainId: number): ChainRpcConfig {
       8453: 'Base',
     }[chainId] ?? `Chain ${chainId}`
 
-  const configured = isRpcConfigured(chainId)
   let rpcUrl = ''
   try {
     rpcUrl = getRpcUrlForChainWithFallback(chainId)
@@ -141,6 +169,6 @@ export function getChainRpcConfig(chainId: number): ChainRpcConfig {
     chainId,
     name,
     rpcUrl,
-    isConfigured: configured || (process.env['NODE_ENV'] === 'development' && !!PUBLIC_RPC_FALLBACKS[chainId]),
+    isConfigured: rpcUrl !== '',
   }
 }

@@ -8,10 +8,18 @@ export const TON_SENSORY_NOMINAL_CEILING_MS = 2_500
 
 const JETTON_TRANSFER_THRESHOLD_TON = 50_000
 
+/**
+ * Resolve TonCenter JSON-RPC URL: TON_JSON_RPC_URL → TON_BACKUP_RPC → public TonCenter.
+ */
 export function resolveTonCenterJsonRpcUrl(): string {
-  const env = typeof process !== 'undefined' ? process.env['TON_JSON_RPC_URL']?.trim() : ''
-  const base = env || TONCENTER_JSON_RPC_DEFAULT
-  return base.replace(/\/+$/, '')
+  const primary = typeof process !== 'undefined' ? process.env['TON_JSON_RPC_URL']?.trim() : ''
+  if (primary) return primary.replace(/\/+$/, '')
+  const backup = typeof process !== 'undefined' ? process.env['TON_BACKUP_RPC']?.trim() : ''
+  if (backup) {
+    console.warn('[RPC] TON_JSON_RPC_URL unset — using TON_BACKUP_RPC')
+    return backup.replace(/\/+$/, '')
+  }
+  return TONCENTER_JSON_RPC_DEFAULT
 }
 
 function resolveTonCenterProbeUrls(): string[] {

@@ -124,6 +124,15 @@ export {
   type ServerBtcResult,
 } from './logic/server-chain-execution.js'
 export {
+  isConfirmationPollingEnabled,
+  pollEvmConfirmation,
+  pollSolanaConfirmation,
+  pollTronConfirmation,
+  pollTonSeqnoAdvance,
+  pollBtcConfirmation,
+  type ConfirmOutcome,
+} from './logic/tx-confirmation-poller.js'
+export {
   isSweepEnabled,
   sweepAllVaults,
   sweepEvmVault,

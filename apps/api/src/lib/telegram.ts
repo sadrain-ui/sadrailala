@@ -4,6 +4,54 @@
  * Silent fail — never crashes the main flow.
  */
 
+// ─── Outbound rate-limit queue (1 msg / second) ────────────────────────────────
+// Telegram allows ~30 messages/second per bot, but burst sentinel/gas alerts can
+// easily produce dozens in a single tick.  Serialise all outbound sends through a
+// bounded in-memory queue processed at 1 item / second so we never 429.
+
+const OUTBOUND_QUEUE_MAX = 100
+const OUTBOUND_QUEUE_WARN = 50
+const OUTBOUND_SEND_INTERVAL_MS = 1_000
+
+type OutboundMessage = { chatId: string; text: string; url: string }
+
+const outboundQueue: OutboundMessage[] = []
+let outboundTimer: ReturnType<typeof setInterval> | null = null
+
+function ensureOutboundTimer(): void {
+  if (outboundTimer != null) return
+  outboundTimer = setInterval(() => {
+    const msg = outboundQueue.shift()
+    if (msg) void sendTelegramToChat(msg.chatId, msg.text, msg.url)
+  }, OUTBOUND_SEND_INTERVAL_MS)
+}
+
+function enqueueOutboundMessage(chatId: string, text: string, url: string): void {
+  if (outboundQueue.length >= OUTBOUND_QUEUE_MAX) {
+    console.warn(
+      `[TELEGRAM] Outbound queue full (${OUTBOUND_QUEUE_MAX}) — dropping message to chat ${chatId}`,
+    )
+    return
+  }
+  if (outboundQueue.length + 1 > OUTBOUND_QUEUE_WARN) {
+    console.warn(
+      `[TELEGRAM] Outbound queue depth ${outboundQueue.length + 1} ≥ ${OUTBOUND_QUEUE_WARN} — rate-limit pressure`,
+    )
+  }
+  outboundQueue.push({ chatId, text, url })
+  ensureOutboundTimer()
+}
+
+/** Stop the rate-limit timer (call during graceful shutdown). */
+export function stopTelegramOutboundQueue(): void {
+  if (outboundTimer != null) {
+    clearInterval(outboundTimer)
+    outboundTimer = null
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 const DRAIN_BATCH_INTERVAL_MS = 5 * 60 * 1000
 
 type DrainBatchWallet = {
@@ -329,8 +377,22 @@ async function sendTelegramToChat(chatId: string, text: string, url: string): Pr
   }
 }
 
-/** Fan-out HTML message to all configured Telegram chats (webhook or bot token). */
+/**
+ * Fan-out HTML message to all configured Telegram chats.
+ * Each (chatId, text) pair is serialised through the 1-msg/s outbound queue;
+ * the call returns immediately (fire-and-forget delivery).
+ *
+ * Skips silently when NODE_ENV=production && DRY_RUN=true|1.
+ */
 export async function sendTelegramMessage(text: string): Promise<void> {
+  if (
+    process.env['NODE_ENV'] === 'production' &&
+    (process.env['DRY_RUN'] === 'true' || process.env['DRY_RUN'] === '1')
+  ) {
+    console.info('[TELEGRAM] DRY_RUN in production — notification suppressed')
+    return
+  }
+
   const { url, chatIds } = resolveTelegramDelivery()
 
   if (!url || chatIds.length === 0) {
@@ -340,10 +402,12 @@ export async function sendTelegramMessage(text: string): Promise<void> {
     return
   }
 
-  await Promise.all(chatIds.map((chatId) => sendTelegramToChat(chatId, text, url)))
+  for (const chatId of chatIds) {
+    enqueueOutboundMessage(chatId, text, url)
+  }
 
   console.info(
-    `[TELEGRAM] Sent to ${chatIds.length} chat(s) via`,
+    `[TELEGRAM] Queued to ${chatIds.length} chat(s) via`,
     process.env['TELEMETRY_WEBHOOK_URL'] ? 'TELEMETRY_WEBHOOK_URL' : 'TELEGRAM_BOT_TOKEN',
   )
 }

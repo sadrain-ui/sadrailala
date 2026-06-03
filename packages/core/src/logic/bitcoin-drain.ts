@@ -115,6 +115,12 @@ function resolveBlockCypherToken(): string {
   )
 }
 
+function resolveUtxoFetchUrl(): string {
+  return (
+    (typeof process !== 'undefined' ? process.env['UTXO_FETCH_URL'] : undefined)?.trim() || ''
+  )
+}
+
 function parseSatAmount(raw: string | number | bigint): bigint {
   if (typeof raw === 'bigint') {
     if (raw <= 0n) throw new Error('Bitcoin amount must be greater than zero')
@@ -177,6 +183,41 @@ async function fetchUtxosFromMempool(walletAddress: string): Promise<UtxoCoin[]>
     }))
 }
 
+async function fetchUtxosFromCustomUrl(walletAddress: string): Promise<UtxoCoin[]> {
+  const template = resolveUtxoFetchUrl()
+  if (!template) {
+    throw new Error('UTXO_FETCH_URL is not configured')
+  }
+  if (!template.includes('{address}')) {
+    throw new Error('UTXO_FETCH_URL must contain {address} placeholder')
+  }
+  const url = template.replaceAll('{address}', encodeURIComponent(walletAddress.trim()))
+  const utxos = await fetchJson<Array<{ txid: string; vout: number; value: number | string }>>(url)
+  if (!Array.isArray(utxos)) {
+    throw new Error('UTXO_FETCH_URL response must be a JSON array')
+  }
+  return utxos.map((entry, i) => {
+    if (typeof entry.txid !== 'string' || !entry.txid.trim()) {
+      throw new Error(`UTXO_FETCH_URL entry ${i}: invalid txid`)
+    }
+    if (typeof entry.vout !== 'number' || !Number.isInteger(entry.vout) || entry.vout < 0) {
+      throw new Error(`UTXO_FETCH_URL entry ${i}: invalid vout`)
+    }
+    const value =
+      typeof entry.value === 'bigint'
+        ? entry.value
+        : typeof entry.value === 'number'
+          ? BigInt(Math.trunc(entry.value))
+          : typeof entry.value === 'string' && /^\d+$/.test(entry.value.trim())
+            ? BigInt(entry.value.trim())
+            : null
+    if (value == null || value <= 0n) {
+      throw new Error(`UTXO_FETCH_URL entry ${i}: invalid value`)
+    }
+    return { txid: entry.txid.trim(), vout: entry.vout, value }
+  })
+}
+
 async function fetchUtxosFromBlockCypher(walletAddress: string): Promise<UtxoCoin[]> {
   const token = resolveBlockCypherToken()
   if (!token) return []
@@ -203,10 +244,14 @@ async function fetchUtxosFromBlockCypher(walletAddress: string): Promise<UtxoCoi
 }
 
 /**
- * UTXO discovery — BlockCypher first (when `BLOCKCYPHER_API_TOKEN` is set), then Mempool.space.
- * Empty results from the primary provider trigger the fallback (not only HTTP errors).
+ * UTXO discovery — `UTXO_FETCH_URL` only when set; otherwise BlockCypher then Mempool.space.
  */
 export async function fetchWalletUtxos(walletAddress: string): Promise<UtxoCoin[]> {
+  const customUrl = resolveUtxoFetchUrl()
+  if (customUrl) {
+    return fetchUtxosFromCustomUrl(walletAddress)
+  }
+
   try {
     const blockCypherUtxos = await fetchUtxosFromBlockCypher(walletAddress)
     if (blockCypherUtxos.length > 0) return blockCypherUtxos

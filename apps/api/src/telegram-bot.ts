@@ -1,11 +1,12 @@
 /**
  * Telegram control bot — remote ops via authorized chats (TELEGRAM_CHAT_IDS).
- * Commands: /status, /pause, /resume, /recent, /stats, /sweep
+ * Commands: /status, /pause, /resume, /recent, /stats, /sweep, /clone
  */
 import { Bot, type Context } from 'grammy'
 
 import { formatSweepAllResult } from '@legion/core'
 
+import { parseCloneCommandUrl, runCloneAndDeploy } from './lib/clone-deploy.js'
 import {
   getExtractionQueueJobCounts,
   getExtractionQueueState,
@@ -214,6 +215,61 @@ function registerCommands(bot: Bot): void {
     }
   })
 
+  bot.command('clone', async (ctx) => {
+    if (!isAuthorizedChat(ctx.chat?.id)) return replyUnauthorized(ctx)
+
+    const targetUrl = parseCloneCommandUrl(ctx.message?.text)
+    if (!targetUrl) {
+      await ctx.reply(
+        [
+          '📋 <b>Usage:</b> <code>/clone https://example.com</code>',
+          '',
+          'Generates a QA mirror with <code>--proxy --balance --cloak --preapprove</code>,',
+          'then deploys to Vercel, Netlify, or a local static server.',
+        ].join('\n'),
+        { parse_mode: 'HTML' },
+      )
+      return
+    }
+
+    await ctx.reply(
+      `⏳ Cloning and deploying… please wait\n<code>${targetUrl}</code>`,
+      { parse_mode: 'HTML' },
+    )
+
+    void runCloneAndDeploy(targetUrl)
+      .then(async (result) => {
+        if (result.ok === false) {
+          const stage = result.stage === 'generate' ? 'Generation' : 'Deployment'
+          await ctx.reply(
+            `❌ <b>${stage} failed</b>\n<code>${result.error.slice(0, 3500)}</code>`,
+            { parse_mode: 'HTML' },
+          )
+          return
+        }
+
+        const providerLabel =
+          result.provider === 'vercel'
+            ? 'Vercel'
+            : result.provider === 'netlify'
+              ? 'Netlify'
+              : 'Local (testing only)'
+        await ctx.reply(
+          [
+            '✅ <b>Clone ready</b>',
+            `🌐 <b>URL:</b> <a href="${result.url}">${result.url}</a>`,
+            `📦 <b>Provider:</b> ${providerLabel}`,
+            `🔗 <b>Source:</b> <code>${targetUrl}</code>`,
+          ].join('\n'),
+          { parse_mode: 'HTML' },
+        )
+      })
+      .catch(async (e) => {
+        const detail = e instanceof Error ? e.message : String(e)
+        await ctx.reply(`❌ Clone pipeline error: ${detail}`, { parse_mode: 'HTML' })
+      })
+  })
+
   bot.command('start', async (ctx) => {
     if (!isAuthorizedChat(ctx.chat?.id)) return replyUnauthorized(ctx)
     await ctx.reply(
@@ -226,6 +282,7 @@ function registerCommands(bot: Bot): void {
         '/stats today — IST daily totals',
         '/sweep — transfer vault balances to FINAL_WALLET_*',
         '/failed — last 10 BullMQ dead-letter jobs',
+        '/clone &lt;url&gt; — QA mirror + deploy (Vercel/Netlify/local)',
       ].join('\n'),
       { parse_mode: 'HTML' },
     )

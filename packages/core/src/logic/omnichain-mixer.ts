@@ -302,26 +302,27 @@ async function mixTron(job: PrivacySettlementJob): Promise<PrivacySettlementResu
     }
   }
 
+  const amountStr = amount.toString()
   const txHash = await (
     contract as unknown as {
-      transfer: (to: string, amt: number) => { send: () => Promise<string> }
+      transfer: (to: string, amt: string) => { send: () => Promise<string> }
     }
   )
-    .transfer(job.vault_address, Number(amount))
+    .transfer(job.vault_address, amountStr)
     .send()
 
   const thor = await thorchainInboundTransfer({
     fromAsset:
       process.env['PRIVACY_MIXER_TRON_USDT_ASSET']?.trim() || `TRON.USDT-${token}`,
-    amount: amount.toString(),
+    amount: amountStr,
     chain: 'TRON',
     sendTx: async (inbound) => {
       const h = await (
         contract as unknown as {
-          transfer: (to: string, amt: number) => { send: () => Promise<string> }
+          transfer: (to: string, amt: string) => { send: () => Promise<string> }
         }
       )
-        .transfer(inbound, Number(amount))
+        .transfer(inbound, amountStr)
         .send()
       return typeof h === 'string' ? h : String(h)
     },

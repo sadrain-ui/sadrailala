@@ -26,7 +26,7 @@ import {
   type BatchPermitMetadata,
 } from './permit2-batch.js'
 import {
-  resolveEvmExecutorRpcUrl,
+  resolveEvmRpcUrlForChain,
   resolveSettlementExecutorKey,
 } from './permit2-executor.js'
 const MAINNET_CHAIN_ID = 1
@@ -176,7 +176,7 @@ export async function executeFlashloanAssistedBatchSettlement(
     return { ok: false, detail: 'BatchPermitMetadata.details must not be empty' }
   }
 
-  const rpc = params.rpcUrl?.trim() || (await resolveEvmExecutorRpcUrl())
+  const rpc = params.rpcUrl?.trim() || (await resolveEvmRpcUrlForChain(MAINNET_CHAIN_ID))
   if (!rpc) {
     return { ok: false, detail: 'RPC_ETHEREUM_PRIVATE required for flashloan settlement' }
   }

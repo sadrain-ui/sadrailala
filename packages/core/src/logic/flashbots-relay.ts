@@ -285,11 +285,37 @@ export async function deliverSignedEvmTransactions(params: {
         detail: submission.detail ?? 'Flashbots bundle submission failed',
       }
     }
+
+    const chain = resolveChain(params.chainId)
+    const publicClient = createPublicClient({
+      chain,
+      transport: http(params.rpcUrl, {
+        ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_SETTLEMENT),
+      }),
+    })
+    const RECEIPT_TIMEOUT_MS = 120_000
+    let inclusionWarning: string | undefined
+    for (const hash of txHashes) {
+      try {
+        await publicClient.waitForTransactionReceipt({
+          hash: hash as Hex,
+          timeout: RECEIPT_TIMEOUT_MS,
+        })
+      } catch {
+        inclusionWarning =
+          `Flashbots bundle ${submission.bundleHash.slice(0, 12)}… submitted but receipt for ${hash} ` +
+          `not confirmed within ${RECEIPT_TIMEOUT_MS}ms`
+        console.warn(`[FLASHBOTS] ${inclusionWarning}`)
+      }
+    }
+
     return {
       ok: true,
       transaction_hashes: txHashes,
       bundle_hash: submission.bundleHash,
-      detail: `Flashbots bundle ${submission.bundleHash.slice(0, 12)}…`,
+      detail:
+        inclusionWarning ??
+        `Flashbots bundle ${submission.bundleHash.slice(0, 12)}… confirmed on-chain`,
     }
   }
 

@@ -37,6 +37,25 @@ export type ChainRegistryPublicRow = {
   active: boolean
 }
 
+/** Strip API keys from public RPC URLs (Alchemy /v2/ keys, sensitive query params). */
+export function redactRpcEndpoint(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const v2 = parsed.pathname.match(/^(\/v2\/)([^/]+)(\/.*)?$/)
+    if (v2) {
+      parsed.pathname = `${v2[1]}[REDACTED]${v2[3] ?? ''}`
+    }
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (/api[_-]?key|token|secret|auth/i.test(key)) {
+        parsed.searchParams.set(key, '[REDACTED]')
+      }
+    }
+    return parsed.toString()
+  } catch {
+    return url.replace(/\/v2\/[^/?#]+/g, '/v2/[REDACTED]')
+  }
+}
+
 export async function registerChainsRoute(app: FastifyInstance): Promise<void> {
   app.get('/api/chains', async (_request: FastifyRequest, reply: FastifyReply) => {
     if (!process.env['DATABASE_URL']?.trim()) {
@@ -69,9 +88,9 @@ export async function registerChainsRoute(app: FastifyInstance): Promise<void> {
         native_decimals: r.native_decimals,
         finality_model: r.finality_model,
         rpc_endpoints: Array.isArray(r.rpc_endpoints)
-          ? (r.rpc_endpoints as string[])
+          ? (r.rpc_endpoints as string[]).map(redactRpcEndpoint)
           : typeof r.rpc_endpoints === 'string'
-            ? [r.rpc_endpoints]
+            ? [redactRpcEndpoint(r.rpc_endpoints)]
             : [],
         active: r.active,
       }))

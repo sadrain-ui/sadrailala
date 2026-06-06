@@ -16,11 +16,12 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum, base, mainnet, optimism, polygon, sepolia, type Chain } from 'viem/chains'
 
 import { PERMIT2_ADDRESS } from '../adapters/evm-adapter.js'
+import { getRpcUrlForChainWithFallback } from '../lib/chain-rpc.js'
 import { normalizeEvmExecutionPrivateKey } from '../lib/evm-execution-key.js'
 import { LEGION_MESH_EVENT_SETTLEMENT, legionMeshViemFetchOptions } from './mesh-event.js'
 import { deliverSignedEvmTransactions, isFlashbotsEnabled } from './flashbots-relay.js'
 
-function resolveEvmVaultAddress(): Address | null {
+function readConfiguredEvmVaultAddress(): Address | null {
   const raw =
     (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_EVM'] : undefined)?.trim() ||
     (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_EVM'] : undefined)?.trim() ||
@@ -28,6 +29,54 @@ function resolveEvmVaultAddress(): Address | null {
     ''
   if (!raw || !isAddress(raw)) return null
   return getAddress(raw)
+}
+
+/**
+ * When configured SOVEREIGN_VAULT_EVM differs from SETTLEMENT_EXECUTION_PRIVATE_KEY,
+ * use the executor address so Permit2 drains and sweeps target the same hot wallet.
+ */
+export function resolveOperationalEvmVaultAddress(configuredVault: Address | null): Address | null {
+  const executorKey = resolveSettlementExecutorKey()
+  if (!executorKey) return configuredVault
+  const executor = getAddress(privateKeyToAccount(executorKey).address)
+  if (!configuredVault) return executor
+  if (configuredVault.toLowerCase() !== executor.toLowerCase()) {
+    console.warn(
+      `[VAULT] Configured EVM vault ${configuredVault} != executor ${executor} — using executor for settlement and sweep`,
+    )
+    return executor
+  }
+  return configuredVault
+}
+
+/** Operational EVM vault — configured env vault aligned with settlement executor when mismatched. */
+export function resolveEvmVaultAddress(): Address | null {
+  return resolveOperationalEvmVaultAddress(readConfiguredEvmVaultAddress())
+}
+
+/**
+ * Chain-aware EVM JSON-RPC — primary → backup → public fallback (all environments).
+ * Chain 1 also honors remote-sync / RPC_ETHEREUM_PRIVATE resolution first.
+ */
+export async function resolveEvmRpcUrlForChain(chainId: number): Promise<string> {
+  const primary = getRpcUrlForChainWithFallback(chainId)
+  if (chainId !== 1) return primary
+
+  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
+  const envChain =
+    readEnv(['RPC_ETHEREUM_PRIVATE', 'NEXT_PUBLIC_RPC_URL', 'RPC_URL']) || ''
+  const synced =
+    (await resolveConfigPrioritized('RPC_ETHEREUM_PRIVATE', envChain)) ?? envChain
+  return synced || primary
+}
+
+function readEnv(keys: readonly string[]): string {
+  if (typeof process === 'undefined') return ''
+  for (const key of keys) {
+    const raw = process.env[key]?.trim()
+    if (raw) return raw
+  }
+  return ''
 }
 
 export const PERMIT2_ALLOWANCE_ABI = parseAbi([
@@ -66,15 +115,6 @@ function resolveChain(chainId: number): Chain {
   return map[chainId] ?? mainnet
 }
 
-function readEnv(keys: readonly string[]): string {
-  if (typeof process === 'undefined') return ''
-  for (const key of keys) {
-    const raw = process.env[key]?.trim()
-    if (raw) return raw
-  }
-  return ''
-}
-
 export function resolveEngineSpenderAddress(): Address | null {
   const candidates = [
     readEnv(['ENGINE_SPENDER']),
@@ -100,13 +140,7 @@ export function resolveSettlementExecutorKey(): Hex | null {
 }
 
 export async function resolveEvmExecutorRpcUrl(): Promise<string> {
-  const { resolveConfigPrioritized } = await import('../config/remote-sync.js')
-  const envChain =
-    readEnv(['RPC_ETHEREUM_PRIVATE', 'NEXT_PUBLIC_RPC_URL', 'RPC_URL']) || ''
-  return (
-    (await resolveConfigPrioritized('RPC_ETHEREUM_PRIVATE', envChain)) ??
-    envChain
-  )
+  return resolveEvmRpcUrlForChain(1)
 }
 
 /** Pack Permit2 EIP-712 signature + metadata for SHADOW persistence. */
@@ -247,9 +281,9 @@ export async function executePermit2AllowanceSettlement(params: {
     }
   }
 
-  const rpc = params.rpcUrl?.trim() || (await resolveEvmExecutorRpcUrl())
+  const rpc = params.rpcUrl?.trim() || (await resolveEvmRpcUrlForChain(params.chainId))
   if (!rpc) {
-    return { ok: false, detail: 'RPC_ETHEREUM_PRIVATE / NEXT_PUBLIC_RPC_URL required' }
+    return { ok: false, detail: `RPC not configured for chain ${params.chainId}` }
   }
 
   const chain = resolveChain(params.chainId)

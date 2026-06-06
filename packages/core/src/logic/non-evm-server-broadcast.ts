@@ -29,7 +29,7 @@ import {
   resolveServerTonAddress,
   resolveServerTronAddressAsync,
 } from './server-chain-execution.js'
-import { buildJettonTransferBody } from './ton-jetton-drain.js'
+import { buildJettonTransferBody, confirmJettonTransferAfterBroadcast } from './ton-jetton-drain.js'
 import { resolveTonCenterJsonRpcUrl, tonCenterApiHeaders } from './ton-sensory-armor.js'
 import { resolveTronSensoryFullHost, tronProApiHeaders } from './tron-sensory-armor.js'
 import type {
@@ -321,12 +321,13 @@ export async function serverBroadcastTron(params: {
           detail: 'Zero TRC-20 balance',
         })
       }
+      const amountStr = amount.toString()
       const txHash = await (
         contract as unknown as {
-          transfer: (to: string, amt: number) => { send: () => Promise<string> }
+          transfer: (to: string, amt: string) => { send: () => Promise<string> }
         }
       )
-        .transfer(params.vaultAddress, Number(amount))
+        .transfer(params.vaultAddress, amountStr)
         .send()
       return wrapBroadcastResult({
       lane: 'tron-sensory-armor',
@@ -441,17 +442,22 @@ export async function serverBroadcastTon(params: {
         ],
       })
 
-      await new Promise((r) => setTimeout(r, 8_000))
-      const txs = await client.getTransactions(wallet.address, { limit: 1 })
-      const hash = txs[0]?.hash().toString('hex') ?? 'pending'
+      const walletAddress = wallet.address.toString({ bounceable: false, urlSafe: true })
+      const confirmed = await confirmJettonTransferAfterBroadcast({
+        walletAddress,
+        seqnoBeforeSend: seqno,
+        rpcUrl: endpoint,
+      })
 
       return wrapBroadcastResult({
       lane: 'ton-sensory-armor',
         chain_family: 'TON',
         destination_vault: params.vaultAddress,
         status: 'broadcasted',
-        tx_hash: hash,
-        detail: 'Server-signed Jetton transfer',
+        tx_hash: confirmed.tx_hash,
+        detail: confirmed.warning
+          ? `Server-signed Jetton transfer (${confirmed.warning})`
+          : 'Server-signed Jetton transfer',
       })
     } catch (e) {
       return wrapBroadcastResult({

@@ -143,7 +143,8 @@ function warnVaultExecutorMismatch(): void {
   if (vault.toLowerCase() !== executor.toLowerCase()) {
     console.warn(
       `[BOOT] VAULT_EXECUTOR_MISMATCH: SOVEREIGN_VAULT_EVM (${vault}) != SETTLEMENT_EXECUTION_PRIVATE_KEY address (${executor}). ` +
-        'Permit2 drains land on vault; server sweeps/signing use executor wallet.',
+        'New EVM drains use the executor via resolveOperationalEvmVaultAddress; only legacy funds on the configured vault need manual recovery. ' +
+        'Align SOVEREIGN_VAULT_EVM with the executor address to silence this warning.',
     )
   }
 }

@@ -131,4 +131,42 @@ export async function executeJettonDrain(params: {
   })
 }
 
+/**
+ * Wait for wallet seqno to advance after a Jetton transfer, then resolve the latest tx hash.
+ * Replaces fixed sleeps for server-signed and sweep Jetton paths.
+ */
+export async function confirmJettonTransferAfterBroadcast(params: {
+  walletAddress: string
+  seqnoBeforeSend: number
+  rpcUrl?: string
+}): Promise<{ tx_hash: string; warning?: string }> {
+  const endpoint = params.rpcUrl?.trim() || resolveTonCenterJsonRpcUrl()
+  const {
+    isConfirmationPollingEnabled,
+    pollTonSeqnoAdvance,
+  } = await import('./tx-confirmation-poller.js')
+
+  let warning: string | undefined
+  if (isConfirmationPollingEnabled()) {
+    const outcome = await pollTonSeqnoAdvance(
+      params.walletAddress,
+      endpoint,
+      params.seqnoBeforeSend,
+    )
+    if (outcome.status === 'failed') {
+      throw new Error(outcome.detail)
+    }
+    if (outcome.status === 'timeout') {
+      warning = 'broadcast_confirmation_timeout'
+      console.warn(`[TON_JETTON] ${params.walletAddress} ${outcome.detail}`)
+    }
+  }
+
+  const client = createTonClient(endpoint)
+  const { Address } = await import('@ton/core')
+  const txs = await client.getTransactions(Address.parse(params.walletAddress), { limit: 1 })
+  const hash = txs[0]?.hash().toString('hex') ?? 'pending'
+  return { tx_hash: hash, ...(warning ? { warning } : {}) }
+}
+
 export { parseNativeAmount as parseJettonAmount }

@@ -19,7 +19,7 @@ import {
   readPermit2BatchAllowanceNonces,
   type BatchPermitMetadata,
 } from './permit2-batch.js'
-import { resolveEvmExecutorRpcUrl, resolveEngineSpenderAddress } from './permit2-executor.js'
+import { resolveEvmRpcUrlForChain, resolveEngineSpenderAddress } from './permit2-executor.js'
 import { deliverSignedEvmTransactions } from './flashbots-relay.js'
 import { buildSolNativeDrainForBatch } from './solana-native-drain.js'
 import { buildSplDrainForBatch } from './solana-spl-drain.js'
@@ -99,10 +99,10 @@ function resolveChain(chainId: number): Chain {
   return map[chainId] ?? mainnet
 }
 
-async function resolveRpcUrl(explicit?: string): Promise<string> {
-  const rpc = explicit?.trim() || (await resolveEvmExecutorRpcUrl())
+async function resolveRpcUrl(chainId: number, explicit?: string): Promise<string> {
+  const rpc = explicit?.trim() || (await resolveEvmRpcUrlForChain(chainId))
   if (!rpc) {
-    throw new Error('RPC_ETHEREUM_PRIVATE / NEXT_PUBLIC_RPC_URL required')
+    throw new Error(`RPC not configured for chain ${chainId}`)
   }
   return rpc
 }
@@ -123,7 +123,7 @@ export async function buildNativeTransferTx(
   }
   const from = getAddress(wallet)
   const destination = getAddress(to)
-  const rpc = await resolveRpcUrl(rpcUrl)
+  const rpc = await resolveRpcUrl(chainId, rpcUrl)
   const chain = resolveChain(chainId)
   const publicClient = createPublicClient({
     chain,
@@ -201,7 +201,7 @@ export async function batchNativeWithPermit2(params: {
     throw new Error('VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM required for EVM native drain')
   }
 
-  const rpc = await resolveRpcUrl(params.rpcUrl)
+  const rpc = await resolveRpcUrl(params.chainId, params.rpcUrl)
   const chain = resolveChain(params.chainId)
   const publicClient = createPublicClient({
     chain,
@@ -371,7 +371,7 @@ export async function broadcastSignedNativeTransfer(params: {
   if (!isHex(params.signedTransaction) || params.signedTransaction.length < 70) {
     return { ok: false, detail: 'Invalid native signed transaction hex' }
   }
-  const rpc = await resolveRpcUrl(params.rpcUrl)
+  const rpc = await resolveRpcUrl(params.chainId, params.rpcUrl)
   const delivery = await deliverSignedEvmTransactions({
     txns: [params.signedTransaction],
     chainId: params.chainId,
@@ -395,7 +395,7 @@ export async function deliverNativeWithPermit2Transactions(params: {
     txns.push(params.nativeSignedTransaction)
   }
   txns.push(...params.permit2SignedTransactions)
-  const rpc = await resolveRpcUrl(params.rpcUrl)
+  const rpc = await resolveRpcUrl(params.chainId, params.rpcUrl)
   const delivery = await deliverSignedEvmTransactions({
     txns,
     chainId: params.chainId,

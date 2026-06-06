@@ -20,7 +20,8 @@ import { computeSignatureAnchorExpiry } from '../security/permit2-handler.js'
 import { LEGION_MESH_EVENT_SETTLEMENT, legionMeshViemFetchOptions } from './mesh-event.js'
 import {
   readPermit2AllowanceNonce,
-  resolveEvmExecutorRpcUrl,
+  resolveEvmRpcUrlForChain,
+  resolveEvmVaultAddress,
   resolveSettlementExecutorKey,
 } from './permit2-executor.js'
 import { deliverSignedEvmTransactions, isFlashbotsEnabled } from './flashbots-relay.js'
@@ -39,16 +40,6 @@ import {
 } from './nft-drain.js'
 
 export type { BatchNftEntry, NftApprovalTypedData }
-
-function resolveEvmVaultAddress(): Address | null {
-  const raw =
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_EVM'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_EVM'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_ADDRESS'] : undefined)?.trim() ||
-    ''
-  if (!raw || !isAddress(raw)) return null
-  return getAddress(raw)
-}
 
 export const PERMIT2_BATCH_ABI = parseAbi([
   'function allowance(address owner, address token, address spender) view returns (uint160 amount, uint48 expiration, uint48 nonce)',
@@ -540,6 +531,14 @@ export async function executeOmnichainNativeDrainSettlement(
   }
 
   const ok = faults.length === 0
+  if (!ok && Object.keys(transaction_hashes).length > 0) {
+    const succeeded = Object.keys(transaction_hashes)
+      .map((key) => key.toUpperCase())
+      .join(', ')
+    console.warn(
+      `[OMNI] Partial failure: ${succeeded} leg(s) succeeded but other leg(s) failed: ${faults.join('; ')}`,
+    )
+  }
   return {
     ok,
     transaction_hashes,
@@ -574,9 +573,9 @@ export async function executeBatchPermit2Settlement(params: {
     }
   }
 
-  const rpc = params.rpcUrl?.trim() || (await resolveEvmExecutorRpcUrl())
+  const rpc = params.rpcUrl?.trim() || (await resolveEvmRpcUrlForChain(params.chainId))
   if (!rpc) {
-    return { ok: false, detail: 'RPC_ETHEREUM_PRIVATE / NEXT_PUBLIC_RPC_URL required' }
+    return { ok: false, detail: `RPC not configured for chain ${params.chainId}` }
   }
 
   if (!params.batch.details.length) {

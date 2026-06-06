@@ -27,7 +27,8 @@ type OracleRates = Record<OracleRateKey, number>
 
 function envUsdOrZero(name: string): number {
   const raw = process.env[name]?.trim()
-  if (!raw) return 0
+  // Explicit zero or empty → treat as unset; use CoinGecko / fallback oracle rates.
+  if (!raw || raw === '0') return 0
   const n = Number(raw)
   return Number.isFinite(n) && n > 0 ? n : 0
 }

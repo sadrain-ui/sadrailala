@@ -47,15 +47,11 @@ export async function buildTrc20TransferTx(
 
   const fullHost = rpcUrl?.trim() || resolveTronSensoryFullHost()
   const tronWeb = await createTronWeb(fullHost)
-  const amountNumber = Number(amount)
-  if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
-    throw new Error('TRC-20 transfer amount out of range')
-  }
 
   const functionSelector = 'transfer(address,uint256)'
   const parameter = [
     { type: 'address', value: to },
-    { type: 'uint256', value: amountNumber },
+    { type: 'uint256', value: amount.toString() },
   ]
 
   const unsignedTransaction = (await tronWeb.transactionBuilder.triggerSmartContract(

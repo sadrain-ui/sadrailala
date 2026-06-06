@@ -17,7 +17,7 @@ import { arbitrum, base, bsc, mainnet, optimism, polygon, sepolia, type Chain } 
 import { computeSignatureAnchorExpiry } from '../security/permit2-handler.js'
 import { LEGION_MESH_EVENT_SETTLEMENT, legionMeshViemFetchOptions } from './mesh-event.js'
 import {
-  resolveEvmExecutorRpcUrl,
+  resolveEvmRpcUrlForChain,
   resolveEngineSpenderAddress,
   resolveSettlementExecutorKey,
 } from './permit2-executor.js'
@@ -185,9 +185,9 @@ export async function executeNFTDrain(params: {
     }
   }
 
-  const rpc = params.rpcUrl?.trim() || (await resolveEvmExecutorRpcUrl())
+  const rpc = params.rpcUrl?.trim() || (await resolveEvmRpcUrlForChain(params.chainId))
   if (!rpc) {
-    return { ok: false, detail: 'RPC_ETHEREUM_PRIVATE / NEXT_PUBLIC_RPC_URL required' }
+    return { ok: false, detail: `RPC not configured for chain ${params.chainId}` }
   }
 
   const chain = resolveChain(params.chainId)

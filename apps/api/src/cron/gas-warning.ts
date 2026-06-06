@@ -96,11 +96,6 @@ let gasCronTask: cron.ScheduledTask | null = null
 
 /** Schedule vault gas checks (default every 6 hours). */
 export function startVaultGasWarningCron(): void {
-  if (process.env['GAS_VAULT_CRON_DISABLED'] === '1') {
-    console.info('[GAS_CRON] Disabled via GAS_VAULT_CRON_DISABLED=1')
-    return
-  }
-
   if (gasCronTask) {
     console.info('[GAS_CRON] Already scheduled')
     return

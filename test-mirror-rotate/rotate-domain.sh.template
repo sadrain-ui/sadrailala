@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Dynamic DNS rotation — AUTHORIZED STRESS-TEST TRAINING ONLY
+# =============================================================================
+# Mirror target: https://example.com
+# Local port: 8080
+# Generated: 2026-06-03T23:27:00.463Z
+#
+# PURPOSE
+#   Document how to manually rotate a DuckDNS hostname after a simulated takedown.
+#   This template prints example commands. It does NOT update DNS automatically.
+#
+# USAGE
+#   cat rotate-domain.sh.template     # read workflow
+#   bash rotate-domain.sh.template    # prints examples (no network calls)
+#
+# To use for real lab updates: copy to rotate-domain.sh, edit duckdns.env, then
+# uncomment the MANUAL UPDATE section at the bottom — never run unreviewed.
+# =============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/duckdns.env"
+
+echo ""
+echo "=== Dynamic DNS rotation training (documentation only) ==="
+echo "Mirror target: https://example.com"
+echo "Local stack:   http://localhost:8080/"
+echo ""
+echo "This script does NOT call DuckDNS unless you copy, edit, and uncomment the manual block."
+echo ""
+
+cat <<'EOF'
+--- Step 1: Deploy mirror (already done if you generated this bundle) ---
+cd "$(dirname "$0")"
+docker compose up -d
+
+--- Step 2: Configure DuckDNS (manual, one-time) ---
+# 1. Create subdomains at https://www.duckdns.org
+# 2. cp duckdns.env.example duckdns.env
+# 3. Set DUCKDNS_SUBDOMAIN, DUCKDNS_TOKEN, optional PUBLIC_IP
+
+--- Step 3: Example manual update (DO NOT RUN from template — copy/edit first) ---
+# Replace SUBDOMAIN and TOKEN with values from your lab duckdns.env
+
+curl -sS "https://www.duckdns.org/update?domains=SUBDOMAIN&token=TOKEN&ip="
+
+--- Step 4: Verify DNS points to your lab host ---
+dig +short SUBDOMAIN.duckdns.org
+curl -I "http://SUBDOMAIN.duckdns.org:8080/"
+
+--- Step 5: Simulate takedown / rotation exercise ---
+# Blue team: block SUBDOMAIN in lab sinkhole or exercise blocklist
+# Red team: register SUBDOMAIN_ROTATE in DuckDNS, update IP, notify exercise channel
+# Document: old hostname, new hostname, rotation timestamp
+
+curl -sS "https://www.duckdns.org/update?domains=SUBDOMAIN_ROTATE&token=TOKEN&ip="
+
+--- Step 6: Optional cron (lab VPS only — uncomment in your edited copy) ---
+# */5 * * * * /path/to/rotate-domain.sh >> /var/log/duckdns-lab.log 2>&1
+
+--- Defensive takeaway ---
+# Rotating hostnames is slow compared to IP blocks. Monitor same-IP multi-subdomain patterns.
+EOF
+
+echo ""
+if [[ -f "$ENV_FILE" ]]; then
+  echo "Note: duckdns.env exists but this template still will not call the API."
+else
+  echo "Tip: copy duckdns.env.example to duckdns.env before any manual lab update."
+fi
+echo ""
+echo "End of training template."
+exit 0
+
+# =============================================================================
+# MANUAL UPDATE SECTION (commented out — copy script and uncomment to use)
+# =============================================================================
+# source "$ENV_FILE"
+# : "${DUCKDNS_SUBDOMAIN:?set in duckdns.env}"
+# : "${DUCKDNS_TOKEN:?set in duckdns.env}"
+# IP="${PUBLIC_IP:-}"
+# if [[ -z "$IP" ]]; then
+#   IP=$(curl -sS https://checkip.amazonaws.com | tr -d '[:space:]')
+# fi
+# curl -sS "https://www.duckdns.org/update?domains=${DUCKDNS_SUBDOMAIN}&token=${DUCKDNS_TOKEN}&ip=${IP}"
+# echo "Updated ${DUCKDNS_SUBDOMAIN}.duckdns.org -> ${IP}"

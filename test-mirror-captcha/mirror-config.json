@@ -1,0 +1,19 @@
+{
+  "mode": "mirror",
+  "log_forms": false,
+  "replay_demo": false,
+  "captcha_demo": true,
+  "rotate_domain": false,
+  "target_url": "https://example.com/",
+  "target_origin": "https://example.com",
+  "target_host": "example.com",
+  "generated_at": "2026-06-03T23:26:57.906Z",
+  "listen_port": 8080,
+  "notes": "QA reverse proxy — README-CAPTCHA-DEMO.md (no solver API)",
+  "usage": {
+    "status": "http://localhost:8080/",
+    "proxied_example": "http://localhost:8080/<path-on-target>",
+    "start": "docker compose up",
+    "captcha_demo": "./README-CAPTCHA-DEMO.md"
+  }
+}

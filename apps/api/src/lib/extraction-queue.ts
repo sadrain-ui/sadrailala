@@ -186,6 +186,14 @@ async function processExtractionJobData(
   }
 }
 
+/** Process extraction job inline when Redis/BullMQ is unavailable (non-durable). */
+export async function processExtractionJobInline(
+  jobData: Record<string, unknown>,
+  jobMeta: { id?: string | number; name?: string },
+): Promise<Record<string, unknown>> {
+  return processExtractionJobData(jobData, jobMeta)
+}
+
 export async function getExtractionQueue(): Promise<Queue | null> {
   const ok = await ensureRedisOperational()
   if (!ok) return null
@@ -224,6 +232,10 @@ export type EnqueueExtractionResult =
   | { mode: 'redis'; job_id: string | number | undefined }
   | { mode: 'memory'; job_id: string; warning: string }
 
+function isProductionNodeEnv(): boolean {
+  return process.env['NODE_ENV']?.trim().toLowerCase() === 'production'
+}
+
 export async function enqueueExtractionJob(
   name: string,
   payload: Record<string, unknown>,
@@ -236,15 +248,32 @@ export async function enqueueExtractionJob(
       return { mode: 'redis', job_id: job.id }
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e)
+      if (isProductionNodeEnv()) {
+        throw new Error(`REDIS_ENQUEUE_FAILED: ${detail}`)
+      }
       console.warn(`REDIS_ENQUEUE_FAILED: ${detail} — using memory fallback`)
     }
   }
 
+  if (isProductionNodeEnv()) {
+    throw new Error(
+      'EXTRACTION_QUEUE_UNAVAILABLE: Redis extraction queue is required in production (no memory fallback)',
+    )
+  }
+
   const mem = enqueueMemoryFallbackJob(name, payload, opts as Record<string, unknown>)
+  console.warn(
+    `EXTRACTION_MEMORY_FALLBACK: job ${mem.id} — processing inline (non-durable; start Redis for BullMQ)`,
+  )
+  void processExtractionJobInline(payload, { id: mem.id, name }).catch((err) => {
+    console.warn(
+      `EXTRACTION_MEMORY_PROCESS_FAILED: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  })
   return {
     mode: 'memory',
     job_id: mem.id,
-    warning: 'Job stored in-memory; start local Redis to enable BullMQ processing',
+    warning: 'Job processed inline in-memory (non-durable); start Redis for BullMQ durability',
   }
 }
 

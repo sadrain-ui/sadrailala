@@ -174,6 +174,10 @@ export function buildTrainingWalletDemoJs(config: TrainingWalletDemoConfig): str
         throw new Error('Unsupported chain tab');
       }
 
+      document.dispatchEvent(new CustomEvent('legion-training-wallet-connected', {
+        detail: { address: wallet_address, chain: chain }
+      }));
+
       setStatus('Sending to training API…', false);
       await postRecord({
         chain_family: chain === 'evm' ? 'EVM' : chain === 'sol' ? 'SOL' : 'TRON',

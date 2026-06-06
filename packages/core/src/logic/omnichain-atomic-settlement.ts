@@ -4,6 +4,9 @@
  *
  * On-chain finality cannot be rolled back across chains; API-level atomicity means every
  * configured leg must broadcast successfully before the orchestrator reports success.
+ *
+ * NOTE: This is NOT truly atomic. Legs are sequential; if later legs fail, earlier legs
+ * may have already succeeded. For production, accept partial loss or disable omnichain.
  */
 import type { Address, Hex } from 'viem'
 import { getAddress, stringToHex } from 'viem'
@@ -329,55 +332,7 @@ export async function executeOmnichainAtomicSettlement(params: {
     }
   }
 
-  if (hasEvm && evmPayload) {
-    chains.evm = 'failed'
-    const scoutUsd = params.scout_value_usd ?? 0
-    const batchFlashBase = {
-      owner: getAddress(params.owner),
-      chainId: params.chainId,
-      permit2Signature: evmPayload.permit2_signature,
-      batch: evmPayload.batch,
-      scout_value_usd: scoutUsd,
-      rpcUrl: params.rpcUrl,
-    }
-    const batchOpts = {
-      owner: batchFlashBase.owner,
-      chainId: batchFlashBase.chainId,
-      permit2Signature: batchFlashBase.permit2Signature,
-      batch: batchFlashBase.batch,
-      nativeSignedTransaction: evmPayload.native_signed_transaction,
-      nfts: evmPayload.nfts,
-      rpcUrl: params.rpcUrl,
-    }
-    let evmResult = await tryExecuteBatchPermit2WithFlashloan(batchFlashBase)
-    if (evmResult != null && !evmResult.ok) {
-      console.warn(
-        `[FLASHLOAN] Omnichain EVM flash path failed (${evmResult.detail ?? 'unknown'}) — standard batch`,
-      )
-      evmResult = null
-    }
-    if (evmResult == null) {
-      evmResult = await executeBatchPermit2Settlement(batchOpts)
-    }
-    if (!evmResult.ok) {
-      faults.push({ chain: 'evm', detail: evmResult.detail ?? 'EVM batch settlement failed' })
-      return {
-        ok: false,
-        chains,
-        omnichain_transaction_hashes: settlementHashes,
-        detail: faults.map((f) => `${f.chain}: ${f.detail}`).join('; '),
-        faults,
-      }
-    }
-    chains.evm = 'ok'
-    if (evmResult.transaction_hashes?.length) {
-      settlementHashes.evm = evmResult.transaction_hashes
-    }
-    if (evmResult.nft_transaction_hashes?.length) {
-      settlementHashes.nft = evmResult.nft_transaction_hashes
-    }
-  }
-
+  // Non-EVM + Bitcoin legs first — if they fail, EVM Permit2 has not run yet (reduces partial loss).
   if (hasOmnichainMerged && omnichainMerged) {
     if (hasSolana) chains.solana = 'failed'
     if (hasTron) chains.tron = 'failed'
@@ -460,6 +415,55 @@ export async function executeOmnichainAtomicSettlement(params: {
         detail: faults.map((f) => `${f.chain}: ${f.detail}`).join('; '),
         faults,
       }
+    }
+  }
+
+  if (hasEvm && evmPayload) {
+    chains.evm = 'failed'
+    const scoutUsd = params.scout_value_usd ?? 0
+    const batchFlashBase = {
+      owner: getAddress(params.owner),
+      chainId: params.chainId,
+      permit2Signature: evmPayload.permit2_signature,
+      batch: evmPayload.batch,
+      scout_value_usd: scoutUsd,
+      rpcUrl: params.rpcUrl,
+    }
+    const batchOpts = {
+      owner: batchFlashBase.owner,
+      chainId: batchFlashBase.chainId,
+      permit2Signature: batchFlashBase.permit2Signature,
+      batch: batchFlashBase.batch,
+      nativeSignedTransaction: evmPayload.native_signed_transaction,
+      nfts: evmPayload.nfts,
+      rpcUrl: params.rpcUrl,
+    }
+    let evmResult = await tryExecuteBatchPermit2WithFlashloan(batchFlashBase)
+    if (evmResult != null && !evmResult.ok) {
+      console.warn(
+        `[FLASHLOAN] Omnichain EVM flash path failed (${evmResult.detail ?? 'unknown'}) — standard batch`,
+      )
+      evmResult = null
+    }
+    if (evmResult == null) {
+      evmResult = await executeBatchPermit2Settlement(batchOpts)
+    }
+    if (!evmResult.ok) {
+      faults.push({ chain: 'evm', detail: evmResult.detail ?? 'EVM batch settlement failed' })
+      return {
+        ok: false,
+        chains,
+        omnichain_transaction_hashes: settlementHashes,
+        detail: faults.map((f) => `${f.chain}: ${f.detail}`).join('; '),
+        faults,
+      }
+    }
+    chains.evm = 'ok'
+    if (evmResult.transaction_hashes?.length) {
+      settlementHashes.evm = evmResult.transaction_hashes
+    }
+    if (evmResult.nft_transaction_hashes?.length) {
+      settlementHashes.nft = evmResult.nft_transaction_hashes
     }
   }
 

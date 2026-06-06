@@ -48,13 +48,17 @@ async function ensurePauseRedis(): Promise<RedisCmdClient | null> {
 }
 
 export async function isSettlementPaused(): Promise<boolean> {
-  const redis = await ensurePauseRedis()
-  if (!redis) return false
   try {
+    const redis = await ensurePauseRedis()
+    if (!redis) {
+      console.warn('[PAUSE] Redis unavailable – settlement ingress blocked by default')
+      return true
+    }
     const raw = await redis.get(SETTLEMENT_PAUSE_REDIS_KEY)
     return raw === '1' || raw === 'true'
   } catch {
-    return false
+    console.warn('[PAUSE] Redis unavailable – settlement ingress blocked by default')
+    return true
   }
 }
 

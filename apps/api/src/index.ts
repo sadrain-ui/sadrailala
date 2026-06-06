@@ -13,6 +13,7 @@ import { startVaultGasWarningCron, stopVaultGasWarningCron } from './cron/gas-wa
 import { startVaultSweepCron, stopVaultSweepCron } from './cron/vault-sweep.js'
 import { startSentinelRuntimeCron, stopSentinelRuntimeCron } from './lib/sentinel-runtime.js'
 import { startTelegramControlBot, stopTelegramControlBot } from './telegram-bot.js'
+import { stopLocalCloneServers } from './lib/clone-deploy.js'
 import { stopTelegramOutboundQueue } from './lib/telegram.js'
 
 console.log('[BOOT] Index loaded')
@@ -41,7 +42,12 @@ process.on('unhandledRejection', (reason, promise) => {
     event: 'UNHANDLED_REJECTION',
     message: `FATAL unhandledRejection: ${message}`,
     stack,
-  }).finally(() => process.exit(1))
+  }).catch((telemetryErr) => {
+    console.warn(
+      '[BOOT] Telemetry send failed after unhandledRejection:',
+      telemetryErr instanceof Error ? telemetryErr.message : String(telemetryErr),
+    )
+  })
 })
 
 process.on('uncaughtException', (err) => {
@@ -50,8 +56,12 @@ process.on('uncaughtException', (err) => {
     event: 'UNCAUGHT_EXCEPTION',
     message: `uncaughtException: ${err.message}`,
     stack: err.stack,
+  }).catch((telemetryErr) => {
+    console.warn(
+      '[BOOT] Telemetry send failed after uncaughtException:',
+      telemetryErr instanceof Error ? telemetryErr.message : String(telemetryErr),
+    )
   })
-  process.exit(1)
 })
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -101,6 +111,7 @@ void start()
         stopVaultSweepCron()
         stopSentinelRuntimeCron()
         stopTelegramOutboundQueue()
+        stopLocalCloneServers()
         await stopTelegramControlBot()
         await closeSettlementPauseRedis()
         await app.close()

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# cache-bust: 2026-06-08-mirror-updater-dockerignore
+# cache-bust: 2026-06-08-railway-redeploy-v2
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS builder

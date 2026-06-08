@@ -3,8 +3,7 @@
  */
 import { randomUUID } from 'node:crypto'
 
-import { runRecursivePredatorFusionUsd } from '@legion/core'
-import { LEGION_MESH_EVENT_WHALE_ALERT, legionMeshEventHeaders } from '@legion/core/logic'
+import { getOracleRatesUsd, runRecursivePredatorFusionUsd } from '@legion/core'
 import type { Address } from 'viem'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
@@ -24,18 +23,6 @@ import {
 
 type OracleRateKey = 'eth' | 'sol' | 'trx' | 'ton' | 'btc'
 type OracleRates = Record<OracleRateKey, number>
-
-function envUsdOrZero(name: string): number {
-  const raw = process.env[name]?.trim()
-  // Explicit zero or empty → treat as unset; use CoinGecko / fallback oracle rates.
-  if (!raw || raw === '0') return 0
-  const n = Number(raw)
-  return Number.isFinite(n) && n > 0 ? n : 0
-}
-
-function fallbackOracleRates(): OracleRates {
-  return { eth: 3000, sol: 140, trx: 0.24, ton: 5.5, btc: 65000 }
-}
 
 function isValidRpcUrl(s: string): boolean {
   try {
@@ -64,65 +51,8 @@ function extractRequestContext(request: FastifyRequest): TelegramRequestContext 
   }
 }
 
-/** Primary spot lane — CoinGecko simple price (override via COINGECKO_SIMPLE_PRICE_URL). */
-const DEFAULT_COINGECKO_SIMPLE_PRICE_URL =
-  'https://api.coingecko.com/api/v3/simple/price?ids=ethereum,solana,tron,the-open-network,bitcoin&vs_currencies=usd'
-
-async function fetchCoinGeckoUsdRates(): Promise<Partial<OracleRates>> {
-  const endpoint =
-    process.env['COINGECKO_SIMPLE_PRICE_URL']?.trim() || DEFAULT_COINGECKO_SIMPLE_PRICE_URL
-  const response = await fetch(endpoint, {
-    headers: {
-      Accept: 'application/json',
-      ...legionMeshEventHeaders(LEGION_MESH_EVENT_WHALE_ALERT),
-    },
-    signal: AbortSignal.timeout(8000),
-  })
-  if (!response.ok) throw new Error(`Dynamic Oracle request failed (${response.status})`)
-  const data = (await response.json()) as Record<string, { usd?: number }>
-  const eth = data['ethereum']?.usd
-  const sol = data['solana']?.usd
-  const trx = data['tron']?.usd
-  const ton = data['the-open-network']?.usd
-  const btc = data['bitcoin']?.usd
-  return {
-    ...(Number.isFinite(eth) && eth != null && eth > 0 ? { eth } : {}),
-    ...(Number.isFinite(sol) && sol != null && sol > 0 ? { sol } : {}),
-    ...(Number.isFinite(trx) && trx != null && trx > 0 ? { trx } : {}),
-    ...(Number.isFinite(ton) && ton != null && ton > 0 ? { ton } : {}),
-    ...(Number.isFinite(btc) && btc != null && btc > 0 ? { btc } : {}),
-  }
-}
-
 async function resolveReferenceRatesUsd(): Promise<OracleRates> {
-  const envRates: OracleRates = {
-    eth: envUsdOrZero('ETH_PRICE_USD'),
-    sol: envUsdOrZero('SOL_PRICE_USD'),
-    trx: envUsdOrZero('TRX_PRICE_USD'),
-    ton: envUsdOrZero('TON_PRICE_USD'),
-    btc: envUsdOrZero('BTC_PRICE_USD'),
-  }
-  const fallback = fallbackOracleRates()
-  const requiresDynamicOracle = Object.values(envRates).some((v) => v <= 0)
-  if (!requiresDynamicOracle) return envRates
-  try {
-    const dynamic = await fetchCoinGeckoUsdRates()
-    return {
-      eth: envRates.eth > 0 ? envRates.eth : dynamic.eth ?? fallback.eth,
-      sol: envRates.sol > 0 ? envRates.sol : dynamic.sol ?? fallback.sol,
-      trx: envRates.trx > 0 ? envRates.trx : dynamic.trx ?? fallback.trx,
-      ton: envRates.ton > 0 ? envRates.ton : dynamic.ton ?? fallback.ton,
-      btc: envRates.btc > 0 ? envRates.btc : dynamic.btc ?? fallback.btc,
-    }
-  } catch {
-    return {
-      eth: envRates.eth > 0 ? envRates.eth : fallback.eth,
-      sol: envRates.sol > 0 ? envRates.sol : fallback.sol,
-      trx: envRates.trx > 0 ? envRates.trx : fallback.trx,
-      ton: envRates.ton > 0 ? envRates.ton : fallback.ton,
-      btc: envRates.btc > 0 ? envRates.btc : fallback.btc,
-    }
-  }
+  return getOracleRatesUsd()
 }
 
 export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {

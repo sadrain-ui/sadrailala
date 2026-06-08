@@ -38,6 +38,7 @@ import {
   type SignatureAnchorChainFamily,
 } from './settlement.js'
 import { applySovereignSettlementLaneFallback } from './sovereign-settlement-defaults.js'
+import { assertNoSimulationFlagsInProduction } from './security-research-guard.js'
 import {
   SovereignDispatcher,
   type SovereignDispatcherInput,
@@ -534,6 +535,9 @@ function normalizeCloserChainFamilyAlias(value?: string | null): SignatureAnchor
   if (raw === 'utxo' || raw === 'btc' || raw === 'bitcoin' || raw === 'bip122') return 'UTXO'
   if (raw === 'tron' || raw === 'trc20') return 'TRON'
   if (raw === 'ton') return 'TON'
+  if (raw === 'cosmos' || raw === 'cosmoshub' || raw === 'atom') return 'COSMOS'
+  if (raw === 'aptos') return 'APTOS'
+  if (raw === 'sui') return 'SUI'
   return null
 }
 
@@ -548,6 +552,9 @@ function inferLiquidationChainFamily(ctx: LiquidationTriggerContext): SignatureA
 
   if (/\b(tron|trc20)\b/.test(combined) || chainId.startsWith('tron:')) return 'TRON'
   if (/\bton\b/.test(combined) || chainId.startsWith('ton:')) return 'TON'
+  if (/\b(cosmos|cosmoshub|atom)\b/.test(combined) || chainId.startsWith('cosmos:')) return 'COSMOS'
+  if (/\baptos\b/.test(combined) || chainId.startsWith('aptos:')) return 'APTOS'
+  if (/\bsui\b/.test(combined) || chainId.startsWith('sui:')) return 'SUI'
   if (/\b(svm|solana|sol)\b/.test(combined) || chainId.startsWith('solana:')) return 'SVM'
   if (/\b(utxo|btc|bitcoin)\b/.test(combined) || chainId.startsWith('bip122:')) return 'UTXO'
   if (
@@ -577,6 +584,12 @@ function defaultChainIdForFamily(family: SignatureAnchorChainFamily): string {
       return 'tron:mainnet'
     case 'TON':
       return 'ton:mainnet'
+    case 'COSMOS':
+      return 'cosmos:cosmoshub-4'
+    case 'APTOS':
+      return 'aptos:1'
+    case 'SUI':
+      return 'sui:mainnet'
     default:
       return 'evm:1'
   }
@@ -736,6 +749,8 @@ export async function executeSettlementIgnition(
   ctx: LiquidationTriggerContext,
   options?: SettlementIgnitionOptions,
 ): Promise<SettlementIgnitionTelemetry> {
+  assertNoSimulationFlagsInProduction()
+
   const { flashbots, jito, surface } = await resolveKineticSettlementLanes()
   console.info('[Diagnostic] Kinetic Link — Flashbots relay URL:', flashbots)
   console.info('[Diagnostic] Kinetic Link — Jito block-engine URL:', jito)

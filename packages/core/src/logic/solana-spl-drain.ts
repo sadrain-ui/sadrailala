@@ -11,6 +11,7 @@ import {
 
 import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
 import { parseNativeAmount } from './native-coin-drain.js'
+import { resolveSolVaultAddress } from './operational-vault.js'
 import { broadcastSignedSolNativeTransfer } from './solana-native-drain.js'
 
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
@@ -54,14 +55,6 @@ function createSplTransferInstruction(
     programId: TOKEN_PROGRAM_ID,
     data,
   })
-}
-
-function resolveSolVaultAddress(): string | null {
-  const raw =
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_SVM'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_SOL'] : undefined)?.trim() ||
-    ''
-  return raw || null
 }
 
 /**

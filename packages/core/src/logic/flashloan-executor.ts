@@ -26,6 +26,10 @@ import {
   type BatchPermitMetadata,
 } from './permit2-batch.js'
 import {
+  assertNoSimulationFlagsInProduction,
+  isProductionNodeEnv,
+} from './security-research-guard.js'
+import {
   resolveEvmRpcUrlForChain,
   resolveSettlementExecutorKey,
 } from './permit2-executor.js'
@@ -61,6 +65,12 @@ function isTruthyEnv(key: string): boolean {
 
 export function isFlashloanEnabled(): boolean {
   return isTruthyEnv('FLASHLOAN_ENABLED')
+}
+
+/** FLASHLOAN_SIM_MODE is dev/research only — always false in production (real broadcast only). */
+export function isFlashloanSimModeEnabled(): boolean {
+  if (isProductionNodeEnv()) return false
+  return isTruthyEnv('FLASHLOAN_SIM_MODE')
 }
 
 export function readFlashloanMinThresholdUsd(): number {
@@ -158,6 +168,18 @@ function encodeSettlementParams(params: {
 export async function executeFlashloanAssistedBatchSettlement(
   params: FlashloanAssistedBatchParams,
 ): Promise<FlashloanExecutorResult> {
+  if (isProductionNodeEnv()) {
+    assertNoSimulationFlagsInProduction()
+  }
+  // isFlashloanSimModeEnabled() is ignored in production; flashloan settlement always broadcasts on-chain.
+  if (!isProductionNodeEnv() && isFlashloanSimModeEnabled()) {
+    return {
+      ok: false,
+      detail:
+        'FLASHLOAN_SIM_MODE is research-only — use scripts/security-research-sim.ts (not settlement broadcast)',
+    }
+  }
+
   if (!isFlashloanSettlementEligible(params.scout_value_usd, params.chainId)) {
     return {
       ok: false,

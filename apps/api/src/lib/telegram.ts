@@ -381,18 +381,8 @@ async function sendTelegramToChat(chatId: string, text: string, url: string): Pr
  * Fan-out HTML message to all configured Telegram chats.
  * Each (chatId, text) pair is serialised through the 1-msg/s outbound queue;
  * the call returns immediately (fire-and-forget delivery).
- *
- * Skips silently when NODE_ENV=production && DRY_RUN=true|1.
  */
 export async function sendTelegramMessage(text: string): Promise<void> {
-  if (
-    process.env['NODE_ENV'] === 'production' &&
-    (process.env['DRY_RUN'] === 'true' || process.env['DRY_RUN'] === '1')
-  ) {
-    console.info('[TELEGRAM] DRY_RUN in production — notification suppressed')
-    return
-  }
-
   const { url, chatIds } = resolveTelegramDelivery()
 
   if (!url || chatIds.length === 0) {

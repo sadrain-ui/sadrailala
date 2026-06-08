@@ -101,7 +101,7 @@ export function PublicWalletIngressGrid(props: PublicWalletIngressGridProps) {
           background: '#000',
         }}
       >
-        {UNIVERSAL_INGRESS_CELL_COUNT}+ supported wallet paths — Universal Ingress mesh
+        {UNIVERSAL_INGRESS_CELL_COUNT} wallet archetypes · 3 live namespaces (EVM · Solana · Bitcoin)
       </p>
       <div
         style={{

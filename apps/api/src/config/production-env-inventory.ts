@@ -45,6 +45,9 @@ export const API_OPERATIONAL_ENV_KEYS = [
   'SOLANA_RPC_URL',
   'NEXT_PUBLIC_SOLANA_RPC_URL',
   'KINETIC_INTERNAL_KEY',
+  'DASHBOARD_API_KEY',
+  'UPDATE_URL',
+  'UPDATE_API_KEY',
 ] as const
 
 /** Feature-specific hardening keys added in Phase 2 production hardening. */

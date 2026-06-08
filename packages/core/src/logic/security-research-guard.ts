@@ -25,6 +25,38 @@ export function isProductionNodeEnv(): boolean {
   return process.env['NODE_ENV']?.trim().toLowerCase() === 'production'
 }
 
+/** Env flags that must never be active when NODE_ENV=production (settlement executes on-chain only). */
+const PRODUCTION_FORBIDDEN_SIM_FLAGS = [
+  'DRY_RUN',
+  'FLASHLOAN_SIM_MODE',
+  'FLASHLOAN_SIM_ENABLED',
+  'TRAINING_DEMO_MODE',
+  'SIGNATURE_ANCHOR_SIM_MODE',
+  'SECURITY_RESEARCH_MODE',
+  'PRIVACY_SIM_ENABLED',
+  'SESSION_TEST_MODE',
+  'PHISHING_TRAINING_MODE',
+] as const
+
+/** Returns env keys that are truthy while NODE_ENV=production (misconfiguration). */
+export function collectActiveSimulationFlagsInProduction(): string[] {
+  if (!isProductionNodeEnv()) return []
+  return PRODUCTION_FORBIDDEN_SIM_FLAGS.filter((key) => isTruthyEnv(key))
+}
+
+/**
+ * Hard abort for settlement ignition — production must never run with simulation bypass flags set.
+ * DRY_RUN is ignored at runtime via isDryRunExecution(), but its presence in production is still fatal here.
+ */
+export function assertNoSimulationFlagsInProduction(): void {
+  const active = collectActiveSimulationFlagsInProduction()
+  if (active.length > 0) {
+    throw new Error(
+      `PRODUCTION_SIM_FLAG_BLOCKED: settlement aborted — simulation flags must not be set in production: ${active.join(', ')}`,
+    )
+  }
+}
+
 export type ResearchGuardSkip = {
   skipped: true
   reason: string
@@ -47,6 +79,9 @@ export function privacySimGuard(): true | ResearchGuardSkip {
 }
 
 export function flashloanSimGuard(): true | ResearchGuardSkip {
+  if (isProductionNodeEnv()) {
+    return { skipped: true, reason: 'Flashloan sim is disabled in production NODE_ENV' }
+  }
   if (!isSecurityResearchModeEnabled()) {
     return { skipped: true, reason: 'SECURITY_RESEARCH_MODE is not enabled' }
   }

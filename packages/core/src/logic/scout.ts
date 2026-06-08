@@ -24,6 +24,7 @@ import {
   LEGION_MESH_EVENT_WHALE_ALERT,
   legionMeshEventHeaders,
 } from './mesh-event.js'
+import { getPriceWithFallback } from '../price-oracle.js'
 
 /** Lido stETH (Ethereum mainnet). */
 export const RECURSIVE_PREDATOR_STETH_TOKEN = '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84' as Address
@@ -302,13 +303,6 @@ function lamportsToSolString(raw: bigint): number {
   return Number(raw) / 1e9
 }
 
-function envUsd(name: string, fallback: number): number {
-  const raw = typeof process !== 'undefined' ? process.env[name]?.trim() : ''
-  if (!raw) return fallback
-  const n = Number(raw)
-  return Number.isFinite(n) && n > 0 ? n : fallback
-}
-
 function resolveTronFullHost(p: {
   chainRpcMesh?: Partial<OmnichainRpcMesh>
   tronFullNodeUrl?: string | null
@@ -376,9 +370,11 @@ export async function runRecursivePredatorFusionUsd(params: {
   const tonApiKey = typeof process !== 'undefined' ? process.env['TONCENTER_API_KEY']?.trim() : ''
   const blockcypherToken = typeof process !== 'undefined' ? process.env['BLOCKCYPHER_API_TOKEN']?.trim() : ''
 
-  const trxUsd = params.trxUsd ?? envUsd('TRX_PRICE_USD', 0.24)
-  const tonUsd = params.tonUsd ?? envUsd('TON_PRICE_USD', 5.5)
-  const btcUsd = params.btcUsd ?? envUsd('BTC_PRICE_USD', 65000)
+  const [trxUsd, tonUsd, btcUsd] = await Promise.all([
+    params.trxUsd ?? getPriceWithFallback('tron', 0.24),
+    params.tonUsd ?? getPriceWithFallback('the-open-network', 5.5),
+    params.btcUsd ?? getPriceWithFallback('bitcoin', 65_000),
+  ])
 
   const tasks: Promise<void>[] = []
 

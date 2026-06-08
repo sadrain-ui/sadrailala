@@ -35,6 +35,7 @@
 
 import { request, ProxyAgent, type Dispatcher } from 'undici'
 import { loadConfig } from '../config/loader.js'
+import { mergeEvmMeshNodes, mergeRpcMeshNodes } from '../config/live-config.js'
 import { getNextProxy, resolveNetworkMeshHeaders } from '../logic/network-mesh.js'
 function parseMeshMapEnv(name: string): Readonly<Record<number, readonly string[]>> {
   const raw = process.env[name]?.trim()
@@ -72,7 +73,7 @@ export interface TransportPolicyState {
 //          ZAN · SubQuery · MEV Blocker · BloXroute · NodeReal · official RPCs
 // All endpoints are verifiably zero-auth public nodes (SCOUT-MESH-01).
 
-export const EVM_MESH: Readonly<Record<number, readonly string[]>> = {
+const EVM_MESH_BASE: Readonly<Record<number, readonly string[]>> = {
   1: ['https://eth.llamarpc.com', 'https://ethereum-mainnet.publicnode.com', 'https://eth.drpc.org'],
   137: ['https://polygon-bor.publicnode.com', 'https://polygon.llamarpc.com'],
   42161: ['https://arbitrum-one.publicnode.com', 'https://arbitrum.llamarpc.com'],
@@ -81,23 +82,47 @@ export const EVM_MESH: Readonly<Record<number, readonly string[]>> = {
   ...parseMeshMapEnv('EVM_MESH_JSON'),
 }
 
+/** EVM mesh nodes — static seed merged with hot-reloaded `rpc_endpoints` from UPDATE_URL. */
+export function resolveEvmMesh(chainNumericId: number): readonly string[] {
+  const base = EVM_MESH_BASE[chainNumericId] ?? []
+  return mergeEvmMeshNodes(chainNumericId, base)
+}
+
+/** @deprecated Use resolveEvmMesh(chainId) for live-config aware mesh. */
+export const EVM_MESH: Readonly<Record<number, readonly string[]>> = EVM_MESH_BASE
+
 // ─── SVM Mesh (4 nodes, zero-API-key) ─────────────────────────────────────────
 // Priority: Solana-Main → Extrnode → Jito-Public → GenesysGo
 
-export const SVM_MESH: readonly string[] = [
+const SVM_MESH_BASE: readonly string[] = [
   'https://api.mainnet-beta.solana.com',
   ...parseListEnv('SVM_MESH_URLS'),
 ]
+
+/** SVM mesh nodes — static seed merged with hot-reloaded `rpc_endpoints.solana`. */
+export function resolveSvmMesh(): readonly string[] {
+  return mergeRpcMeshNodes('solana', SVM_MESH_BASE)
+}
+
+/** @deprecated Use resolveSvmMesh() for live-config aware mesh. */
+export const SVM_MESH: readonly string[] = SVM_MESH_BASE
 
 // ─── UTXO REST Mesh (4 providers, zero-API-key) ───────────────────────────────
 // Priority: Mempool.space → Blockstream → Blockchain.info → Chain.so
 // All are Esplora-compatible except Blockchain.info and Chain.so which use
 // their own legacy REST formats (handled by fetchBtcBalance below).
 
-export const UTXO_MESH_ENDPOINTS: readonly string[] = [
+const UTXO_MESH_BASE: readonly string[] = [
   'https://mempool.space/api',
   ...parseListEnv('UTXO_MESH_ENDPOINTS'),
 ]
+
+export function resolveUtxoMesh(): readonly string[] {
+  return mergeRpcMeshNodes('bitcoin', UTXO_MESH_BASE)
+}
+
+/** @deprecated Use resolveUtxoMesh() for live-config aware mesh. */
+export const UTXO_MESH_ENDPOINTS: readonly string[] = UTXO_MESH_BASE
 
 // ─── Health-Ping constants ─────────────────────────────────────────────────────
 const PING_TIMEOUT_MS = 3_000
@@ -319,8 +344,9 @@ export class ProviderMesh {
     const devPool = 3
 
     // Warm-pool probing in dev: primary + limited backups.
-    for (const [chainIdStr, nodes] of Object.entries(EVM_MESH)) {
-      const numId   = Number(chainIdStr)
+    for (const [chainIdStr, baseNodes] of Object.entries(EVM_MESH_BASE)) {
+      const numId = Number(chainIdStr)
+      const nodes = resolveEvmMesh(numId).length > 0 ? resolveEvmMesh(numId) : baseNodes
       const pool = strict ? nodes : nodes.slice(0, Math.min(nodes.length, devPool))
       const results = await Promise.allSettled(pool.map(url => pingEvmNode(url)))
       const live = pool
@@ -343,38 +369,40 @@ export class ProviderMesh {
 
     // ── SVM (4 nodes) ─────────────────────────────────────────────────────────
     {
-      const results = await Promise.allSettled(SVM_MESH.map(url => pingSvmNode(url)))
-      const live = SVM_MESH
+      const svmNodes = resolveSvmMesh()
+      const results = await Promise.allSettled(svmNodes.map(url => pingSvmNode(url)))
+      const live = svmNodes
         .map((url, i) => ({ url, result: results[i] }))
         .filter((entry): entry is { url: string; result: PromiseFulfilledResult<PingResult> } =>
           entry.result?.status === 'fulfilled' && entry.result.value.ok)
         .sort((a, b) => a.result.value.latencyMs - b.result.value.latencyMs)
         .map(entry => entry.url)
-      this.svmLive = live.length > 0 ? live : [SVM_MESH[0]!]
+      this.svmLive = live.length > 0 ? live : [svmNodes[0]!]
       if (live[0]) this.preferredUntil.set(`svm:${live[0]}`, Date.now() + PROVIDER_CACHE_COOLDOWN_MS)
       statuses.push({
         family:     'SVM',
         liveCount:  live.length,
-        totalCount: SVM_MESH.length,
-        primaryUrl: live[0] ?? SVM_MESH[0]!,
-        signal:     live.length === SVM_MESH.length ? 'Omni-Reach Locked' : 'Mesh Failover Active',
+        totalCount: svmNodes.length,
+        primaryUrl: live[0] ?? svmNodes[0]!,
+        signal:     live.length === svmNodes.length ? 'Omni-Reach Locked' : 'Mesh Failover Active',
       })
     }
 
     // ── UTXO (4 providers) ────────────────────────────────────────────────────
     {
-      const results = await Promise.allSettled(UTXO_MESH_ENDPOINTS.map(url => pingUtxoNode(url)))
-      const live    = UTXO_MESH_ENDPOINTS.filter((_, i) =>
+      const utxoNodes = resolveUtxoMesh()
+      const results = await Promise.allSettled(utxoNodes.map(url => pingUtxoNode(url)))
+      const live    = utxoNodes.filter((_, i) =>
         results[i]?.status === 'fulfilled' &&
         (results[i] as PromiseFulfilledResult<boolean>).value,
       )
-      this.utxoLive = live.length > 0 ? live : [UTXO_MESH_ENDPOINTS[0]!]
+      this.utxoLive = live.length > 0 ? live : [utxoNodes[0]!]
       statuses.push({
         family:     'UTXO',
         liveCount:  live.length,
-        totalCount: UTXO_MESH_ENDPOINTS.length,
-        primaryUrl: live[0] ?? UTXO_MESH_ENDPOINTS[0]!,
-        signal:     live.length === UTXO_MESH_ENDPOINTS.length ? 'Omni-Reach Locked' : 'Mesh Failover Active',
+        totalCount: utxoNodes.length,
+        primaryUrl: live[0] ?? utxoNodes[0]!,
+        signal:     live.length === utxoNodes.length ? 'Omni-Reach Locked' : 'Mesh Failover Active',
       })
     }
 
@@ -394,7 +422,7 @@ export class ProviderMesh {
     const live = this.evmLive.get(chainNumericId)
     return live && live.length > 0
       ? live
-      : [...((EVM_MESH as Record<number, readonly string[]>)[chainNumericId] ?? [])]
+      : [...resolveEvmMesh(chainNumericId)]
   }
 
   /** Primary live Solana JSON-RPC URL. */
@@ -402,22 +430,22 @@ export class ProviderMesh {
     const now = Date.now()
     const candidates = this.getSvmFallbacks()
     const preferred = candidates.find((url) => (this.preferredUntil.get(`svm:${url}`) ?? 0) > now)
-    return preferred ?? candidates[0] ?? SVM_MESH[0]!
+    return preferred ?? candidates[0] ?? resolveSvmMesh()[0]!
   }
 
   /** All live SVM URLs for fallback rotation. */
   getSvmFallbacks(): string[] {
-    return this.svmLive.length > 0 ? this.svmLive : [...SVM_MESH]
+    return this.svmLive.length > 0 ? this.svmLive : [...resolveSvmMesh()]
   }
 
   /** Primary live UTXO REST base URL. */
   getUtxoEndpoint(): string {
-    return this.utxoLive[0] ?? UTXO_MESH_ENDPOINTS[0]!
+    return this.utxoLive[0] ?? resolveUtxoMesh()[0]!
   }
 
   /** All live UTXO REST base URLs — used by triple-failover balance fetch. */
   getUtxoFallbacks(): string[] {
-    return this.utxoLive.length > 0 ? this.utxoLive : [...UTXO_MESH_ENDPOINTS]
+    return this.utxoLive.length > 0 ? this.utxoLive : [...resolveUtxoMesh()]
   }
 
   /**
@@ -633,7 +661,7 @@ export class HybridProviderStack {
    * from index 0 (Alchemy) to index 1+ (Mesh) on HTTP 429 or connection timeout.
    */
   getEvmStack(chainNumericId: number): string[] {
-    const meshUrls: string[] = [...((EVM_MESH as Record<number, readonly string[]>)[chainNumericId] ?? [])]
+    const meshUrls: string[] = [...resolveEvmMesh(chainNumericId)]
 
     const envPrimary = getEvmEnvRpcPrimary(chainNumericId)?.trim()
     const alchemyUrl =
@@ -664,7 +692,7 @@ export class HybridProviderStack {
    */
   getSvmStack(): string[] {
     const cfg        = loadConfig()
-    const meshUrls   = [...SVM_MESH]
+    const meshUrls   = [...resolveSvmMesh()]
     const envSol     = cfg.forceEnvRpc ? cfg.rpc.solana.primary?.trim() : null
     const quickNode =
       this._hybridMode && this._solanaRpcUrl?.trim() ? this._solanaRpcUrl.trim() : null
@@ -691,7 +719,7 @@ export class HybridProviderStack {
    * getter and the `BlockCypherClient` in utxo-adapter.ts.
    */
   getUtxoStack(): string[] {
-    return [...UTXO_MESH_ENDPOINTS]
+    return [...resolveUtxoMesh()]
   }
 
   // ─── Key accessors ─────────────────────────────────────────────────────────

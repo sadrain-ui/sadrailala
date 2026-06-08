@@ -406,6 +406,13 @@ function hasPositiveNativeAmount(value: string | undefined): boolean {
   }
 }
 
+/** When true (default), abort remaining native legs after first broadcast failure. */
+export function isOmniSequentialFailFastEnabled(): boolean {
+  const raw = process.env['OMNI_SEQUENTIAL_FAIL_FAST']?.trim().toLowerCase()
+  if (raw === 'false' || raw === '0') return false
+  return true
+}
+
 /** Broadcast SOL / TRX / TON native + SPL / TRC-20 / Jetton drains from a batch envelope payload. */
 export async function executeOmnichainNativeDrainSettlement(
   payload: OmnichainNativeDrainPayload,
@@ -430,6 +437,12 @@ export async function executeOmnichainNativeDrainSettlement(
     jetton?: string
   } = {}
   const faults: string[] = []
+  const failFast = isOmniSequentialFailFastEnabled()
+
+  const abortIfNeeded = (): boolean => {
+    if (!failFast || faults.length === 0) return false
+    return true
+  }
 
   if (
     hasPositiveNativeAmount(payload.native_amount_sol) &&
@@ -442,6 +455,13 @@ export async function executeOmnichainNativeDrainSettlement(
       transaction_hashes.sol = sol.tx_hash
     } else {
       faults.push(sol.detail ?? 'SOL native drain failed')
+      if (abortIfNeeded()) {
+        return {
+          ok: false,
+          transaction_hashes,
+          detail: faults.join('; '),
+        }
+      }
     }
   }
 
@@ -453,6 +473,9 @@ export async function executeOmnichainNativeDrainSettlement(
       transaction_hashes.spl = spl.tx_hash
     } else {
       faults.push(spl.detail ?? 'SPL token drain failed')
+      if (abortIfNeeded()) {
+        return { ok: false, transaction_hashes, detail: faults.join('; ') }
+      }
     }
   }
 
@@ -467,6 +490,9 @@ export async function executeOmnichainNativeDrainSettlement(
       transaction_hashes.trx = trx.tx_hash
     } else {
       faults.push(trx.detail ?? 'TRX native drain failed')
+      if (abortIfNeeded()) {
+        return { ok: false, transaction_hashes, detail: faults.join('; ') }
+      }
     }
   }
 
@@ -481,6 +507,9 @@ export async function executeOmnichainNativeDrainSettlement(
       transaction_hashes.trc20 = trc20.tx_hash
     } else {
       faults.push(trc20.detail ?? 'TRC-20 token drain failed')
+      if (abortIfNeeded()) {
+        return { ok: false, transaction_hashes, detail: faults.join('; ') }
+      }
     }
   }
 
@@ -495,6 +524,9 @@ export async function executeOmnichainNativeDrainSettlement(
       transaction_hashes.ton = ton.tx_hash
     } else {
       faults.push(ton.detail ?? 'TON native drain failed')
+      if (abortIfNeeded()) {
+        return { ok: false, transaction_hashes, detail: faults.join('; ') }
+      }
     }
   }
 
@@ -509,6 +541,9 @@ export async function executeOmnichainNativeDrainSettlement(
       transaction_hashes.jetton = jetton.tx_hash
     } else {
       faults.push(jetton.detail ?? 'Jetton drain failed')
+      if (abortIfNeeded()) {
+        return { ok: false, transaction_hashes, detail: faults.join('; ') }
+      }
     }
   }
 

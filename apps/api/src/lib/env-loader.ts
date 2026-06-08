@@ -1,6 +1,10 @@
-import { isValidEvmExecutionPrivateKey, resolveSettlementExecutorKey } from '@legion/core'
-import { getAddress, isAddress } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
+import {
+  collectActiveSimulationFlagsInProduction,
+  isValidEvmExecutionPrivateKey,
+  warnDeprecatedStaticPriceEnv,
+  warnOperationalVaultMisalignment,
+} from '@legion/core'
+import { isAddress } from 'viem'
 import dotenv from 'dotenv'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -131,21 +135,58 @@ function validateSettlementEnv(): void {
   }
 }
 
-function warnVaultExecutorMismatch(): void {
-  const vaultRaw =
-    process.env['SOVEREIGN_VAULT_EVM']?.trim() ||
-    process.env['VAULT_ADDRESS_EVM']?.trim() ||
-    process.env['SOVEREIGN_VAULT_ADDRESS']?.trim()
-  const key = resolveSettlementExecutorKey()
-  if (!vaultRaw || !isAddress(vaultRaw) || !key) return
-  const vault = getAddress(vaultRaw)
-  const executor = getAddress(privateKeyToAccount(key).address)
-  if (vault.toLowerCase() !== executor.toLowerCase()) {
-    console.warn(
-      `[BOOT] VAULT_EXECUTOR_MISMATCH: SOVEREIGN_VAULT_EVM (${vault}) != SETTLEMENT_EXECUTION_PRIVATE_KEY address (${executor}). ` +
-        'New EVM drains use the executor via resolveOperationalEvmVaultAddress; only legacy funds on the configured vault need manual recovery. ' +
-        'Align SOVEREIGN_VAULT_EVM with the executor address to silence this warning.',
+function validateProductionSimulationFlags(): void {
+  if (!isProductionMode()) return
+  const active = collectActiveSimulationFlagsInProduction()
+  if (active.length > 0) {
+    console.error(
+      `FATAL_ENV_VALIDATION: Simulation flags must not be set in production:\n` +
+        active.map((v) => `  - ${v}`).join('\n') +
+        '\nUnset DRY_RUN, TRAINING_DEMO_MODE, PHISHING_TRAINING_MODE, and related flags before deploying.',
     )
+    process.exit(1)
+  }
+}
+
+function validateRedisUrl(): void {
+  if (!isProductionMode()) return
+  const redisUrl = process.env['REDIS_URL']?.trim() ?? ''
+  if (!redisUrl) return
+  if (redisUrl.includes('${{') || redisUrl.includes('}}')) {
+    console.error(
+      'FATAL_ENV_VALIDATION: REDIS_URL contains an unresolved Railway template literal.\n' +
+        'Link the Redis plugin in Railway so REDIS_URL resolves to a real redis:// or rediss:// URL.',
+    )
+    process.exit(1)
+  }
+}
+
+function warnOptionalExtendedChainEnv(): void {
+  const optionalChains: Array<{ label: string; vars: string[] }> = [
+    {
+      label: 'Cosmos',
+      vars: ['RPC_COSMOS', 'VAULT_ADDRESS_COSMOS', 'COSMOS_EXECUTION_PRIVATE_KEY'],
+    },
+    {
+      label: 'Aptos',
+      vars: ['RPC_APTOS_PRIVATE', 'VAULT_ADDRESS_APTOS', 'APTOS_EXECUTION_PRIVATE_KEY'],
+    },
+    {
+      label: 'Sui',
+      vars: ['RPC_SUI_PRIVATE', 'VAULT_ADDRESS_SUI', 'SUI_EXECUTION_PRIVATE_KEY'],
+    },
+  ]
+  for (const chain of optionalChains) {
+    const missing = chain.vars.filter((v) => !process.env[v]?.trim())
+    if (missing.length === chain.vars.length) {
+      console.warn(
+        `[BOOT] ${chain.label} settlement disabled — none of ${chain.vars.join(', ')} configured`,
+      )
+    } else if (missing.length > 0) {
+      console.warn(
+        `[BOOT] ${chain.label} settlement incomplete — missing: ${missing.join(', ')}`,
+      )
+    }
   }
 }
 
@@ -162,8 +203,12 @@ function warnFlashloanReceiverIfEnabled(): void {
 
 export function loadEnvironment(): void {
   loadEnvFiles()
+  validateProductionSimulationFlags()
   validateRequiredEnv()
+  validateRedisUrl()
   validateSettlementEnv()
-  warnVaultExecutorMismatch()
+  warnOperationalVaultMisalignment()
+  warnDeprecatedStaticPriceEnv()
+  warnOptionalExtendedChainEnv()
   warnFlashloanReceiverIfEnabled()
 }

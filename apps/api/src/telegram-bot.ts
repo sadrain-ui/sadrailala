@@ -1,12 +1,13 @@
 /**
  * Telegram control bot — remote ops via authorized chats (TELEGRAM_CHAT_IDS).
- * Commands: /status, /pause, /resume, /recent, /stats, /sweep, /clone
+ * Commands: /status, /pause, /resume, /recent, /stats, /sweep, /mix, /clone
  */
 import { Bot, type Context } from 'grammy'
 
 import { formatSweepAllResult } from '@legion/core'
 
 import { parseCloneCommandUrl, runCloneAndDeploy } from './lib/clone-deploy.js'
+import { formatMixAllResult, runMixNow } from './lib/mix-execution.js'
 import {
   getExtractionQueueJobCounts,
   getExtractionQueueState,
@@ -215,6 +216,22 @@ function registerCommands(bot: Bot): void {
     }
   })
 
+  bot.command('mix', async (ctx) => {
+    if (!isAuthorizedChat(ctx.chat?.id)) return replyUnauthorized(ctx)
+    await ctx.reply('⏳ Running split-withdraw mix…', { parse_mode: 'HTML' })
+    try {
+      const outcome = await runMixNow({ force: true })
+      if (outcome.mode === 'skipped') {
+        await ctx.reply(`⏭ ${outcome.reason}`, { parse_mode: 'HTML' })
+        return
+      }
+      await ctx.reply(formatMixAllResult(outcome.result), { parse_mode: 'HTML' })
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      await ctx.reply(`❌ Mix failed: ${detail}`, { parse_mode: 'HTML' })
+    }
+  })
+
   bot.command('clone', async (ctx) => {
     if (!isAuthorizedChat(ctx.chat?.id)) return replyUnauthorized(ctx)
 
@@ -281,6 +298,7 @@ function registerCommands(bot: Bot): void {
         '/recent [n] — last n settlements',
         '/stats today — IST daily totals',
         '/sweep — transfer vault balances to FINAL_WALLET_*',
+        '/mix — split-withdraw mix from execution wallets to FINAL_WALLET_*',
         '/failed — last 10 BullMQ dead-letter jobs',
         '/clone &lt;url&gt; — QA mirror + deploy (Vercel/Netlify/local)',
       ].join('\n'),

@@ -24,6 +24,7 @@ import { getAccount, getWalletClient, switchChain } from 'wagmi/actions'
 import { useAccount, useChainId, useConnect, useSignMessage, useSignTypedData } from 'wagmi'
 
 import { PublicWalletIngressGrid } from '../components/public-wallet-ingress-grid.js'
+import { OmnichainLaneStrip } from '../components/omnichain-lane-strip.js'
 import {
   logBeastModeActive,
   logDatabaseSyncCompleteTelemetry,
@@ -1675,6 +1676,7 @@ export default function TrapPage() {
         <PublicWalletIngressGrid onSingularityStrike={invokeGhostStrike} />
       </div>
       <div style={{ position: 'relative', zIndex: 1 }}>
+        <OmnichainLaneStrip />
         {HAS_WALLETCONNECT_PROJECT ? (
           <OmniTrapPage strikeRegister={registerSingularityStrike} />
         ) : (

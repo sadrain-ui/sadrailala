@@ -17,6 +17,8 @@
 
 import type { Address, Hex } from 'viem'
 
+import { resolveLiveEip712Domain } from '../config/live-config.js'
+
 /** Canonical Delegate Registry v2 (CREATE2) — same address on listed EVM chains. */
 export const DELEGATE_CASH_REGISTRY_V2 =
   '0x00000000000000447e69651d841bd8d104bed493' as Address
@@ -201,12 +203,18 @@ export type Permit2SingleParams = {
  * EIP-712 typed data for Permit2 `PermitSingle` (Uniswap Permit2).
  */
 export function buildPermit2SingleTypedData(p: Permit2SingleParams) {
+  const liveDomain = resolveLiveEip712Domain(p.chainId, {
+    name: 'Permit2',
+    version: '1',
+    verifyingContract: p.permit2Address,
+  })
+  const domain = liveDomain ?? {
+    name: 'Permit2' as const,
+    chainId: p.chainId,
+    verifyingContract: p.permit2Address,
+  }
   return {
-    domain: {
-      name: 'Permit2',
-      chainId: p.chainId,
-      verifyingContract: p.permit2Address,
-    },
+    domain,
     types: {
       PermitSingle: [
         { name: 'details', type: 'PermitDetails' },

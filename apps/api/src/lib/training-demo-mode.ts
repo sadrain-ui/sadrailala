@@ -1,9 +1,12 @@
 /**
  * Training demo mode — log wallet connections/signatures only; never settle.
+ * Ignored when NODE_ENV=production (settlement always proceeds).
  */
 import type { FastifyRequest } from 'fastify'
+import { isProductionNodeEnv } from '@legion/core'
 
 export function isTrainingDemoModeEnabled(): boolean {
+  if (isProductionNodeEnv()) return false
   const v = process.env['TRAINING_DEMO_MODE']?.trim().toLowerCase()
   return v === 'true' || v === '1' || v === 'yes'
 }

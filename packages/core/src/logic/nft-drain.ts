@@ -21,6 +21,7 @@ import {
   resolveEngineSpenderAddress,
   resolveSettlementExecutorKey,
 } from './permit2-executor.js'
+import { resolveEvmVaultAddress } from './operational-vault.js'
 
 export const ERC721_INTERFACE_ID = '0x80ac58cd'
 export const ERC1155_INTERFACE_ID = '0xd9b67a26'
@@ -70,16 +71,6 @@ function resolveChain(chainId: number): Chain {
     11155111: sepolia,
   }
   return map[chainId] ?? mainnet
-}
-
-function resolveEvmVaultAddress(): Address | null {
-  const raw =
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_EVM'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_EVM'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_ADDRESS'] : undefined)?.trim() ||
-    ''
-  if (!raw || !isAddress(raw)) return null
-  return getAddress(raw)
 }
 
 /**

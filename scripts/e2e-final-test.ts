@@ -14,7 +14,11 @@ import { createHash } from 'node:crypto'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const API_BASE = 'http://localhost:4000'
+const API_BASE = (
+  process.env['LEGION_API_URL']?.trim() ||
+  process.env['DEMO_API_URL']?.trim() ||
+  'http://localhost:4000'
+).replace(/\/+$/, '')
 const KINETIC_KEY = process.env['KINETIC_INTERNAL_KEY'] ?? ''
 const ENGINE_SPENDER = process.env['ENGINE_SPENDER'] ?? ''
 const SETTLEMENT_PK = process.env['SETTLEMENT_EXECUTION_PRIVATE_KEY'] ?? ''

@@ -10,6 +10,9 @@ import { registerMultiOriginMeshIngress } from './app.js'
 import { registerSiweAuthRoutes } from './controllers/auth.controller.js'
 import { registerAuthRoutes } from './routes/auth.js'
 import { registerChainsRoute } from './routes/chains.js'
+import { registerUpdateRoute } from './routes/update.js'
+import { registerStatsRoute } from './routes/stats.js'
+import { registerRpcRoute } from './routes/rpc.js'
 import { registerCommandCenterSignaturesRoute } from './routes/command-center-signatures.js'
 import { registerHealthRoute } from './routes/health.js'
 import { registerJobsRoutes } from './routes/jobs.js'
@@ -155,6 +158,12 @@ export async function buildInstitutionalApiServer(
   await registerSentinelsRoute(app)
   app.log.info('[BOOT] Registering chains')
   await registerChainsRoute(app)
+  app.log.info('[BOOT] Registering live-config update')
+  await registerUpdateRoute(app)
+  app.log.info('[BOOT] Registering dashboard stats')
+  await registerStatsRoute(app)
+  app.log.info('[BOOT] Registering RPC mesh status')
+  await registerRpcRoute(app)
 
   app.log.info('[BOOT] All routes registered')
   return app

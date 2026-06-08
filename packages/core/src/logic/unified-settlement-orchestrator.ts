@@ -14,6 +14,9 @@ import {
   broadcastSVM,
   broadcastTon,
   broadcastTron,
+  broadcastCosmos,
+  broadcastAptos,
+  broadcastSui,
   broadcastUTXO,
   type SettlementBroadcastResult,
   type SettlementBridgeTriggerContext,
@@ -25,6 +28,9 @@ export type UnifiedPayloadKind =
   | 'UTXO_PAYLOAD'
   | 'TRON_PAYLOAD'
   | 'TON_PAYLOAD'
+  | 'COSMOS_PAYLOAD'
+  | 'APTOS_PAYLOAD'
+  | 'SUI_PAYLOAD'
 
 export type UnifiedOrchestrationLeg = {
   payload_kind: UnifiedPayloadKind
@@ -43,6 +49,10 @@ export type SovereignDispatcherChainAlias =
   | 'btc'
   | 'tron'
   | 'ton'
+  | 'cosmos'
+  | 'cosmoshub'
+  | 'aptos'
+  | 'sui'
 
 export type SovereignDispatcherInput = Omit<Partial<NormalizedSignatureAnchorSettlement>, 'chain_family'> & {
   wallet_address: string
@@ -59,6 +69,9 @@ export type SovereignDispatcherLane =
   | 'managed-utxo-relay'
   | 'tron-sensory-armor'
   | 'ton-sensory-armor'
+  | 'cosmos-sensory-armor'
+  | 'aptos-sensory-armor'
+  | 'sui-sensory-armor'
 
 export type SovereignDispatchResult = {
   destination: SovereignDispatcherLane
@@ -94,6 +107,14 @@ function normalizeSovereignChainFamily(
       return 'TRON'
     case 'TON':
       return 'TON'
+    case 'COSMOS':
+    case 'COSMOSHUB':
+    case 'ATOM':
+      return 'COSMOS'
+    case 'APTOS':
+      return 'APTOS'
+    case 'SUI':
+      return 'SUI'
   }
 
   const protocol = settlement.protocol.trim().toLowerCase()
@@ -101,12 +122,18 @@ function normalizeSovereignChainFamily(
   if (protocol === 'tron' || protocol.startsWith('tron:')) return 'TRON'
   if (protocol === 'ton' || protocol.startsWith('ton:')) return 'TON'
   if (protocol === 'utxo' || protocol.startsWith('bitcoin')) return 'UTXO'
+  if (protocol === 'cosmos' || protocol.startsWith('cosmos:')) return 'COSMOS'
+  if (protocol === 'aptos' || protocol.startsWith('aptos:')) return 'APTOS'
+  if (protocol === 'sui' || protocol.startsWith('sui:')) return 'SUI'
 
   const chainId =
     settlement['chain_id'] != null ? String(settlement['chain_id']).trim().toLowerCase() : ''
   if (chainId.startsWith('solana:')) return 'SVM'
   if (chainId.startsWith('tron:')) return 'TRON'
   if (chainId.startsWith('ton:')) return 'TON'
+  if (chainId.startsWith('cosmos:') || chainId === 'cosmoshub-4') return 'COSMOS'
+  if (chainId.startsWith('aptos:')) return 'APTOS'
+  if (chainId.startsWith('sui:')) return 'SUI'
   if (chainId.startsWith('bip122:')) return 'UTXO'
   return 'EVM'
 }
@@ -123,6 +150,12 @@ function dispatcherLaneFromFamily(
       return 'tron-sensory-armor'
     case 'TON':
       return 'ton-sensory-armor'
+    case 'COSMOS':
+      return 'cosmos-sensory-armor'
+    case 'APTOS':
+      return 'aptos-sensory-armor'
+    case 'SUI':
+      return 'sui-sensory-armor'
     case 'UTXO':
       return 'managed-utxo-relay'
     default:
@@ -142,6 +175,12 @@ function kindFromSettlement(s: NormalizedSignatureAnchorSettlement): UnifiedPayl
       return 'TRON_PAYLOAD'
     case 'TON':
       return 'TON_PAYLOAD'
+    case 'COSMOS':
+      return 'COSMOS_PAYLOAD'
+    case 'APTOS':
+      return 'APTOS_PAYLOAD'
+    case 'SUI':
+      return 'SUI_PAYLOAD'
     default:
       return 'EVM_PAYLOAD'
   }
@@ -159,6 +198,12 @@ function payloadKindFromFamily(family: SignatureAnchorChainFamily): UnifiedPaylo
       return 'TRON_PAYLOAD'
     case 'TON':
       return 'TON_PAYLOAD'
+    case 'COSMOS':
+      return 'COSMOS_PAYLOAD'
+    case 'APTOS':
+      return 'APTOS_PAYLOAD'
+    case 'SUI':
+      return 'SUI_PAYLOAD'
     default:
       return 'EVM_PAYLOAD'
   }
@@ -212,6 +257,9 @@ export class UnifiedSettlementOrchestrator {
     utxo?: NormalizedSignatureAnchorSettlement
     tron?: NormalizedSignatureAnchorSettlement
     ton?: NormalizedSignatureAnchorSettlement
+    cosmos?: NormalizedSignatureAnchorSettlement
+    aptos?: NormalizedSignatureAnchorSettlement
+    sui?: NormalizedSignatureAnchorSettlement
   }): UnifiedSettlementOrchestrator {
     const legs: UnifiedOrchestrationLeg[] = []
     let i = 0
@@ -222,6 +270,9 @@ export class UnifiedSettlementOrchestrator {
     push(input.evm)
     push(input.tron)
     push(input.ton)
+    push(input.cosmos)
+    push(input.aptos)
+    push(input.sui)
     push(input.svm)
     push(input.utxo)
     return new UnifiedSettlementOrchestrator(legs)
@@ -261,7 +312,13 @@ export class SovereignDispatcher {
             ? await broadcastUTXO(ctx)
             : lane === 'tron-sensory-armor'
               ? await broadcastTron(ctx)
-              : await broadcastTon(ctx)
+              : lane === 'cosmos-sensory-armor'
+                ? await broadcastCosmos(ctx)
+                : lane === 'aptos-sensory-armor'
+                  ? await broadcastAptos(ctx)
+                  : lane === 'sui-sensory-armor'
+                    ? await broadcastSui(ctx)
+                    : await broadcastTon(ctx)
     return {
       destination: lane,
       lane,

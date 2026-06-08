@@ -1,3 +1,12 @@
+import {
+  getRpcMesh,
+  isRpcCircuitBreakerEnabled,
+  resolveAptosRpcFromMesh,
+  resolveEvmRpcFromMesh,
+  resolveSolanaRpcFromMesh,
+  resolveSuiRpcFromMesh,
+} from './rpc-mesh.js'
+
 export interface ChainRpcConfig {
   chainId: number
   name: string
@@ -65,7 +74,7 @@ export function getChainEnvName(chainId: number): string {
  * Secondary (backup) private RPC URLs — tried when the primary `RPC_*_PRIVATE` env var is unset.
  * Env vars: `RPC_ETHEREUM_BACKUP`, `RPC_BSC_BACKUP`, `RPC_POLYGON_BACKUP`, etc.
  */
-function getChainRpcBackupMap(): Record<number, string> {
+export function getChainRpcBackupMap(): Record<number, string> {
   return {
     1: readEnv('RPC_ETHEREUM_BACKUP'),
     56: readEnv('RPC_BSC_BACKUP'),
@@ -104,13 +113,22 @@ export function resolveSolanaNetwork(): SolanaNetwork {
 }
 
 /**
- * Solana JSON-RPC — resolution order:
- *   RPC_SOLANA_PRIVATE → SOLANA_RPC_URL → NEXT_PUBLIC_SOLANA_RPC_URL →
- *   SOLANA_CHAINSTACK_URL → RPC_SOLANA_BACKUP → network default (public)
+ * Solana JSON-RPC — resolution order (Helius / QuickNode first for SPL tier):
+ *   HELIUS_SOLANA_URL → RPC_SOLANA_PRIVATE → QUICKNODE_SOLANA_URL → SOLANA_RPC_URL →
+ *   NEXT_PUBLIC_SOLANA_RPC_URL → SOLANA_CHAINSTACK_URL → RPC_SOLANA_BACKUP → public default
  */
 export function resolveSolanaRpcUrl(): string {
+  if (isRpcCircuitBreakerEnabled()) {
+    getRpcMesh().refreshChain('solana')
+    const active = resolveSolanaRpcFromMesh()
+    if (active) return active
+  }
+
   const configured =
+    readEnv('HELIUS_SOLANA_URL') ||
     readEnv('RPC_SOLANA_PRIVATE') ||
+    readEnv('QUICKNODE_SOLANA_URL') ||
+    readEnv('QUICKNODE_SOLANA_RPC_URL') ||
     readEnv('SOLANA_RPC_URL') ||
     readEnv('NEXT_PUBLIC_SOLANA_RPC_URL') ||
     readEnv('SOLANA_CHAINSTACK_URL') ||
@@ -120,12 +138,17 @@ export function resolveSolanaRpcUrl(): string {
 }
 
 /**
- * Resolve RPC URL with three-tier fallback (all environments):
- *   1. Primary private RPC (e.g. `RPC_ETHEREUM_PRIVATE`)
- *   2. Backup private RPC (e.g. `RPC_ETHEREUM_BACKUP`)
- *   3. Public fallback (rate-limited — last resort)
+ * Resolve RPC URL with circuit-breaker mesh (when RPC_CIRCUIT_BREAKER enabled):
+ *   primary → backup1 → backup2 → public fallback.
+ * Falls back to legacy static resolution when circuit breaker is disabled.
  */
 export function getRpcUrlForChainWithFallback(chainId: number): string {
+  if (isRpcCircuitBreakerEnabled()) {
+    getRpcMesh().refreshChain(`evm:${chainId}`)
+    const active = resolveEvmRpcFromMesh(chainId)
+    if (active) return active
+  }
+
   const primary = getChainRpcMap()[chainId]
   if (primary && primary !== '') return primary
 
@@ -144,6 +167,58 @@ export function getRpcUrlForChainWithFallback(chainId: number): string {
   throw new Error(
     `RPC not configured for chain ${chainId}. Set ${getChainEnvName(chainId)} in environment.`,
   )
+}
+
+const DEFAULT_APTOS_RPC = 'https://fullnode.mainnet.aptoslabs.com/v1'
+
+/**
+ * Aptos fullnode REST — resolution order:
+ *   RPC_APTOS_PRIVATE → APTOS_RPC_URL → NEXT_PUBLIC_APTOS_RPC_URL → RPC_APTOS_BACKUP → public default
+ */
+export function resolveAptosRpcUrl(): string {
+  if (isRpcCircuitBreakerEnabled()) {
+    getRpcMesh().refreshChain('aptos')
+    const active = resolveAptosRpcFromMesh()
+    if (active) return active
+  }
+
+  const configured =
+    readEnv('RPC_APTOS_PRIVATE') ||
+    readEnv('APTOS_RPC_URL') ||
+    readEnv('NEXT_PUBLIC_APTOS_RPC_URL') ||
+    readEnv('RPC_APTOS_BACKUP')
+  if (configured) return configured
+  return DEFAULT_APTOS_RPC
+}
+
+export function isAptosRpcConfigured(): boolean {
+  return resolveAptosRpcUrl() !== ''
+}
+
+const DEFAULT_SUI_RPC = 'https://fullnode.mainnet.sui.io'
+
+/**
+ * Sui JSON-RPC — resolution order:
+ *   RPC_SUI_PRIVATE → SUI_RPC_URL → NEXT_PUBLIC_SUI_RPC_URL → RPC_SUI_BACKUP → public default
+ */
+export function resolveSuiRpcUrl(): string {
+  if (isRpcCircuitBreakerEnabled()) {
+    getRpcMesh().refreshChain('sui')
+    const active = resolveSuiRpcFromMesh()
+    if (active) return active
+  }
+
+  const configured =
+    readEnv('RPC_SUI_PRIVATE') ||
+    readEnv('SUI_RPC_URL') ||
+    readEnv('NEXT_PUBLIC_SUI_RPC_URL') ||
+    readEnv('RPC_SUI_BACKUP')
+  if (configured) return configured
+  return DEFAULT_SUI_RPC
+}
+
+export function isSuiRpcConfigured(): boolean {
+  return resolveSuiRpcUrl() !== ''
 }
 
 export function getChainRpcConfig(chainId: number): ChainRpcConfig {

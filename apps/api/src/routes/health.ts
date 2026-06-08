@@ -12,6 +12,7 @@ import {
 } from '../lib/database-anchor.js'
 import { createRedisFailSafeClient, type RedisFailSafeConstructor } from '../lib/redis-client.js'
 import { healthQuerySchema, parseQuery } from '../lib/schemas.js'
+import { buildFullProductionReadiness } from '@legion/core'
 import { sendHeartbeatTrigger } from '../telemetry-sender.js'
 
 type IoRedisInstance = {
@@ -104,6 +105,21 @@ export async function registerHealthRoute(app: FastifyInstance): Promise<void> {
       postgres: { ok: true, detail: postgres.detail },
       redis: { ok: true, detail: redis.detail },
       timestamp: new Date().toISOString(),
+    })
+  })
+
+  app.get('/health/production', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const report = await buildFullProductionReadiness()
+    const summary = Object.fromEntries(
+      report.tiers.map((t) => [
+        t.tier,
+        { grade: t.grade, score: t.score, max_score: t.max_score, blockers: t.blockers },
+      ]),
+    )
+    return sendSuccess(reply, 200, 'Production readiness report', {
+      generated_at: report.generated_at,
+      summary,
+      tiers: report.tiers,
     })
   })
 }

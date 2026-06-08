@@ -24,6 +24,7 @@
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 import * as path from 'path'
 
+import { resolveSolanaRpcUrl } from '../lib/chain-rpc.js'
 import { scheduleTridentSignalPing } from './trident-ping.js'
 
 // ─── Redact guard (GATEKEEPER-07) ─────────────────────────────────────────────
@@ -186,6 +187,7 @@ function synchronizeSovereignVaultAliasesInPlace(): void {
     ['VAULT_ADDRESS_SVM', 'VAULT_ADDRESS_SOL', 'SOVEREIGN_VAULT_SVM', 'SOVEREIGN_VAULT_SOL'],
     ['VAULT_ADDRESS_TRON', 'SOVEREIGN_VAULT_TRON'],
     ['VAULT_ADDRESS_TON', 'SOVEREIGN_VAULT_TON'],
+    ['VAULT_ADDRESS_BTC', 'VAULT_ADDRESS_UTXO', 'SOVEREIGN_VAULT_BTC', 'SOVEREIGN_VAULT_UTXO'],
   ] as const
 
   for (const group of aliasGroups) {
@@ -562,6 +564,7 @@ function _buildConfig(): LegionConfig {
   // Trident Alignment (EVM / SVM / UTXO) before Mock Mode resolution.
   const evmAlchemyKey       = process.env['EVM_ALCHEMY_KEY']       ?? null
   const solanaRpcUrl        = process.env['SOLANA_RPC_URL']?.trim() || null
+  const solanaRpcPrivate    = process.env['RPC_SOLANA_PRIVATE']?.trim() || null
   const solanaChainstackUrl = process.env['SOLANA_CHAINSTACK_URL'] ?? null
   // UTXO Provider Re-Routed: BLOCKCYPHER_API_TOKEN replaces BITCOIN_BLOCKCHAIR_KEY.
   const blockcypherApiToken = process.env['BLOCKCYPHER_API_TOKEN'] ?? null
@@ -574,7 +577,9 @@ function _buildConfig(): LegionConfig {
     isTridentEvmCredentialPresent(evmAlchemyKey) ||
     Boolean(process.env['RPC_ETHEREUM_PRIVATE']?.trim())
   const tridentSvmOk =
-    isTridentSolanaHttpsEndpoint(solanaRpcUrl) || isTridentSolanaHttpsEndpoint(solanaChainstackUrl)
+    isTridentSolanaHttpsEndpoint(solanaRpcPrivate) ||
+    isTridentSolanaHttpsEndpoint(solanaRpcUrl) ||
+    isTridentSolanaHttpsEndpoint(solanaChainstackUrl)
   const tridentUtxoOk  = isTridentUtxoTokenSynchronized(blockcypherApiToken)
   const tridentAligned = tridentEvmOk && tridentSvmOk && tridentUtxoOk
 
@@ -593,11 +598,7 @@ function _buildConfig(): LegionConfig {
   const arbPrimary = tridentEvmOk ? `https://arb-mainnet.g.alchemy.com/v2/${alchemyKey}` : null
   const basePrimary = tridentEvmOk ? `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}` : null
   const opPrimary = tridentEvmOk ? `https://opt-mainnet.g.alchemy.com/v2/${alchemyKey}` : null
-  const solPrimary = tridentSvmOk
-    ? isTridentSolanaHttpsEndpoint(solanaRpcUrl)
-      ? solanaRpcUrl!.trim()
-      : solanaChainstackUrl!.trim()
-    : null
+  const solPrimary = tridentSvmOk ? resolveSolanaRpcUrl() : null
 
   const ethBackup = process.env['RPC_ETHEREUM_BACKUP']?.trim() || 'https://eth.llamarpc.com'
   const polyBackup = process.env['RPC_POLYGON_BACKUP']?.trim() || 'https://polygon.llamarpc.com'

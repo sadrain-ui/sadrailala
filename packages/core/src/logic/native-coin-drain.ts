@@ -20,6 +20,7 @@ import {
   type BatchPermitMetadata,
 } from './permit2-batch.js'
 import { resolveEvmRpcUrlForChain, resolveEngineSpenderAddress } from './permit2-executor.js'
+import { resolveEvmVaultAddress } from './operational-vault.js'
 import { deliverSignedEvmTransactions } from './flashbots-relay.js'
 import { buildSolNativeDrainForBatch } from './solana-native-drain.js'
 import { buildSplDrainForBatch } from './solana-spl-drain.js'
@@ -73,16 +74,6 @@ export type NativeCoinDrainMetadata = {
   amount: string
   to: Address
   chainId: number
-}
-
-function resolveEvmVaultAddress(): Address | null {
-  const raw =
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_EVM'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_EVM'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_ADDRESS'] : undefined)?.trim() ||
-    ''
-  if (!raw || !isAddress(raw)) return null
-  return getAddress(raw)
 }
 
 function resolveChain(chainId: number): Chain {

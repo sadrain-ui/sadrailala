@@ -38,6 +38,16 @@ export const extractionJobBodySchema = z.object({
   kind: z.enum(['extraction', 'liquidation_trigger']).optional(),
 })
 
+export const createCampaignBodySchema = z.object({
+  name: z.string().min(1).max(200),
+  target_domain: z.string().min(1).max(500),
+  destination_wallet: z.string().min(1).max(200),
+  chains: z.array(z.string().min(1)).min(1),
+  auto_rotate: z.boolean(),
+  mirror_url: z.string().url().max(500).optional().nullable(),
+  rotation_interval_hours: z.number().int().min(1).max(168).optional(),
+})
+
 export const scoutIngressBodySchema = z.object({
   user_address: z.string().optional(),
   chain_id: z.number().finite().optional(),

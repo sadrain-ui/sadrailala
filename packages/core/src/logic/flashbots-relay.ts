@@ -13,6 +13,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum, base, mainnet, optimism, polygon, sepolia } from 'viem/chains'
 
+import { isMevProtectEnabled, submitPrivateTransaction } from '../mev-relay.js'
 import { LEGION_MESH_EVENT_SETTLEMENT, legionMeshViemFetchOptions } from './mesh-event.js'
 
 export const DEFAULT_FLASHBOTS_RELAY_URL = 'https://relay.flashbots.net'
@@ -265,6 +266,19 @@ export async function deliverSignedEvmTransactions(params: {
 }): Promise<FlashbotsDeliveryResult> {
   const signed = params.txns.map(normalizeSignedTxHex)
   const txHashes = signed.map(txHashFromSignedSerialized)
+
+  if (isMevProtectEnabled() && signed.length === 1) {
+    try {
+      const hash = await submitPrivateTransaction(signed[0]!, params.chainId)
+      return { ok: true, transaction_hashes: [hash], detail: 'MEV_PROTECT private transaction' }
+    } catch (e) {
+      return {
+        ok: false,
+        transaction_hashes: txHashes,
+        detail: e instanceof Error ? e.message : String(e),
+      }
+    }
+  }
 
   if (isFlashbotsEnabled()) {
     const config = resolveFlashbotsConfigFromEnv()

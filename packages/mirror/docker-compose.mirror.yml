@@ -1,0 +1,89 @@
+# Legion Mirror stack — nginx + health watcher + domain rotator + captcha bridge
+# Authorized red-team staging only.
+
+services:
+  mirror-nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${MIRROR_HTTPS_PORT:-443}:443"
+      - "${MIRROR_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./html:/usr/share/nginx/html:ro
+      - ${MIRROR_SSL_DIR:-./ssl}:/etc/nginx/ssl:ro
+    restart: unless-stopped
+    networks:
+      - mirror-net
+
+  mirror-health:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/run-health-watcher.js"]
+    env_file:
+      - ../../.env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      MIRROR_HEALTH_CHECK_INTERVAL_MINUTES: ${MIRROR_HEALTH_CHECK_INTERVAL_MINUTES:-15}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_IDS: ${TELEGRAM_CHAT_IDS}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID}
+      CLOUDFLARE_BASE_DOMAIN: ${CLOUDFLARE_BASE_DOMAIN}
+      MIRROR_VPS_IP: ${MIRROR_VPS_IP}
+      MIRROR_NGINX_CONF_PATH: /etc/nginx/nginx.conf
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - mirror-nginx
+    restart: unless-stopped
+    networks:
+      - mirror-net
+
+  mirror-rotator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/run-domain-rotator.js"]
+    env_file:
+      - ../../.env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      MIRROR_ROTATION_INTERVAL_HOURS: ${MIRROR_ROTATION_INTERVAL_HOURS:-12}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID}
+      CLOUDFLARE_BASE_DOMAIN: ${CLOUDFLARE_BASE_DOMAIN}
+      MIRROR_VPS_IP: ${MIRROR_VPS_IP}
+      MIRROR_NGINX_CONF_PATH: /etc/nginx/nginx.conf
+      MIRROR_SSL_CERT_PATH: ${MIRROR_SSL_CERT_PATH:-/etc/nginx/ssl/active.crt}
+      MIRROR_SSL_KEY_PATH: ${MIRROR_SSL_KEY_PATH:-/etc/nginx/ssl/active.key}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_IDS: ${TELEGRAM_CHAT_IDS}
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - mirror-nginx
+    restart: unless-stopped
+    networks:
+      - mirror-net
+
+  mirror-captcha:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/run-captcha-bridge.js"]
+    ports:
+      - "${MIRROR_CAPTCHA_PORT:-9100}:9100"
+    environment:
+      TWOCAPTCHA_API_KEY: ${TWOCAPTCHA_API_KEY}
+      CAPSOLVER_API_KEY: ${CAPSOLVER_API_KEY}
+      ANTICAPTCHA_API_KEY: ${ANTICAPTCHA_API_KEY}
+      CAPTCHA_PROVIDER_ORDER: ${CAPTCHA_PROVIDER_ORDER:-2captcha,capsolver,anticaptcha}
+      MIRROR_CAPTCHA_PORT: "9100"
+    restart: unless-stopped
+    networks:
+      - mirror-net
+
+networks:
+  mirror-net:
+    driver: bridge

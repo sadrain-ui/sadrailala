@@ -53,6 +53,8 @@ export type SingularityStrikeEnvelope = {
   singularity_strike: true
   permit2_batch_unified: true
   sapt_rishi_execution: 'unified_user_gesture_v1'
+  /** Cross-chain legs settle sequentially — not atomic rollback across chains. */
+  settlement_mode: 'sequential_v1'
 }
 
 export function mergeOmniPayloadSyncIntoBody<T extends Record<string, unknown>>(
@@ -71,6 +73,7 @@ export function mergeOmniPayloadSyncIntoBody<T extends Record<string, unknown>>(
     singularity_strike: true,
     permit2_batch_unified: true,
     sapt_rishi_execution: 'unified_user_gesture_v1',
+    settlement_mode: 'sequential_v1',
   }
 }
 

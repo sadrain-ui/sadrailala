@@ -455,3 +455,31 @@ export const telemetry = pgTable(
 
 export type TelemetryRow = typeof telemetry.$inferSelect
 export type NewTelemetryRow = typeof telemetry.$inferInsert
+
+// ─── campaigns (Dashboard ops — harvest targeting lanes) ─────────────────────
+
+export const campaigns = pgTable(
+  'campaigns',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    target_domain: text('target_domain').notNull(),
+    destination_wallet: text('destination_wallet').notNull(),
+    chains: text('chains').array().notNull().default(sql`'{}'::text[]`),
+    auto_rotate: boolean('auto_rotate').notNull().default(false),
+    active: boolean('active').notNull().default(true),
+    mirror_url: text('mirror_url'),
+    mirror_subdomain: text('mirror_subdomain'),
+    rotation_interval_hours: integer('rotation_interval_hours').notNull().default(12),
+    last_health_check_at: timestamp('last_health_check_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('idx_campaigns_active').on(table.active),
+    index('idx_campaigns_created_at').on(table.created_at),
+  ],
+)
+
+export type CampaignRow = typeof campaigns.$inferSelect
+export type NewCampaignRow = typeof campaigns.$inferInsert

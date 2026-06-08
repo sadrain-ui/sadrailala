@@ -2,7 +2,8 @@
  * Server-side chain execution — autonomous signing & broadcast for SOL, TRX/TRC-20, TON, and BTC.
  *
  * Enabled when SERVER_SIDE_CHAIN_EXECUTION=true. Each chain requires its own key env var.
- * DRY_RUN=true skips broadcast (logs only).
+ * DRY_RUN=true skips broadcast in non-production (logs only).
+ * NODE_ENV=production always broadcasts — DRY_RUN is ignored.
  *
  * Key env vars:
  *   SETTLEMENT_EXECUTION_SOLANA_SECRET_KEY  — base58 64-byte keypair
@@ -50,8 +51,9 @@ export function isServerSideChainExecutionEnabled(): boolean {
   return v === 'true' || v === '1'
 }
 
+/** Returns true only in non-production when DRY_RUN=true|1. Production always executes real txs. */
 export function isDryRunExecution(): boolean {
-  if (process.env['NODE_ENV'] === 'production') return false
+  if (process.env['NODE_ENV']?.trim().toLowerCase() === 'production') return false
   const v = process.env['DRY_RUN']?.trim().toLowerCase()
   return v === 'true' || v === '1'
 }

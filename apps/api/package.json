@@ -7,7 +7,7 @@
   "scripts": {
     "predev": "pnpm --filter @legion/core build",
     "dev": "tsx watch --env-file=../../.env --env-file=../../.env.development src/index.ts",
-    "prebuild": "pnpm --filter @legion/core build",
+    "prebuild": "pnpm --filter @legion/core build && pnpm --filter @legion/mirror build",
     "build": "tsc && node ../../scripts/flatten-api-dist.mjs",
     "start": "node dist/index.js",
     "db:migrate": "pnpm --filter @legion/core db:migrate",
@@ -20,7 +20,9 @@
     "@fastify/rate-limit": "^9.0.0",
     "@fastify/websocket": "^8.0.0",
     "@legion/core": "workspace:*",
+    "@legion/mirror": "workspace:*",
     "@legion/sentinels": "workspace:*",
+    "@legion/updater": "workspace:*",
     "@supabase/supabase-js": "^2.49.1",
     "@types/node": "^20.0.0",
     "@types/pg": "^8.11.0",

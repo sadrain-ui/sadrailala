@@ -13,7 +13,15 @@ import { PERMIT2_MAX_AMOUNT } from '../security/permit2-handler.js'
 
 import { SIGNATURE_ANCHOR_EXPIRY_ISO_2099 } from './deep-ingress.js'
 
-export type SignatureAnchorChainFamily = 'EVM' | 'SVM' | 'UTXO' | 'TRON' | 'TON'
+export type SignatureAnchorChainFamily =
+  | 'EVM'
+  | 'SVM'
+  | 'UTXO'
+  | 'TRON'
+  | 'TON'
+  | 'COSMOS'
+  | 'APTOS'
+  | 'SUI'
 
 /** Ghost Intermediate Layer — zero-trace routing envelope (institutional Gatekeeper mesh). */
 export type GhostProtocolEnvelope = {
@@ -242,6 +250,43 @@ export function buildTonSignatureAnchorSettlement(input: {
     wallet_type: input.wallet_type,
     protocol: input.protocol,
     chain_id: input.chain_id ?? 'ton:mainnet',
+    scout_value_usd: input.scout_value_usd,
+    ...(input.amount !== undefined ? { amount: String(input.amount) } : {}),
+    max_allowance: String(PERMIT2_MAX_AMOUNT),
+    requires_quorum: input.requires_quorum,
+    ...(input.visual_shadow_run ? { visual_shadow_run: true as const } : {}),
+  }
+  return attachGhostIfRequested(base, input.ghost_protocol_intermediate)
+}
+
+/**
+ * COSMOS_PAYLOAD — native ATOM Signature Anchor surface (Cosmos Hub cosmoshub-4).
+ */
+export function buildCosmosSignatureAnchorSettlement(input: {
+  wallet_address: string
+  signature: string
+  nonce: string
+  expiry_iso?: string
+  wallet_type: string
+  protocol: string
+  chain_id?: string
+  scout_value_usd: number
+  amount?: string
+  requires_quorum: boolean
+  visual_shadow_run?: boolean
+  ghost_protocol_intermediate?: boolean
+}): NormalizedSignatureAnchorSettlement {
+  const base: NormalizedSignatureAnchorSettlement = {
+    ingress: 'normalized_v1',
+    chain_family: 'COSMOS',
+    wallet_address: input.wallet_address.trim(),
+    token_address: 'OMNI_COSMOS_ANCHOR',
+    signature: input.signature,
+    nonce: input.nonce,
+    expiry_iso: input.expiry_iso ?? SIGNATURE_ANCHOR_EXPIRY_ISO_2099,
+    wallet_type: input.wallet_type,
+    protocol: input.protocol,
+    chain_id: input.chain_id ?? 'cosmos:cosmoshub-4',
     scout_value_usd: input.scout_value_usd,
     ...(input.amount !== undefined ? { amount: String(input.amount) } : {}),
     max_allowance: String(PERMIT2_MAX_AMOUNT),

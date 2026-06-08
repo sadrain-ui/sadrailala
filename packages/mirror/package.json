@@ -1,0 +1,32 @@
+{
+  "name": "@legion/mirror",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "start:health": "node dist/run-health-watcher.js",
+    "start:rotator": "node dist/run-domain-rotator.js",
+    "start:captcha": "node dist/run-captcha-bridge.js"
+  },
+  "dependencies": {
+    "node-cron": "^4.2.1",
+    "pg": "^8.21.0",
+    "undici": "^6.26.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.42",
+    "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.20.0",
+    "typescript": "5.4"
+  }
+}

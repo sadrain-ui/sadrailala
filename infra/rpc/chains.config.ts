@@ -31,6 +31,30 @@ export const RPC_CONFIGS: RpcConfig[] = [
     blockTimeMs: 400,
   },
   {
+    chain: 'aptos',
+    primaryRpc:
+      process.env['RPC_APTOS_PRIVATE'] ??
+      process.env['APTOS_RPC_URL'] ??
+      '',
+    backupRpc:
+      process.env['RPC_APTOS_BACKUP'] ?? 'https://fullnode.mainnet.aptoslabs.com/v1',
+    isGhostLane: false,
+    latencyThresholdMs: 500,
+    blockTimeMs: 1_000,
+  },
+  {
+    chain: 'sui',
+    primaryRpc:
+      process.env['RPC_SUI_PRIVATE'] ??
+      process.env['SUI_RPC_URL'] ??
+      '',
+    backupRpc:
+      process.env['RPC_SUI_BACKUP'] ?? 'https://fullnode.mainnet.sui.io',
+    isGhostLane: false,
+    latencyThresholdMs: 500,
+    blockTimeMs: 500,
+  },
+  {
     chain: 'polygon',
     primaryRpc: process.env['EVM_ALCHEMY_KEY']
       ? `https://polygon-mainnet.g.alchemy.com/v2/${process.env['EVM_ALCHEMY_KEY']}`

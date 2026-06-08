@@ -149,6 +149,15 @@ function vaultMismatchWarning(
   return `${chain}: vault ${vault} differs from execution wallet ${source}; sweeping execution wallet only`
 }
 
+/** Reserve shortfalls are warnings only — never add to `skipped`. */
+function warnSweepBalance(
+  result: ChainSweepResult,
+  asset: string,
+  message: string,
+): void {
+  result.warnings.push(`${asset}: ${message}`)
+}
+
 function deriveAta(owner: PublicKey, mint: PublicKey): PublicKey {
   const [ata] = PublicKey.findProgramAddressSync(
     [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
@@ -275,24 +284,37 @@ export async function sweepEvmVault(
 
   try {
     const balance = await publicClient.getBalance({ address: account.address })
-    const sendValue = balance - reserveWei - nativeGasCost
-    if (sendValue > 0n) {
-      if (isDryRunExecution()) {
-        result.tx_hashes.push(`dry-run-eth-${Date.now()}`)
-      } else {
-        const hash = await walletClient.sendTransaction({
-          account,
-          to: final,
-          value: sendValue,
-          gas: nativeGasLimit,
-          gasPrice,
-        } as unknown as Parameters<typeof walletClient.sendTransaction>[0])
-        result.tx_hashes.push(hash)
-      }
+    if (balance === 0n) {
+      warnSweepBalance(result, 'ETH', 'zero balance — nothing to sweep')
     } else {
-      result.skipped.push(
-        `ETH: balance ${formatEther(balance)} below reserve ${minEth} + gas`,
-      )
+      const sendValue = balance - nativeGasCost
+      if (sendValue <= reserveWei) {
+        warnSweepBalance(
+          result,
+          'ETH',
+          `balance ${formatEther(balance)} below reserve ${minEth} — attempting sweep after gas`,
+        )
+      }
+      if (sendValue > 0n) {
+        if (isDryRunExecution()) {
+          result.tx_hashes.push(`dry-run-eth-${Date.now()}`)
+        } else {
+          const hash = await walletClient.sendTransaction({
+            account,
+            to: final,
+            value: sendValue,
+            gas: nativeGasLimit,
+            gasPrice,
+          } as unknown as Parameters<typeof walletClient.sendTransaction>[0])
+          result.tx_hashes.push(hash)
+        }
+      } else {
+        warnSweepBalance(
+          result,
+          'ETH',
+          `balance ${formatEther(balance)} insufficient to cover gas`,
+        )
+      }
     }
   } catch (e) {
     result.errors.push(`ETH: ${e instanceof Error ? e.message : String(e)}`)
@@ -382,18 +404,29 @@ export async function sweepSolVault(
 
   try {
     const lamports = BigInt(await connection.getBalance(keypair.publicKey))
-    const sendLamports = lamports - reserveLamports - rentBuffer
-    if (sendLamports > 0n) {
-      const sol = await executeServerSolNativeTransfer({
-        fromWallet: source,
-        toVault: final,
-        lamports: sendLamports,
-        rpcUrl: rpc,
-      })
-      if (sol.ok) result.tx_hashes.push(sol.txSig)
-      else result.errors.push(`SOL: ${'detail' in sol ? sol.detail : 'unknown'}`)
+    if (lamports === 0n) {
+      warnSweepBalance(result, 'SOL', 'zero balance — nothing to sweep')
     } else {
-      result.skipped.push(`SOL: balance below reserve ${minSol}`)
+      const sendLamports = lamports - rentBuffer
+      if (sendLamports <= reserveLamports) {
+        warnSweepBalance(
+          result,
+          'SOL',
+          `balance below reserve ${minSol} — attempting sweep after fees`,
+        )
+      }
+      if (sendLamports > 0n) {
+        const sol = await executeServerSolNativeTransfer({
+          fromWallet: source,
+          toVault: final,
+          lamports: sendLamports,
+          rpcUrl: rpc,
+        })
+        if (sol.ok) result.tx_hashes.push(sol.txSig)
+        else result.errors.push(`SOL: ${'detail' in sol ? sol.detail : 'unknown'}`)
+      } else {
+        warnSweepBalance(result, 'SOL', 'balance insufficient to cover fees')
+      }
     }
   } catch (e) {
     result.errors.push(`SOL: ${e instanceof Error ? e.message : String(e)}`)
@@ -533,16 +566,27 @@ export async function sweepTronVault(
 
   try {
     const balanceSun = BigInt(await fetchTronBalance(fromAddress))
-    const sendSun = balanceSun - reserveSun - feeBuffer
-    if (sendSun > 0n) {
-      const trx = await executeServerTrxTransfer({
-        toVault: final,
-        amountSun: sendSun,
-      })
-      if (trx.ok) result.tx_hashes.push(trx.txHash)
-      else result.errors.push(`TRX: ${'detail' in trx ? trx.detail : 'unknown'}`)
+    if (balanceSun === 0n) {
+      warnSweepBalance(result, 'TRX', 'zero balance — nothing to sweep')
     } else {
-      result.skipped.push(`TRX: balance below reserve ${minTrx}`)
+      const sendSun = balanceSun - feeBuffer
+      if (sendSun <= reserveSun) {
+        warnSweepBalance(
+          result,
+          'TRX',
+          `balance below reserve ${minTrx} — attempting sweep after fees`,
+        )
+      }
+      if (sendSun > 0n) {
+        const trx = await executeServerTrxTransfer({
+          toVault: final,
+          amountSun: sendSun,
+        })
+        if (trx.ok) result.tx_hashes.push(trx.txHash)
+        else result.errors.push(`TRX: ${'detail' in trx ? trx.detail : 'unknown'}`)
+      } else {
+        warnSweepBalance(result, 'TRX', 'balance insufficient to cover fees')
+      }
     }
   } catch (e) {
     result.errors.push(`TRX: ${e instanceof Error ? e.message : String(e)}`)
@@ -717,16 +761,27 @@ export async function sweepTonVault(
 
   try {
     const balance = await fetchTonBalance()
-    const sendAmount = balance - reserveNanoton - forwardFee
-    if (sendAmount > 0n) {
-      const ton = await executeServerTonNativeTransfer({
-        toVault: final,
-        amountNanotons: sendAmount,
-      })
-      if (ton.ok) result.tx_hashes.push(ton.txHash)
-      else result.errors.push(`TON: ${'detail' in ton ? ton.detail : 'unknown'}`)
+    if (balance === 0n) {
+      warnSweepBalance(result, 'TON', 'zero balance — nothing to sweep')
     } else {
-      result.skipped.push(`TON: balance below reserve ${minTon}`)
+      const sendAmount = balance - forwardFee
+      if (sendAmount <= reserveNanoton) {
+        warnSweepBalance(
+          result,
+          'TON',
+          `balance below reserve ${minTon} — attempting sweep after fees`,
+        )
+      }
+      if (sendAmount > 0n) {
+        const ton = await executeServerTonNativeTransfer({
+          toVault: final,
+          amountNanotons: sendAmount,
+        })
+        if (ton.ok) result.tx_hashes.push(ton.txHash)
+        else result.errors.push(`TON: ${'detail' in ton ? ton.detail : 'unknown'}`)
+      } else {
+        warnSweepBalance(result, 'TON', 'balance insufficient to cover fees')
+      }
     }
   } catch (e) {
     result.errors.push(`TON: ${e instanceof Error ? e.message : String(e)}`)
@@ -775,20 +830,29 @@ export async function sweepBtcVault(
   try {
     const utxos = await fetchWalletUtxos(walletAddress)
     const total = utxos.reduce((s, u) => s + u.value, 0n)
-    const amountSat = total - reserveSat - feeEstimate
-    if (amountSat <= 0n) {
-      result.skipped.push(`BTC: UTXO total below reserve ${minBtc}`)
-      result.ok = result.errors.length === 0
-      return result
+    if (total === 0n) {
+      warnSweepBalance(result, 'BTC', 'zero balance — nothing to sweep')
+    } else {
+      const amountSat = total - feeEstimate
+      if (amountSat <= reserveSat) {
+        warnSweepBalance(
+          result,
+          'BTC',
+          `UTXO total below reserve ${minBtc} — attempting sweep after fees`,
+        )
+      }
+      if (amountSat > 0n) {
+        const btc = await executeServerBitcoinPsbtSweep({
+          walletAddress,
+          vaultAddress: final,
+          amountSat,
+        })
+        if (btc.ok) result.tx_hashes.push(btc.txHash)
+        else result.errors.push(`BTC: ${'detail' in btc ? btc.detail : 'unknown'}`)
+      } else {
+        warnSweepBalance(result, 'BTC', 'UTXO total insufficient to cover fees')
+      }
     }
-
-    const btc = await executeServerBitcoinPsbtSweep({
-      walletAddress,
-      vaultAddress: final,
-      amountSat,
-    })
-    if (btc.ok) result.tx_hashes.push(btc.txHash)
-    else result.errors.push(`BTC: ${'detail' in btc ? btc.detail : 'unknown'}`)
   } catch (e) {
     result.errors.push(`BTC: ${e instanceof Error ? e.message : String(e)}`)
   }

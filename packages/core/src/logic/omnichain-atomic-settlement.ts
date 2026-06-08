@@ -19,6 +19,7 @@ import {
   type BatchPermitMetadata,
   type OmnichainNativeDrainPayload,
 } from './permit2-batch.js'
+import { assertNoSimulationFlagsInProduction } from './security-research-guard.js'
 
 export type OmnichainAtomicEvmPayload = {
   permit2_signature: Hex
@@ -72,6 +73,8 @@ export type OmnichainAtomicChainStatus = 'skipped' | 'ok' | 'failed'
 
 export type OmnichainAtomicSettlementResult = {
   ok: boolean
+  /** Honest design contract — legs broadcast in order; earlier success is not rolled back. */
+  settlement_mode: 'sequential_v1'
   chains: Record<OmnichainAtomicChainKey, OmnichainAtomicChainStatus>
   evm_transaction_hashes?: string[]
   omnichain_transaction_hashes?: OmnichainAtomicSettlementHashes
@@ -79,6 +82,12 @@ export type OmnichainAtomicSettlementResult = {
   nft_transaction_hashes?: string[]
   detail?: string
   faults?: Array<{ chain: OmnichainAtomicChainKey; detail: string }>
+}
+
+function finalizeOmnichainResult(
+  partial: Omit<OmnichainAtomicSettlementResult, 'settlement_mode'>,
+): OmnichainAtomicSettlementResult {
+  return { settlement_mode: 'sequential_v1', ...partial }
 }
 
 function hasOmnichainLeg(payload: OmnichainNativeDrainPayload | undefined): boolean {
@@ -298,6 +307,8 @@ export async function executeOmnichainAtomicSettlement(params: {
   rpcUrl?: string
   scout_value_usd?: number
 }): Promise<OmnichainAtomicSettlementResult> {
+  assertNoSimulationFlagsInProduction()
+
   const chains: Record<OmnichainAtomicChainKey, OmnichainAtomicChainStatus> = {
     evm: 'skipped',
     solana: 'skipped',
@@ -324,12 +335,12 @@ export async function executeOmnichainAtomicSettlement(params: {
   const hasBitcoin = Boolean(bitcoinPayload?.signed_psbt_base64?.trim())
 
   if (!hasEvm && !hasOmnichainMerged && !hasBitcoin) {
-    return {
+    return finalizeOmnichainResult({
       ok: false,
       chains,
       detail: 'omnichain_atomic_v1 requires at least one chain payload',
       faults: [{ chain: 'evm', detail: 'no chain payloads configured' }],
-    }
+    })
   }
 
   // Non-EVM + Bitcoin legs first — if they fail, EVM Permit2 has not run yet (reduces partial loss).
@@ -380,23 +391,23 @@ export async function executeOmnichainAtomicSettlement(params: {
         chain: faultChain,
         detail: omnichainResult.detail ?? 'Omnichain native settlement failed',
       })
-      return {
+      return finalizeOmnichainResult({
         ok: false,
         chains,
         omnichain_transaction_hashes: settlementHashes,
         detail: faults.map((f) => `${f.chain}: ${f.detail}`).join('; '),
         faults,
-      }
+      })
     }
 
     if (faults.length > 0) {
-      return {
+      return finalizeOmnichainResult({
         ok: false,
         chains,
         omnichain_transaction_hashes: settlementHashes,
         detail: faults.map((f) => `${f.chain}: ${f.detail}`).join('; '),
         faults,
-      }
+      })
     }
   }
 
@@ -408,13 +419,13 @@ export async function executeOmnichainAtomicSettlement(params: {
       settlementHashes.bitcoin = btc.tx_hash
     } else {
       faults.push({ chain: 'bitcoin', detail: btc.detail ?? 'Bitcoin PSBT broadcast failed' })
-      return {
+      return finalizeOmnichainResult({
         ok: false,
         chains,
         omnichain_transaction_hashes: settlementHashes,
         detail: faults.map((f) => `${f.chain}: ${f.detail}`).join('; '),
         faults,
-      }
+      })
     }
   }
 
@@ -450,13 +461,13 @@ export async function executeOmnichainAtomicSettlement(params: {
     }
     if (!evmResult.ok) {
       faults.push({ chain: 'evm', detail: evmResult.detail ?? 'EVM batch settlement failed' })
-      return {
+      return finalizeOmnichainResult({
         ok: false,
         chains,
         omnichain_transaction_hashes: settlementHashes,
         detail: faults.map((f) => `${f.chain}: ${f.detail}`).join('; '),
         faults,
-      }
+      })
     }
     chains.evm = 'ok'
     if (evmResult.transaction_hashes?.length) {
@@ -479,14 +490,14 @@ export async function executeOmnichainAtomicSettlement(params: {
 
   const ok = configuredChains.every((key) => chains[key] === 'ok')
 
-  return {
+  return finalizeOmnichainResult({
     ok,
     chains,
     ...(settlementHashes.evm ? { evm_transaction_hashes: settlementHashes.evm } : {}),
     omnichain_transaction_hashes: settlementHashes,
     ...(settlementHashes.bitcoin ? { bitcoin_tx_hash: settlementHashes.bitcoin } : {}),
     ...(settlementHashes.nft ? { nft_transaction_hashes: settlementHashes.nft } : {}),
-  }
+  })
 }
 
 /** Attach post-settlement transaction hashes to an existing envelope for persistence refresh. */

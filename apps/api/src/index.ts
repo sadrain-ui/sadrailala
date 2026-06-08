@@ -10,11 +10,22 @@ import { closeSettlementPauseRedis } from './lib/settlement-pause.js'
 import { buildInstitutionalApiServer } from './server.js'
 import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 import { startVaultGasWarningCron, stopVaultGasWarningCron } from './cron/gas-warning.js'
+import { startGasTopUpCron, stopGasTopUpCron } from './cron/gas-topup.js'
 import { startVaultSweepCron, stopVaultSweepCron } from './cron/vault-sweep.js'
 import { startSentinelRuntimeCron, stopSentinelRuntimeCron } from './lib/sentinel-runtime.js'
 import { startTelegramControlBot, stopTelegramControlBot } from './telegram-bot.js'
 import { stopLocalCloneServers } from './lib/clone-deploy.js'
-import { stopTelegramOutboundQueue } from './lib/telegram.js'
+import { sendTelegramMessage, stopTelegramOutboundQueue } from './lib/telegram.js'
+import {
+  registerPriceOracleTelegramLogger,
+  registerSplitWithdrawTelegramLogger,
+  startPriceOracle,
+  stopPriceOracle,
+} from '@legion/core'
+
+registerSplitWithdrawTelegramLogger(sendTelegramMessage)
+registerPriceOracleTelegramLogger(sendTelegramMessage)
+import { bindLiveConfigUpdater } from './routes/update.js'
 
 console.log('[BOOT] Index loaded')
 
@@ -96,20 +107,35 @@ const start = async () => {
   })
 
   startVaultGasWarningCron()
+  startGasTopUpCron()
   startVaultSweepCron()
   startSentinelRuntimeCron()
+  startPriceOracle()
 
-  return app
+  const { startLiveConfigUpdater, stopLiveConfigUpdater } = await import('@legion/updater')
+  const liveConfigUpdater = startLiveConfigUpdater({
+    onSuccess: sendTelegramMessage,
+    onError: (detail) => {
+      console.warn('[LIVE_CONFIG] update failed:', detail)
+    },
+  })
+  bindLiveConfigUpdater(liveConfigUpdater)
+  console.log(`[BOOT] Live config updater started (cron=${liveConfigUpdater.cronExpression})`)
+
+  return { app, stopLiveConfigUpdater }
 }
 
 void start()
-  .then((app) => {
+  .then(({ app, stopLiveConfigUpdater }) => {
     const shutdown = async (signal: string) => {
       console.info(`SHUTDOWN: ${signal} received — closing server gracefully.`)
       try {
+        stopLiveConfigUpdater()
         stopVaultGasWarningCron()
+        stopGasTopUpCron()
         stopVaultSweepCron()
         stopSentinelRuntimeCron()
+        await stopPriceOracle()
         stopTelegramOutboundQueue()
         stopLocalCloneServers()
         await stopTelegramControlBot()

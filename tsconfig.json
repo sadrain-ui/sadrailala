@@ -14,6 +14,8 @@
       "@legion/core": ["./packages/core/dist/index.d.ts"],
       "@legion/core/*": ["./packages/core/dist/*"],
       "@legion/sentinels": ["./packages/sentinels/dist/index.d.ts"],
+      "@legion/mirror": ["./packages/mirror/dist/index.d.ts"],
+      "@legion/updater": ["./packages/updater/dist/index.d.ts"],
       "@legion/sdk": ["./packages/sdk/dist/index.d.ts"]
     }
   },

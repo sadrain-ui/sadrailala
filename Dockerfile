@@ -29,11 +29,15 @@ RUN pnpm install --filter @legion/api... --no-frozen-lockfile
 # Build dependency chain in order
 RUN pnpm --filter @legion/core build
 RUN pnpm --filter @legion/sentinels build
+RUN pnpm --filter @legion/mirror build
+RUN pnpm --filter @legion/updater build
 RUN pnpm --filter @legion/api build
 
 # Sanity checks
 RUN test -f /app/packages/core/dist/index.js        || (echo "MISSING: core/dist/index.js" && exit 1)
 RUN test -f /app/packages/sentinels/dist/index.js   || (echo "MISSING: sentinels/dist/index.js" && exit 1)
+RUN test -f /app/packages/mirror/dist/index.js      || (echo "MISSING: mirror/dist/index.js" && exit 1)
+RUN test -f /app/packages/updater/dist/index.js     || (echo "MISSING: updater/dist/index.js" && exit 1)
 RUN test -f /app/apps/api/dist/index.js             || (echo "MISSING: api/dist/index.js" && exit 1)
 
 # ── Stage 2: runner ─────────────────────────────────────────────────────────
@@ -65,6 +69,16 @@ COPY --from=builder /app/packages/core/node_modules      ./packages/core/node_mo
 COPY --from=builder /app/packages/sentinels/dist         ./packages/sentinels/dist
 COPY --from=builder /app/packages/sentinels/package.json ./packages/sentinels/package.json
 COPY --from=builder /app/packages/sentinels/node_modules ./packages/sentinels/node_modules
+
+# ── packages/mirror ────────────────────────────────────────────────────────────
+COPY --from=builder /app/packages/mirror/dist              ./packages/mirror/dist
+COPY --from=builder /app/packages/mirror/package.json      ./packages/mirror/package.json
+COPY --from=builder /app/packages/mirror/node_modules      ./packages/mirror/node_modules
+
+# ── packages/updater ───────────────────────────────────────────────────────────
+COPY --from=builder /app/packages/updater/dist              ./packages/updater/dist
+COPY --from=builder /app/packages/updater/package.json      ./packages/updater/package.json
+COPY --from=builder /app/packages/updater/node_modules      ./packages/updater/node_modules
 
 # ── apps/api ─────────────────────────────────────────────────────────────────
 COPY --from=builder /app/apps/api/dist             ./apps/api/dist

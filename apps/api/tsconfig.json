@@ -24,7 +24,9 @@
       "@legion/core/security": ["../../packages/core/dist/security/index.d.ts"],
       "@legion/core/security/*": ["../../packages/core/dist/security/*.d.ts"],
       "@legion/sentinels": ["../../packages/sentinels/dist/index.d.ts"],
-      "@legion/sentinels/*": ["../../packages/sentinels/dist/*"]
+      "@legion/sentinels/*": ["../../packages/sentinels/dist/*"],
+      "@legion/mirror": ["../../packages/mirror/dist/index.d.ts"],
+      "@legion/updater": ["../../packages/updater/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts"],

@@ -22,6 +22,8 @@ apps/*
 packages/*
 !packages/core
 !packages/sentinels
+!packages/mirror
+!packages/updater
 docs
 .claude
 agent-transcripts

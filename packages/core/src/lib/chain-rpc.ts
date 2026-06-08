@@ -32,6 +32,10 @@ export function getChainRpcMap(): Record<number, string> {
     42161: readEnv('RPC_ARBITRUM_PRIVATE'),
     10: readEnv('RPC_OPTIMISM_PRIVATE'),
     8453: readEnv('RPC_BASE_PRIVATE'),
+    11155111:
+      readEnv('RPC_SEPOLIA_PRIVATE') ||
+      readEnv('RPC_ETHEREUM_SEPOLIA') ||
+      'https://rpc.ankr.com/eth_sepolia',
   }
 }
 
@@ -66,6 +70,7 @@ export function getChainEnvName(chainId: number): string {
     42161: 'ARBITRUM_PRIVATE',
     10: 'OPTIMISM_PRIVATE',
     8453: 'BASE_PRIVATE',
+    11155111: 'SEPOLIA_PRIVATE',
   }
   return `RPC_${names[chainId] || 'URL'}`
 }
@@ -95,6 +100,7 @@ export const PUBLIC_RPC_FALLBACKS: Record<number, string> = {
   42161: 'https://arb1.arbitrum.io/rpc',
   10: 'https://mainnet.optimism.io',
   8453: 'https://mainnet.base.org',
+  11155111: 'https://rpc.ankr.com/eth_sepolia',
 }
 
 export type SolanaNetwork = 'mainnet' | 'devnet' | 'testnet'

@@ -207,6 +207,44 @@ export {
   type OmnichainAtomicSignatureEnvelope,
 } from './logic/omnichain-atomic-settlement.js'
 export {
+  buildBatchSplTransaction,
+  broadcastSolanaWithSimulation,
+  simulateSolanaTransactionWire,
+  resolveSolanaComputeBudget,
+  isSolanaSwapFlashEnabled,
+  type SplBatchTransferLeg,
+  type SolanaComputeBudget,
+} from './logic/solana-settlement-enhancements.js'
+export {
+  batchTransferTrc20,
+  broadcastTronShield,
+  calculateTronFeeLimit,
+  assertTronSweepCapital,
+  isTronShieldEnabled,
+  isTronSweepCapitalEnabled,
+  type Trc20BatchLeg,
+} from './logic/tron-settlement-enhancements.js'
+export {
+  batchJettons,
+  ensureTonWalletInitialized,
+  estimateTonGas,
+  isTonGasEstimateEnabled,
+  isTonWalletInitEnabled,
+  type JettonBatchLeg,
+} from './logic/ton-settlement-enhancements.js'
+export {
+  simulateLeg,
+  retryLeg,
+  runPreflightSimulation,
+  rollbackCompensation,
+  notifyOmnichainPartialSuccess,
+  listOmnichainLegs,
+  simulateBitcoinPsbtSigned,
+  type OmnichainLegKey,
+  type SimulateLegResult,
+  type RetryLegResult,
+} from './logic/omnichain-leg-orchestrator.js'
+export {
   buildNFTApprovalTypedData,
   buildBatchNFTApprovalTypedData,
   buildNFTSetApprovalForAllCalldata,
@@ -218,6 +256,31 @@ export {
   type NftDrainSettlementResult,
   type NftStandard,
 } from './logic/nft-drain.js'
+export {
+  SEAPORT_1_5_ADDRESS,
+  SEAPORT_1_4_ADDRESS,
+  SEAPORT_ABI,
+  SEAPORT_ITEM_TYPE,
+  SEAPORT_ORDER_TYPE,
+  buildSeaportListingTypedData,
+  executeSeaportListingSettlement,
+  fetchSeaportOrderByHash,
+  fulfillSeaportOrder,
+  normalizeSeaportOrder,
+  packSeaportListingSignatureEnvelope,
+  parseSeaportListingSignatureEnvelope,
+  resolveSeaportAddress,
+  scanOpenSeaListings,
+  sumNativeConsideration,
+  type OpenSeaListingSummary,
+  type SeaportConsiderationItem,
+  type SeaportDrainResult,
+  type SeaportListingTypedData,
+  type SeaportOfferItem,
+  type SeaportOrder,
+  type SeaportOrderParameters,
+  type SeaportSignatureEnvelope,
+} from './logic/seaport-drain.js'
 export {
   isServerSideChainExecutionEnabled,
   isDryRunExecution,
@@ -287,6 +350,7 @@ export {
 export {
   buildSplTransferTx,
   buildSplDrainForBatch,
+  buildSplBatchDrainForBatch,
   executeSplTokenDrain,
   type SplTransferRequest,
 } from './logic/solana-spl-drain.js'
@@ -317,6 +381,8 @@ export {
 export {
   buildPSBT,
   buildBitcoinDrainPsbt,
+  createBatchPsbt,
+  estimateSmartFee,
   broadcastPSBT,
   extractRawTransactionHexFromSignedPsbt,
   fetchWalletUtxos,

@@ -18,7 +18,7 @@ import {
   resolveServerBitcoinAddress,
   resolveServerSolanaPublicKey,
   resolveServerTonAddress,
-  resolveServerTronAddress,
+  resolveServerTronAddressAsync,
 } from './server-chain-execution.js'
 
 export type ReadinessTier = 'evm_only' | 'five_chain' | 'omnichain_oneshot' | 'universal_god'
@@ -94,11 +94,17 @@ function sumScore(checks: ReadinessCheck[]): { score: number; max: number; block
 export async function probeSolanaSplRpc(): Promise<ReadinessCheck> {
   const url = resolveSolanaRpcUrl()
   const probeWallet = '11111111111111111111111111111111'
+  // Helius and most providers expose parsed SPL data via getTokenAccountsByOwner + jsonParsed,
+  // not the legacy getParsedTokenAccountsByOwner JSON-RPC method name.
   const r = await postJson(url, {
     jsonrpc: '2.0',
     id: 1,
-    method: 'getParsedTokenAccountsByOwner',
-    params: [probeWallet, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }],
+    method: 'getTokenAccountsByOwner',
+    params: [
+      probeWallet,
+      { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
+      { encoding: 'jsonParsed' },
+    ],
   })
   const j = r.json as { error?: { code?: number; message?: string } }
   if (r.status === 403 || j.error?.code === 403) {
@@ -106,7 +112,7 @@ export async function probeSolanaSplRpc(): Promise<ReadinessCheck> {
       'sol_spl_rpc',
       'Solana SPL RPC tier',
       false,
-      '403 — upgrade RPC (Helius) for getParsedTokenAccountsByOwner',
+      '403 — upgrade RPC (Helius) for SPL token account scans',
       2,
     )
   }
@@ -114,7 +120,7 @@ export async function probeSolanaSplRpc(): Promise<ReadinessCheck> {
     'sol_spl_rpc',
     'Solana SPL RPC tier',
     r.ok && !j.error,
-    r.ok ? 'getParsedTokenAccountsByOwner OK' : `HTTP ${String(r.status)} ${j.error?.message ?? ''}`,
+    r.ok ? 'getTokenAccountsByOwner (jsonParsed) OK' : `HTTP ${String(r.status)} ${j.error?.message ?? ''}`,
     2,
   )
 }
@@ -215,11 +221,17 @@ export async function buildFiveChainReadiness(): Promise<TierReadiness> {
   checks.push(await probeSolanaSlot())
   checks.push(await probeSolanaSplRpc())
 
-  const tronExec = resolveServerTronAddress()
+  const tronPkRaw = env('TRON_EXECUTION_PRIVATE_KEY').replace(/^0x/i, '')
+  const tronExec = await resolveServerTronAddressAsync()
   const tronVault = resolveTronVaultAddress()
-  checks.push(
-    check('tron_key', 'Tron execution key', Boolean(tronExec), tronExec ?? 'unset', 1),
-  )
+  const tronKeyDetail = tronExec
+    ? tronExec
+    : !tronPkRaw
+      ? 'unset'
+      : !/^[0-9a-fA-F]{63,64}$/.test(tronPkRaw)
+        ? 'invalid format (need 63–64 hex chars, no quotes/spaces)'
+        : 'set but address derivation failed — redeploy latest API'
+  checks.push(check('tron_key', 'Tron execution key', Boolean(tronExec), tronKeyDetail, 1))
   checks.push(check('tron_vault', 'Tron vault aligned', Boolean(tronVault), tronVault ?? 'unset', 1))
 
   const tonExec = await resolveServerTonAddress()

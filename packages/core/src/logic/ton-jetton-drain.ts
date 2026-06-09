@@ -163,3 +163,4 @@ export async function confirmJettonTransferAfterBroadcast(params: {
 }
 
 export { parseNativeAmount as parseJettonAmount }
+export { batchJettons, ensureTonWalletInitialized, estimateTonGas, type JettonBatchLeg } from './ton-settlement-enhancements.js'

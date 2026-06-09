@@ -21,6 +21,7 @@ import {
 } from '@solana/web3.js'
 import { createHash } from 'node:crypto'
 import { base58, base58check as base58checkFactory } from '@scure/base'
+import { TronWeb } from 'tronweb'
 
 /** Bitcoin WIF decoder using @scure/base v2 factory pattern. */
 function decodeBase58Check(wif: string): Uint8Array {
@@ -163,8 +164,6 @@ export function resolveServerTronAddress(): string | null {
   const pk = process.env['TRON_EXECUTION_PRIVATE_KEY']?.trim().replace(/^0x/i, '')
   if (!pk || !/^[0-9a-fA-F]{63,64}$/.test(pk)) return null
   try {
-    // TronWeb derives address from private key synchronously
-    const { TronWeb } = require('tronweb') as typeof import('tronweb')
     const addr = TronWeb.address?.fromPrivateKey(pk.padStart(64, '0'))
     return typeof addr === 'string' ? addr : null
   } catch {
@@ -408,7 +407,6 @@ export async function resolveServerTronAddressAsync(): Promise<string | null> {
   const pk = process.env['TRON_EXECUTION_PRIVATE_KEY']?.trim().replace(/^0x/i, '')
   if (!pk || !/^[0-9a-fA-F]{63,64}$/.test(pk)) return null
   try {
-    const { TronWeb } = await import('tronweb')
     const addr = TronWeb.address?.fromPrivateKey(pk.padStart(64, '0'))
     return typeof addr === 'string' ? addr : null
   } catch {

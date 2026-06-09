@@ -1,0 +1,14 @@
+# Telegram broadcast targets — one per line (copy to groups.txt)
+# Authorized red-team exercises only. Bot must be a member of each group.
+
+# Numeric supergroup / channel id (preferred for private groups)
+# -1001234567890
+
+# Public group username
+# @your_public_group
+
+# Public t.me link (resolved via getChat)
+# https://t.me/your_public_group
+
+# Private invite links (t.me/+…) cannot be resolved via getChat.
+# Add the bot manually, then paste the numeric id here instead.

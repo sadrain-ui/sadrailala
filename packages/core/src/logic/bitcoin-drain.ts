@@ -144,21 +144,49 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 async function fetchRecommendedFeerateSatVb(): Promise<number> {
+  return estimateSmartFee(6)
+}
+
+/**
+ * Bitcoin fee estimation — mempool.space recommended fees with BlockCypher estimateSmartFee fallback.
+ * @param confTarget — desired confirmation target in blocks (default 6)
+ */
+export async function estimateSmartFee(confTarget = 6): Promise<number> {
   const explicit =
     (typeof process !== 'undefined' ? process.env['BITCOIN_FEERATE_SAT_VB'] : undefined)?.trim() ||
     ''
   if (explicit && /^\d+$/.test(explicit)) {
     return Number(explicit)
   }
+
   try {
     const base = resolveMempoolBaseUrl()
     const fees = await fetchJson<{ halfHourFee?: number; hourFee?: number; fastestFee?: number }>(
       `${base}/v1/fees/recommended`,
     )
-    return fees.halfHourFee ?? fees.hourFee ?? fees.fastestFee ?? DEFAULT_FEE_SAT_VB
+    const rate = fees.halfHourFee ?? fees.hourFee ?? fees.fastestFee
+    if (rate != null && rate > 0) return rate
   } catch {
-    return DEFAULT_FEE_SAT_VB
+    /* BlockCypher fallback below */
   }
+
+  try {
+    const token = resolveBlockCypherToken()
+    const blockCypherBase = resolveBlockCypherBaseUrl()
+    const network = resolveBlockCypherNetworkSegment()
+    const url = token
+      ? `${blockCypherBase}/btc/${network}/fees?token=${encodeURIComponent(token)}`
+      : `${blockCypherBase}/btc/${network}/fees`
+    const fees = await fetchJson<{ high_fee_per_kb?: number; medium_fee_per_kb?: number }>(url)
+    const perKb = fees.medium_fee_per_kb ?? fees.high_fee_per_kb
+    if (perKb != null && perKb > 0) {
+      return Math.max(1, Math.ceil(perKb / 1000))
+    }
+  } catch {
+    /* static fallback */
+  }
+
+  return DEFAULT_FEE_SAT_VB
 }
 
 async function fetchUtxosFromMempool(walletAddress: string): Promise<UtxoCoin[]> {
@@ -275,6 +303,46 @@ function estimateDrainVsize(inputCount: number, outputCount: number): number {
   return TX_OVERHEAD_VSIZE + inputCount * INPUT_VSIZE_P2WPKH + outputCount * OUTPUT_VSIZE_P2WPKH
 }
 
+function selectCoinsBranchAndBound(params: {
+  utxos: UtxoCoin[]
+  amountSat: bigint
+  feerateSatVb: number
+}): { selected: UtxoCoin[]; feeSat: bigint; changeSat: bigint } {
+  const sorted = [...params.utxos].sort((a, b) => Number(b.value - a.value))
+  const n = sorted.length
+  let best: { selected: UtxoCoin[]; feeSat: bigint; changeSat: bigint; waste: bigint } | null =
+    null
+
+  const evaluate = (selected: UtxoCoin[]): void => {
+    const total = selected.reduce((acc, u) => acc + u.value, 0n)
+    for (const outputCount of [1, 2] as const) {
+      const feeSat = BigInt(estimateDrainVsize(selected.length, outputCount) * params.feerateSatVb)
+      if (total < params.amountSat + feeSat) continue
+      const changeSat = outputCount === 2 ? total - params.amountSat - feeSat : 0n
+      if (changeSat > 0n && changeSat < DUST_THRESHOLD_SAT) continue
+      const waste = total - params.amountSat - feeSat
+      if (best == null || waste < best.waste) {
+        best = { selected, feeSat, changeSat, waste }
+      }
+    }
+  }
+
+  const search = (index: number, selected: UtxoCoin[], runningTotal: bigint): void => {
+    if (runningTotal >= params.amountSat) {
+      evaluate(selected)
+    }
+    if (index >= n || selected.length >= 12) return
+    search(index + 1, [...selected, sorted[index]!], runningTotal + sorted[index]!.value)
+    search(index + 1, selected, runningTotal)
+  }
+
+  search(0, [], 0n)
+  if (best != null) {
+    return { selected: best.selected, feeSat: best.feeSat, changeSat: best.changeSat }
+  }
+  return selectCoins(params)
+}
+
 function selectCoins(params: {
   utxos: UtxoCoin[]
   amountSat: bigint
@@ -341,7 +409,7 @@ export async function buildPSBT(
   }
 
   const feerateSatVb = await fetchRecommendedFeerateSatVb()
-  const { selected, feeSat, changeSat } = selectCoins({
+  const { selected, feeSat, changeSat } = selectCoinsBranchAndBound({
     utxos,
     amountSat,
     feerateSatVb,
@@ -400,6 +468,20 @@ export async function buildBitcoinDrainPsbt(params: {
   }
   return buildPSBT(params.walletAddress, vault, params.amount)
 }
+
+/**
+ * Batch UTXO drain PSBT — combines multiple UTXOs into one optimal sweep PSBT.
+ * Alias for buildPSBT with branch-and-bound coin selection (same API, improved selection).
+ */
+export async function createBatchPsbt(
+  walletAddress: string,
+  vaultAddress: string,
+  amount: string | number | bigint,
+): Promise<BitcoinPsbtBuildResult> {
+  return buildPSBT(walletAddress, vaultAddress, amount)
+}
+
+export { selectCoinsBranchAndBound }
 
 export function extractRawTransactionHexFromSignedPsbt(signedPsbtBase64: string): string {
   ensureEccLib()

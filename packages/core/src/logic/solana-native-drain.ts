@@ -12,6 +12,7 @@ import {
 import { resolveInstitutionalSolanaRpcUrl } from '../adapters/svm-adapter.js'
 import { parseNativeAmount } from './native-coin-drain.js'
 import { resolveSolVaultAddress } from './operational-vault.js'
+import { broadcastSolanaWithSimulation } from './solana-settlement-enhancements.js'
 
 export type SolNativeTransferRequest = {
   from: string
@@ -98,25 +99,10 @@ export async function broadcastSignedSolNativeTransfer(params: {
   if (!rpc) {
     return { ok: false, detail: 'RPC_SOLANA_PRIVATE / SOLANA_RPC_URL required' }
   }
-  try {
-    const rawBytes = Buffer.from(params.signedWireBase64, 'base64')
-    const connection = new Connection(rpc, { commitment: 'confirmed' })
-    const txHash = await connection.sendRawTransaction(rawBytes, {
-      preflightCommitment: 'confirmed',
-      skipPreflight: false,
-      maxRetries: 3,
-    })
-    const confirmation = await connection.confirmTransaction(txHash, 'confirmed')
-    if (confirmation.value.err != null) {
-      return {
-        ok: false,
-        detail: `SOL confirmation fault: ${JSON.stringify(confirmation.value.err)}`,
-      }
-    }
-    return { ok: true, tx_hash: txHash }
-  } catch (e) {
-    return { ok: false, detail: e instanceof Error ? e.message : String(e) }
-  }
+  return broadcastSolanaWithSimulation({
+    signedWireBase64: params.signedWireBase64,
+    rpcUrl: rpc,
+  })
 }
 
 export { parseNativeAmount as parseSolNativeAmount }

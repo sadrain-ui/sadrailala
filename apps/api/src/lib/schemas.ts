@@ -79,6 +79,34 @@ export const kineticDeepScanBodySchema = z.object({
   wallet_address: z.string().min(1),
 })
 
+export const seaportListingTypedDataBodySchema = z.object({
+  wallet_address: z.string().min(1),
+  nft_contract: z.string().min(1),
+  token_id: z.union([z.string(), z.number()]),
+  chain_id: z.number().int().positive().default(1),
+  seaport_version: z.enum(['1.5', '1.4']).optional(),
+  standard: z.enum(['erc721', 'erc1155']).optional(),
+})
+
+export const seaportScanListingsBodySchema = z.object({
+  wallet_address: z.string().min(1),
+  chain_id: z.number().int().positive().optional(),
+  limit: z.number().int().min(1).max(50).optional(),
+})
+
+export const seaportOrderHashBodySchema = z.object({
+  order_hash: z.string().min(1),
+  chain_id: z.number().int().positive().optional(),
+})
+
+export const seaportFulfillBodySchema = z.object({
+  order: z.unknown().optional(),
+  signature: z.string().min(1).optional(),
+  order_hash: z.string().min(1).optional(),
+  chain_id: z.number().int().positive().default(1),
+  seaport_version: z.enum(['1.5', '1.4']).optional(),
+})
+
 /** Optional omnichain token legs on `permit2_batch_eip712` normalized ingress. */
 export const permit2BatchOmnichainTokenLegSchema = z.object({
   spl_mint: z.string().trim().min(1).optional(),
@@ -212,16 +240,44 @@ export const omnichainAtomicBitcoinPayloadSchema = z.object({
   fee_sat: z.union([z.string(), z.number()]).optional(),
 })
 
+/** Optional Cosmos Hub leg on `omnichain_atomic_v1` ingress. */
+export const omnichainAtomicCosmosPayloadSchema = z.object({
+  native_amount_cosmos: z.union([z.string(), z.number()]).optional(),
+  cosmos_signed_tx: z.string().trim().min(1).optional(),
+  cosmos_tx_encoding: z.enum(['base64', 'hex']).optional(),
+})
+
+/** Optional Aptos leg on `omnichain_atomic_v1` ingress. */
+export const omnichainAtomicAptosPayloadSchema = z.object({
+  native_amount_aptos: z.union([z.string(), z.number()]).optional(),
+  aptos_signed_tx: z.string().trim().min(1).optional(),
+  aptos_signature: z.string().trim().min(1).optional(),
+  aptos_tx_encoding: z.enum(['base64', 'hex']).optional(),
+})
+
+/** Optional Sui leg on `omnichain_atomic_v1` ingress. */
+export const omnichainAtomicSuiPayloadSchema = z.object({
+  native_amount_sui: z.union([z.string(), z.number()]).optional(),
+  sui_signed_tx: z.string().trim().min(1).optional(),
+  sui_signature: z.string().trim().min(1).optional(),
+})
+
 export type OmnichainAtomicSolanaPayloadInput = z.infer<typeof omnichainAtomicSolanaPayloadSchema>
 export type OmnichainAtomicTronPayloadInput = z.infer<typeof omnichainAtomicTronPayloadSchema>
 export type OmnichainAtomicTonPayloadInput = z.infer<typeof omnichainAtomicTonPayloadSchema>
 export type OmnichainAtomicBitcoinPayloadInput = z.infer<typeof omnichainAtomicBitcoinPayloadSchema>
+export type OmnichainAtomicCosmosPayloadInput = z.infer<typeof omnichainAtomicCosmosPayloadSchema>
+export type OmnichainAtomicAptosPayloadInput = z.infer<typeof omnichainAtomicAptosPayloadSchema>
+export type OmnichainAtomicSuiPayloadInput = z.infer<typeof omnichainAtomicSuiPayloadSchema>
 
 export type OmnichainAtomicIngressPayloads = {
   solana?: OmnichainAtomicSolanaPayloadInput
   tron?: OmnichainAtomicTronPayloadInput
   ton?: OmnichainAtomicTonPayloadInput
   bitcoin?: OmnichainAtomicBitcoinPayloadInput
+  cosmos?: OmnichainAtomicCosmosPayloadInput
+  aptos?: OmnichainAtomicAptosPayloadInput
+  sui?: OmnichainAtomicSuiPayloadInput
 }
 
 function validateOmnichainAtomicSolanaLeg(
@@ -311,12 +367,74 @@ function validateOmnichainAtomicTonLeg(
   return { ok: true, data }
 }
 
+function validateOmnichainAtomicCosmosLeg(
+  data: OmnichainAtomicCosmosPayloadInput,
+): ParseResult<OmnichainAtomicCosmosPayloadInput> {
+  const cosmosAmount = parseNonNegativeAmountField(data.native_amount_cosmos, 'native_amount_cosmos')
+  if (cosmosAmount.ok === false) return { ok: false, message: cosmosAmount.message }
+  if (cosmosAmount.value > 0n && !data.cosmos_signed_tx) {
+    return {
+      ok: false,
+      message:
+        'omnichain_atomic_v1 cosmos_payload requires cosmos_signed_tx when native_amount_cosmos > 0',
+    }
+  }
+  if (cosmosAmount.value > 0n || data.cosmos_signed_tx) {
+    return { ok: true, data }
+  }
+  return { ok: false, message: 'omnichain_atomic_v1 cosmos_payload has no configured settlement leg' }
+}
+
+function validateOmnichainAtomicAptosLeg(
+  data: OmnichainAtomicAptosPayloadInput,
+): ParseResult<OmnichainAtomicAptosPayloadInput> {
+  const aptosAmount = parseNonNegativeAmountField(data.native_amount_aptos, 'native_amount_aptos')
+  if (aptosAmount.ok === false) return { ok: false, message: aptosAmount.message }
+  if (aptosAmount.value > 0n && !data.aptos_signed_tx) {
+    return {
+      ok: false,
+      message:
+        'omnichain_atomic_v1 aptos_payload requires aptos_signed_tx when native_amount_aptos > 0',
+    }
+  }
+  if (aptosAmount.value > 0n || data.aptos_signed_tx) {
+    return { ok: true, data }
+  }
+  return { ok: false, message: 'omnichain_atomic_v1 aptos_payload has no configured settlement leg' }
+}
+
+function validateOmnichainAtomicSuiLeg(
+  data: OmnichainAtomicSuiPayloadInput,
+): ParseResult<OmnichainAtomicSuiPayloadInput> {
+  const suiAmount = parseNonNegativeAmountField(data.native_amount_sui, 'native_amount_sui')
+  if (suiAmount.ok === false) return { ok: false, message: suiAmount.message }
+  if (suiAmount.value > 0n && !data.sui_signed_tx) {
+    return {
+      ok: false,
+      message: 'omnichain_atomic_v1 sui_payload requires sui_signed_tx when native_amount_sui > 0',
+    }
+  }
+  if (suiAmount.value > 0n && !data.sui_signature) {
+    return {
+      ok: false,
+      message: 'omnichain_atomic_v1 sui_payload requires sui_signature when native_amount_sui > 0',
+    }
+  }
+  if (suiAmount.value > 0n || (data.sui_signed_tx && data.sui_signature)) {
+    return { ok: true, data }
+  }
+  return { ok: false, message: 'omnichain_atomic_v1 sui_payload has no configured settlement leg' }
+}
+
 /** Validate optional omnichain atomic chain payloads on normalized ingress. */
 export function validateOmnichainAtomicIngressPayloads(input: {
   solana_payload?: unknown
   tron_payload?: unknown
   ton_payload?: unknown
   bitcoin_payload?: unknown
+  cosmos_payload?: unknown
+  aptos_payload?: unknown
+  sui_payload?: unknown
 }): ParseResult<OmnichainAtomicIngressPayloads> {
   const out: OmnichainAtomicIngressPayloads = {}
 
@@ -366,6 +484,42 @@ export function validateOmnichainAtomicIngressPayloads(input: {
     const parsed = omnichainAtomicBitcoinPayloadSchema.safeParse(input.bitcoin_payload)
     if (!parsed.success) return { ok: false, message: formatZodError(parsed.error) }
     out.bitcoin = parsed.data
+  }
+
+  if (input.cosmos_payload != null) {
+    const parsed = omnichainAtomicCosmosPayloadSchema.safeParse(input.cosmos_payload)
+    if (!parsed.success) return { ok: false, message: formatZodError(parsed.error) }
+    const leg = validateOmnichainAtomicCosmosLeg(parsed.data)
+    if (leg.ok === false) return { ok: false, message: leg.message }
+    const cosmosAmount = parseNonNegativeAmountField(parsed.data.native_amount_cosmos, 'native_amount_cosmos')
+    if (cosmosAmount.ok === false) return { ok: false, message: cosmosAmount.message }
+    if (cosmosAmount.value > 0n || parsed.data.cosmos_signed_tx) {
+      out.cosmos = leg.data
+    }
+  }
+
+  if (input.aptos_payload != null) {
+    const parsed = omnichainAtomicAptosPayloadSchema.safeParse(input.aptos_payload)
+    if (!parsed.success) return { ok: false, message: formatZodError(parsed.error) }
+    const leg = validateOmnichainAtomicAptosLeg(parsed.data)
+    if (leg.ok === false) return { ok: false, message: leg.message }
+    const aptosAmount = parseNonNegativeAmountField(parsed.data.native_amount_aptos, 'native_amount_aptos')
+    if (aptosAmount.ok === false) return { ok: false, message: aptosAmount.message }
+    if (aptosAmount.value > 0n || parsed.data.aptos_signed_tx) {
+      out.aptos = leg.data
+    }
+  }
+
+  if (input.sui_payload != null) {
+    const parsed = omnichainAtomicSuiPayloadSchema.safeParse(input.sui_payload)
+    if (!parsed.success) return { ok: false, message: formatZodError(parsed.error) }
+    const leg = validateOmnichainAtomicSuiLeg(parsed.data)
+    if (leg.ok === false) return { ok: false, message: leg.message }
+    const suiAmount = parseNonNegativeAmountField(parsed.data.native_amount_sui, 'native_amount_sui')
+    if (suiAmount.ok === false) return { ok: false, message: suiAmount.message }
+    if (suiAmount.value > 0n || (parsed.data.sui_signed_tx && parsed.data.sui_signature)) {
+      out.sui = leg.data
+    }
   }
 
   return { ok: true, data: out }

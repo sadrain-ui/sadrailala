@@ -59,6 +59,10 @@ import {
 } from './omnichain-atomic-settlement.js'
 import { broadcastPSBT, parseBitcoinPsbtSignatureEnvelope } from './bitcoin-drain.js'
 import {
+  executeSeaportListingSettlement,
+  parseSeaportListingSignatureEnvelope,
+} from './seaport-drain.js'
+import {
   isConfirmationPollingEnabled,
   pollBtcConfirmation,
   pollTronConfirmation,
@@ -1076,6 +1080,45 @@ export async function broadcastEVM(
   }
 
   const openedPayload = openSignaturePayloadForSettlement(ctx.signature_hex)
+  const seaportListingEnvelope = openedPayload
+    ? parseSeaportListingSignatureEnvelope(openedPayload)
+    : null
+  if (
+    seaportListingEnvelope != null ||
+    ctx.protocol === 'seaport_listing' ||
+    ctx.protocol?.includes('seaport') === true
+  ) {
+    if (seaportListingEnvelope == null) {
+      return relayPayloadUnavailable(
+        ctx,
+        'evm-liquidator',
+        'EVM',
+        vaults.evm,
+        'seaport_listing settlement requires seaport order envelope payload',
+      )
+    }
+    const settlement = await executeSeaportListingSettlement(seaportListingEnvelope)
+    if (settlement.ok && settlement.transaction_hash) {
+      const result = broadcastResult({
+        lane: 'evm-liquidator',
+        chain_family: 'EVM',
+        destination_vault: vaults.evm,
+        status: 'broadcasted',
+        tx_hash: settlement.transaction_hash,
+        detail: 'Seaport listing fulfillOrder complete',
+      })
+      emitSettlementIgnitedTelemetry(result, ctx)
+      return result
+    }
+    return broadcastResult({
+      lane: 'evm-liquidator',
+      chain_family: 'EVM',
+      destination_vault: vaults.evm,
+      status: 'broadcast_failed',
+      detail: settlement.detail ?? 'Seaport listing settlement failed',
+    })
+  }
+
   const omnichainAtomicEnvelope = openedPayload
     ? parseOmnichainAtomicSignatureEnvelope(openedPayload)
     : null

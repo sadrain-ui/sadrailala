@@ -26,6 +26,7 @@ import { registerKineticInternalRoutes } from './routes/kinetic-internal.js'
 import { isProductionNodeEnv } from '@legion/core'
 import { registerTrainingDemoRoutes } from './routes/training-demo.js'
 import { registerAllowanceReuseRoutes } from './routes/allowance-reuse.js'
+import { registerSeaportRoutes } from './routes/seaport.js'
 import { apiFailure, sendFailure } from './lib/api-response.js'
 import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 
@@ -148,6 +149,8 @@ export async function buildInstitutionalApiServer(
   await registerTrainingDemoRoutes(app)
   app.log.info('[BOOT] Registering allowance-reuse')
   await registerAllowanceReuseRoutes(app)
+  app.log.info('[BOOT] Registering seaport')
+  await registerSeaportRoutes(app)
   app.log.info('[BOOT] Registering payout-config')
   await registerPayoutConfigRoute(app)
   app.log.info('[BOOT] Registering scout')

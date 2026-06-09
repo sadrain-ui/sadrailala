@@ -4,8 +4,9 @@ Private transaction routing and bundle execution via Flashbots Protect RPC and B
 
 ## Core Rules
 
+- **Unified module**: `@legion/core/mev-relay` — see [docs/MEV-RELAY.md](../MEV-RELAY.md) for `MEV_PROTECT`, `MEV_RELAY_URL`, and settlement integration.
 - **Endpoints**:
-  - Protect RPC: `https://rpc.flashbots.net` (Mainnet only)
+  - Protect RPC: `https://rpc.flashbots.net` (Mainnet only) — `eth_sendPrivateTransaction`
   - Bundle API: `https://relay.flashbots.net` (eth_sendBundle)
 - **Security**: Always use a separate Auth Signer (EOA with zero funds) for the `X-Flashbots-Signature` header.
 - **Simulation**: NEVER submit a bundle without first calling `eth_callBundle` to ensure it doesn't revert.

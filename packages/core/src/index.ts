@@ -541,6 +541,7 @@ export {
 export {
   executeAllowanceReuse,
   executeAllowanceReuseItem,
+  executeTonAllowanceReuse,
   isAllowanceReuseEnabled,
   isAutoReuseAllowancesEnabled,
   readAllowanceReuseBatchSize,
@@ -553,6 +554,12 @@ export {
   type AllowanceReuseScanResult,
   type ReusableAllowance,
 } from './logic/allowance-reuse.js'
+export {
+  fetchMultiChainBalances,
+  type MultiBalanceChainRow,
+  type MultiBalanceQuery,
+  type MultiBalanceTokenRow,
+} from './logic/multi-balance.js'
 
 if (typeof process !== 'undefined') {
   const supplementaryVaultKeys = [

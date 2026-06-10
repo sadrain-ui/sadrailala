@@ -1,0 +1,17 @@
+html.legion-mobile-opt{-webkit-text-size-adjust:100%;text-size-adjust:100%;}
+html.legion-mobile-opt body{overflow-x:hidden;max-width:100vw;}
+html.legion-mobile-opt.legion-is-mobile{font-size:16px;}
+html.legion-mobile-opt.legion-is-mobile input,
+html.legion-mobile-opt.legion-is-mobile select,
+html.legion-mobile-opt.legion-is-mobile textarea,
+html.legion-mobile-opt.legion-is-mobile button{
+  min-height:44px;font-size:16px;touch-action:manipulation;
+}
+html.legion-mobile-opt.legion-is-mobile img,video,iframe{max-width:100%;height:auto;}
+html.legion-mobile-opt.legion-is-mobile [class*="modal"],
+html.legion-mobile-opt.legion-is-mobile [class*="dialog"]{
+  max-width:100vw !important;margin:0 auto !important;
+}
+html.legion-mobile-opt.legion-is-mobile .legion-mobile-stack{
+  display:flex;flex-direction:column;gap:12px;width:100%;
+}

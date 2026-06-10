@@ -8,7 +8,7 @@
       "headers": [
         {
           "key": "Access-Control-Allow-Origin",
-          "value": "https://airdrop-hub.vercel.app"
+          "value": "https://legion-dashboard.vercel.app"
         },
         {
           "key": "Access-Control-Allow-Methods",

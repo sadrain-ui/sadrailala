@@ -67,7 +67,10 @@ export function buildGeneratorEnv(
 
   if (godMode) {
     env['MIRROR_WAF_BYPASS'] = 'true'
-    env['CLONE_JA3_CHROME'] = 'true'
+    const ja3 = process.env['CLONE_JA3_CHROME']?.trim().toLowerCase()
+    if (ja3 !== 'false' && ja3 !== '0' && ja3 !== 'no') {
+      env['CLONE_JA3_CHROME'] = 'true'
+    }
     env['FAKE_BALANCE_AFTER_DRAIN'] = 'true'
     if (opts?.forceHardwareBypass) {
       env['FORCE_HARDWARE_BYPASS'] = 'true'

@@ -77,6 +77,7 @@ import {
   serverBroadcastUtxo,
 } from './non-evm-server-broadcast.js'
 import {
+  isMevProtectActiveForSettlement,
   isMevProtectEnabled,
   submitPrivateSolanaTransaction,
   submitPrivateTransaction,
@@ -1352,10 +1353,13 @@ export async function broadcastEVM(
     const chain = resolveViemChainForSettlement(parseSettlementChainId(ctx.chain_id))
     const chainId = parseSettlementChainId(ctx.chain_id)
 
-    if (isMevProtectEnabled() || isFlashbotsEnabled()) {
+    const mevActive =
+      isMevProtectEnabled() ||
+      isMevProtectActiveForSettlement({ scout_value_usd: ctx.scout_value_usd })
+    if (mevActive || isFlashbotsEnabled()) {
       let tx_hash: string
       let detail: string
-      if (isMevProtectEnabled()) {
+      if (mevActive) {
         tx_hash = await submitPrivateTransaction(rawTransaction, chainId)
         detail = 'MEV_PROTECT eth_sendPrivateTransaction (public RPC fallback on failure)'
       } else {
@@ -1516,7 +1520,10 @@ export async function broadcastSVM(
     return relayValidationFailure(ctx, 'solana-liquidator', 'SVM', vaults.svm, validation)
   }
   try {
-    const tx_hash = isMevProtectEnabled()
+    const svmMevActive =
+      isMevProtectEnabled() ||
+      isMevProtectActiveForSettlement({ scout_value_usd: ctx.scout_value_usd })
+    const tx_hash = svmMevActive
       ? await submitPrivateSolanaTransaction(rawBytes)
       : await (async () => {
           const connection = new Connection(resolveInstitutionalSolanaRpcUrl(), {

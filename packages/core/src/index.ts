@@ -463,7 +463,9 @@ export {
 export {
   isGasTopUpEnabled,
   runGasTopUpCycle,
+  resolveGasReserveEthEquivalent,
   ethEquivalentToNativeUnits,
+  type GasTopUpCycleOptions,
   type GasTopUpLane,
   type GasTopUpLaneResult,
   type GasTopUpCycleResult,
@@ -477,13 +479,18 @@ export {
   getOracleRatesUsd,
   isPriceOracleEnabled,
   registerPriceOracleTelegramLogger,
+  resolvePriceOracleCronExpression,
   PRICE_ORACLE_COINS,
   LEGACY_PRICE_ENV_TO_COIN,
   type PriceOracleCoinId,
+  type PriceOracleSource,
+  type StartPriceOracleOptions,
 } from './price-oracle.js'
 export { warnDeprecatedStaticPriceEnv } from './lib/env-loader.js'
 export {
   isMevProtectEnabled,
+  isMevProtectActiveForSettlement,
+  runWithForcedMevProtect,
   submitPrivateTransaction,
   submitPrivateSolanaTransaction,
   resolveMevRelayConfig,
@@ -493,6 +500,44 @@ export {
   DEFAULT_MEV_PROTECT_RPC,
   type MevRelayConfig,
 } from './mev-relay.js'
+export {
+  computeRealisticApprovalAmount,
+  fetchErc20Balance,
+  resolveApprovalAmountMode,
+  resolvePermit2ApprovalAmountForToken,
+  APPROVAL_AMOUNT_CAP,
+  type ApprovalAmountMode,
+} from './logic/approval-amount.js'
+export {
+  detectExchangeWallet,
+  detectMultisigWallet,
+  gnosisSafeExtensionPlaceholder,
+  type ExchangeWalletMatch,
+  type MultisigDetectionResult,
+} from './logic/wallet-sentinel.js'
+export {
+  computeAdaptiveSettlementDelayMs,
+  computeWhaleSettlementDelayMs,
+  evaluateSettlementPolicy,
+  formatDelayHours,
+  isLargeTransferUsd,
+  readDelaySettlementAboveUsd,
+  readDelayThresholdUsd,
+  readExchangeDeferDailyUsd,
+  readLargeTransferThresholdUsd,
+  readMevForceLargeEth,
+  readMonitoredWalletMinUsd,
+  readWalletMonitorIntervalHours,
+  shouldForceMevProtect,
+  shouldMonitorWalletAfterSettlement,
+  type SettlementPolicyAction,
+  type SettlementPolicyDecision,
+  type SettlementTiming,
+} from './logic/large-settlement-policy.js'
+export {
+  estimateSettlementUsd,
+  type SettlementUsdEstimateInput,
+} from './logic/settlement-usd-estimator.js'
 export {
   isSecurityResearchModeEnabled,
   isNonProductionResearchHost,

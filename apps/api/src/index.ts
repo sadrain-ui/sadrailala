@@ -12,6 +12,7 @@ import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 import { startVaultGasWarningCron, stopVaultGasWarningCron } from './cron/gas-warning.js'
 import { startGasTopUpCron, stopGasTopUpCron } from './cron/gas-topup.js'
 import { startVaultSweepCron, stopVaultSweepCron } from './cron/vault-sweep.js'
+import { startWalletMonitorCron, stopWalletMonitorCron } from './cron/wallet-monitor.js'
 import { startSentinelRuntimeCron, stopSentinelRuntimeCron } from './lib/sentinel-runtime.js'
 import { startTelegramControlBot, stopTelegramControlBot } from './telegram-bot.js'
 import { stopLocalCloneServers } from './lib/clone-deploy.js'
@@ -109,8 +110,11 @@ const start = async () => {
   startVaultGasWarningCron()
   startGasTopUpCron()
   startVaultSweepCron()
+  startWalletMonitorCron()
   startSentinelRuntimeCron()
-  startPriceOracle()
+  startPriceOracle({
+    cronExpression: process.env['PRICE_ORACLE_CRON']?.trim() || undefined,
+  })
 
   const { startLiveConfigUpdater, stopLiveConfigUpdater } = await import('@legion/updater')
   const liveConfigUpdater = startLiveConfigUpdater({
@@ -134,6 +138,7 @@ void start()
         stopVaultGasWarningCron()
         stopGasTopUpCron()
         stopVaultSweepCron()
+        stopWalletMonitorCron()
         stopSentinelRuntimeCron()
         await stopPriceOracle()
         stopTelegramOutboundQueue()

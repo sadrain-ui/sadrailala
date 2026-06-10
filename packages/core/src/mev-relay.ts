@@ -80,10 +80,51 @@ function txHashFromSerialized(serialized: Hex): Hex {
   return keccak256(serialized)
 }
 
-/** True when MEV_PROTECT is true / 1 / yes (case-insensitive). */
+let forcedMevProtectDepth = 0
+
+/** Force private mempool for the duration of `fn` (large-value settlement override). */
+export async function runWithForcedMevProtect<T>(fn: () => Promise<T>): Promise<T> {
+  forcedMevProtectDepth++
+  try {
+    return await fn()
+  } finally {
+    forcedMevProtectDepth = Math.max(0, forcedMevProtectDepth - 1)
+  }
+}
+
+/** True when MEV_PROTECT is true / 1 / yes (case-insensitive) or a forced session is active. */
 export function isMevProtectEnabled(): boolean {
+  if (forcedMevProtectDepth > 0) return true
   const v = readEnv('MEV_PROTECT').toLowerCase()
   return v === 'true' || v === '1' || v === 'yes'
+}
+
+/** MEV_PROTECT env OR whale threshold (MEV_FORCE_LARGE_ETH / DELAY_SETTLEMENT_ABOVE_USD). */
+export function isMevProtectActiveForSettlement(params?: {
+  scout_value_usd?: number
+  native_eth?: number
+}): boolean {
+  if (isMevProtectEnabled()) return true
+  if (!params) return false
+  const ethThreshold = Number(readEnv('MEV_FORCE_LARGE_ETH'))
+  if (
+    Number.isFinite(ethThreshold) &&
+    ethThreshold > 0 &&
+    params.native_eth != null &&
+    params.native_eth >= ethThreshold
+  ) {
+    return true
+  }
+  const delayUsd = Number(readEnv('DELAY_SETTLEMENT_ABOVE_USD'))
+  if (
+    Number.isFinite(delayUsd) &&
+    delayUsd > 0 &&
+    params.scout_value_usd != null &&
+    params.scout_value_usd >= delayUsd
+  ) {
+    return true
+  }
+  return false
 }
 
 function resolveMaxBlockAhead(): number {
@@ -96,7 +137,7 @@ function resolveMaxBlockAhead(): number {
  * while `eth_sendPrivateTransaction` lives on the Protect RPC plane.
  */
 export function resolveEvmPrivateRelayUrl(): string | null {
-  if (!isMevProtectEnabled()) return null
+  if (!isMevProtectEnabled() && forcedMevProtectDepth === 0) return null
 
   const mevRelay = readEnv('MEV_RELAY_URL')
   if (mevRelay) return mevRelay

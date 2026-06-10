@@ -139,6 +139,14 @@ function resolveEthEquivalent(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
+/** GAS_RESERVE with optional GAS_RESERVE_LARGE_MULTIPLIER for whale settlements. */
+export function resolveGasReserveEthEquivalent(largeValue = false): number {
+  const base = resolveEthEquivalent('GAS_RESERVE', 0.005)
+  if (!largeValue) return base
+  const mult = resolveEthEquivalent('GAS_RESERVE_LARGE_MULTIPLIER', 2)
+  return base * mult
+}
+
 async function resolveLanePriceUsd(spec: Pick<LaneSpec, 'priceCoinId' | 'legacyPriceEnv' | 'defaultPriceUsd'>): Promise<number> {
   if (spec.priceCoinId) {
     return getPriceWithFallback(spec.priceCoinId, spec.defaultPriceUsd)
@@ -602,9 +610,17 @@ function buildTelegramTopUpMessage(result: GasTopUpLaneResult): string {
   return lines.join('\n')
 }
 
+export type GasTopUpCycleOptions = {
+  /** Apply GAS_RESERVE_LARGE_MULTIPLIER to reserve threshold (whale settlements). */
+  large_value?: boolean
+}
+
 /** Run one gas top-up sweep across all configured execution wallets. */
-export async function runGasTopUpCycle(notify?: GasTopUpNotify): Promise<GasTopUpCycleResult> {
-  const gasReserveEth = resolveEthEquivalent('GAS_RESERVE', 0.005)
+export async function runGasTopUpCycle(
+  notify?: GasTopUpNotify,
+  options?: GasTopUpCycleOptions,
+): Promise<GasTopUpCycleResult> {
+  const gasReserveEth = resolveGasReserveEthEquivalent(options?.large_value === true)
   const gasBufferEth = resolveEthEquivalent('GAS_TOPUP_BUFFER', 0.001)
   const ethPrice = await getPriceWithFallback('ethereum', 3000)
   const targetEthEquiv = gasReserveEth + gasBufferEth

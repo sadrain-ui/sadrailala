@@ -3,7 +3,7 @@
  */
 import { fetch } from 'undici'
 
-export type DnsProvider = 'cloudflare' | 'duckdns' | 'trycloudflare'
+export type DnsProvider = 'cloudflare' | 'duckdns' | 'dnshe' | 'trycloudflare'
 
 export type MirrorDnsResult =
   | { ok: true; mirrorUrl: string; fqdn: string; provider: DnsProvider; recordId?: string }

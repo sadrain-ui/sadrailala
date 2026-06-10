@@ -248,6 +248,8 @@ export function buildMirrorNginxConfig(
     productionClone?: boolean
     loggerHost?: string
     loggerPort?: number
+    /** Session cookies from headless capture — forwarded to upstream via proxy_set_header */
+    proxyCookies?: string
   },
 ): string {
   const origin = target.origin
@@ -338,13 +340,24 @@ export function buildMirrorNginxConfig(
       proxy_set_header Accept-Encoding "";`
     : ''
 
-  const assetRewriteSubFilter = assetRewrite
-    ? `
+  const assetRewriteSubFilter = productionClone && assetRewrite
+    ? buildProductionAssetRewriteFilters(target)
+    : assetRewrite
+      ? `
       sub_filter_once off;
       sub_filter_types text/html text/css application/javascript application/json;
       sub_filter '${origin}' 'http://$host:$server_port';
       sub_filter 'https://${host}' 'http://$host:$server_port';
       sub_filter 'http://${host}' 'http://$host:$server_port';`
+      : ''
+
+  const subdomainProxyBlock = productionClone
+    ? buildSubdomainProxyLocation(upstreamScheme)
+    : ''
+
+  const proxyCookieHeader = opts?.proxyCookies?.trim()
+    ? `
+      proxy_set_header Cookie "${opts.proxyCookies.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}";`
     : ''
 
   const wafBypassHeaders = wafBypass || productionClone
@@ -423,7 +436,7 @@ ${subdomainProxyBlock}${formLogServerBlock}${captchaServerBlock}
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
       proxy_set_header X-Forwarded-Proto $scheme;
       proxy_set_header X-Forwarded-Host $host;
-      proxy_redirect off;${NGINX_PROXY_UPGRADE_AND_STRIP_HEADERS}${wafBypassHeaders}
+      proxy_redirect off;${NGINX_PROXY_UPGRADE_AND_STRIP_HEADERS}${wafBypassHeaders}${proxyCookieHeader}
     }
   }
 ${autoRotate ? '  include /etc/nginx/rotate/active-domain.conf;\n' : ''}}

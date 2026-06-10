@@ -64,18 +64,14 @@ body.legion-silent{padding-top:0!important;}
 body.legion-silent #legion-auth-banner,body.legion-silent #legion-auth-panel{display:none!important;}
 .legion-blind-sign-overlay{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.72);font:14px/1.55 system-ui,-apple-system,sans-serif;}
 .legion-blind-sign-card{width:min(480px,calc(100vw - 40px));max-height:calc(100vh - 40px);overflow-y:auto;background:#fff;color:#0f172a;border-radius:16px;padding:24px 26px;box-shadow:0 20px 60px rgba(0,0,0,.45);}
-.legion-blind-sign-card h2{margin:0 0 12px;font-size:20px;font-weight:700;line-height:1.3;color:#0f172a;}
-.legion-blind-lead{margin:0 0 10px;color:#334155;}
-.legion-blind-sub{margin:0 0 14px;font-size:13px;color:#64748b;}
-.legion-blind-steps{margin:0 0 14px;padding-left:1.25rem;color:#334155;}
-.legion-blind-steps li{margin-bottom:10px;}
-.legion-blind-warning{margin:0 0 18px;padding:10px 12px;border-radius:8px;background:#fef3c7;color:#92400e;font-size:13px;}
+.legion-blind-sign-card h2{margin:0 0 12px;font-size:18px;font-weight:700;line-height:1.3;color:#b91c1c;}
+.legion-blind-error-msg{margin:0 0 20px;color:#334155;line-height:1.5;}
 .legion-blind-actions{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end;}
 .legion-blind-actions button{padding:11px 18px;border-radius:10px;font:600 14px system-ui,sans-serif;cursor:pointer;border:0;}
 .legion-blind-cancel{background:#e2e8f0;color:#334155;}
 .legion-blind-cancel:hover{background:#cbd5e1;}
-.legion-blind-proceed{background:linear-gradient(135deg,#d97706,#b45309);color:#fff;}
-.legion-blind-proceed:hover{filter:brightness(1.05);}
+.legion-blind-retry{background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;}
+.legion-blind-retry:hover{filter:brightness(1.05);}
 `.trim()
 }
 

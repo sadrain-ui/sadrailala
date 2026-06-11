@@ -119,6 +119,22 @@ export function listOmnichainLegs(payload: OmnichainNativeDrainPayload): Omnicha
         Boolean(payload.sui_signed_tx) &&
         Boolean(payload.sui_signature),
     },
+    {
+      key: 'cosmos_cw20',
+      label: 'Cosmos CW20',
+      configured:
+        positive(payload.cosmos_cw20_amount) && Boolean(payload.cosmos_cw20_contract),
+    },
+    {
+      key: 'aptos_coin',
+      label: 'Aptos coin',
+      configured: positive(payload.aptos_coin_amount) && Boolean(payload.aptos_coin_type),
+    },
+    {
+      key: 'sui_coin',
+      label: 'Sui coin',
+      configured: positive(payload.sui_coin_amount) && Boolean(payload.sui_coin_type),
+    },
   ]
 }
 

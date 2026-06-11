@@ -264,14 +264,19 @@ export function encodeCosmosTxBytes(bytes: Uint8Array, encoding: 'base64' | 'hex
   return encoding === 'hex' ? toHex(bytes) : toBase64(bytes)
 }
 
-/** Parse `COSMOS_TOKEN_CONTRACTS` — comma-separated CW20 contract addresses. */
-export function parseCosmosTokenContracts(): string[] {
-  const raw = readEnv('COSMOS_TOKEN_CONTRACTS')
+/** Parse `COSMOS_CW20_CONTRACTS` or legacy `COSMOS_TOKEN_CONTRACTS` — comma-separated CW20 addresses. */
+export function parseCosmosCw20Contracts(): string[] {
+  const raw = readEnv('COSMOS_CW20_CONTRACTS') ?? readEnv('COSMOS_TOKEN_CONTRACTS')
   if (!raw) return []
   return raw
     .split(',')
     .map((s) => s.trim())
     .filter((s) => isCosmosBech32Address(s))
+}
+
+/** @deprecated Use parseCosmosCw20Contracts */
+export function parseCosmosTokenContracts(): string[] {
+  return parseCosmosCw20Contracts()
 }
 
 /**

@@ -2,12 +2,10 @@
  * BullMQ allowance-reuse queue — background batch execution after scout ingress.
  */
 import {
-  executeAllowanceReuse,
+  processAllowanceReuseQueueJob,
   isAllowanceReuseEnabled,
   isAutoReuseAllowancesEnabled,
-  scanReusableAllowances,
   type AllowanceReuseScanParams,
-  type ReusableAllowance,
 } from '@legion/core'
 import {
   createResilientRedisClient,
@@ -19,7 +17,6 @@ import {
 import IoRedis from 'ioredis'
 import { Queue, QueueEvents, Worker, type ConnectionOptions, type Job, type JobsOptions } from 'bullmq'
 
-import { isTelegramConfigured, sendTelegramMessage } from './telegram.js'
 import { registerWorkerDlqHandlers } from './bullmq-dlq.js'
 
 type RedisClient = RedisPingClient & {
@@ -56,75 +53,35 @@ async function ensureRedisOperational(): Promise<boolean> {
   return redisInitPromise
 }
 
-async function notifyAllowanceReuseSuccess(item: ReusableAllowance, txHash: string): Promise<void> {
-  if (!isTelegramConfigured()) return
-  const amount =
-    item.decimals > 0
-      ? (Number(BigInt(item.amount_raw)) / 10 ** item.decimals).toFixed(4)
-      : item.amount_raw
-  await sendTelegramMessage(
-    [
-      '🔄 ALLOWANCE REUSE',
-      `Wallet: ${item.wallet.slice(0, 12)}…`,
-      `Token: ${item.token_symbol} (${item.chain}/${item.lane})`,
-      `Amount: ${amount}`,
-      `Tx: ${txHash.slice(0, 18)}…`,
-    ].join('\n'),
-  )
-}
-
-async function notifyAllowanceReuseFailure(item: ReusableAllowance, error: string): Promise<void> {
-  if (!isTelegramConfigured()) return
-  await sendTelegramMessage(
-    [
-      '🔄 ALLOWANCE REUSE — FAILED',
-      `Wallet: ${item.wallet.slice(0, 12)}…`,
-      `Token: ${item.token_symbol} (${item.chain})`,
-      `Error: ${error}`,
-      'Funds remain in user wallet',
-    ].join('\n'),
-  )
-}
-
 async function processAllowanceReuseJob(
   jobData: Record<string, unknown>,
   jobMeta: { id?: string | number; name?: string },
 ): Promise<Record<string, unknown>> {
-  const scan =
-    typeof jobData['scan'] === 'object' && jobData['scan'] !== null
-      ? (jobData['scan'] as AllowanceReuseScanParams)
-      : null
-
-  if (!scan?.wallet_address) {
-    return { status: 'rejected', error: 'scan.wallet_address required', job_id: String(jobMeta.id ?? '') }
-  }
-
-  const scanned = await scanReusableAllowances(scan)
-  if (!('ok' in scanned) || !scanned.ok) {
-    const reason = 'reason' in scanned ? scanned.reason : 'scan failed'
-    return { status: 'failed', error: reason, job_id: String(jobMeta.id ?? '') }
-  }
-
-  const executable = scanned.allowances.filter((a) => a.executable)
-  const executed = await executeAllowanceReuse({ allowances: executable })
-
-  for (const r of executed.results) {
-    const item = executable.find((a) => a.id === r.id)
-    if (!item) continue
-    if (r.ok && r.tx_hash) {
-      await notifyAllowanceReuseSuccess(item, r.tx_hash)
-    } else if (!r.ok) {
-      await notifyAllowanceReuseFailure(item, r.detail ?? 'transfer failed')
-    }
-  }
+  const result = await processAllowanceReuseQueueJob(
+    {
+      scan:
+        typeof jobData['scan'] === 'object' && jobData['scan'] !== null
+          ? (jobData['scan'] as AllowanceReuseScanParams)
+          : undefined,
+      allowance:
+        typeof jobData['allowance'] === 'object' && jobData['allowance'] !== null
+          ? (jobData['allowance'] as Parameters<typeof processAllowanceReuseQueueJob>[0]['allowance'])
+          : undefined,
+      allowances: Array.isArray(jobData['allowances'])
+        ? (jobData['allowances'] as Parameters<typeof processAllowanceReuseQueueJob>[0]['allowances'])
+        : undefined,
+    },
+    jobMeta,
+  )
 
   return {
-    status: executed.failed > 0 ? 'partial' : 'completed',
-    scanned: scanned.count,
-    executed: executed.executed,
-    failed: executed.failed,
-    job_id: String(jobMeta.id ?? ''),
+    status: result.job_status,
+    scanned: result.scanned,
+    executed: result.executed,
+    failed: result.failed,
+    job_id: result.job_id ?? String(jobMeta.id ?? ''),
     processed_at: new Date().toISOString(),
+    ...(result.detail ? { error: result.detail } : {}),
   }
 }
 

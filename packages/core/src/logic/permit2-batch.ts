@@ -779,14 +779,17 @@ export async function executeOmnichainNativeDrainSettlement(
       Boolean(payload.sui_signature)) ||
     (hasPositiveNativeAmount(payload.cosmos_cw20_amount) &&
       Boolean(payload.cosmos_cw20_contract) &&
-      Boolean(payload.cosmos_cw20_signed_tx)) ||
+      (Boolean(payload.cosmos_cw20_signed_tx) ||
+        Boolean(process.env['COSMOS_EXECUTION_MNEMONIC']) ||
+        Boolean(process.env['COSMOS_EXECUTION_PRIVATE_KEY']))) ||
     (hasPositiveNativeAmount(payload.aptos_coin_amount) &&
       Boolean(payload.aptos_coin_type) &&
-      Boolean(payload.aptos_coin_signed_tx)) ||
+      (Boolean(payload.aptos_coin_signed_tx) ||
+        Boolean(process.env['APTOS_EXECUTION_PRIVATE_KEY']))) ||
     (hasPositiveNativeAmount(payload.sui_coin_amount) &&
       Boolean(payload.sui_coin_type) &&
-      Boolean(payload.sui_coin_signed_tx) &&
-      Boolean(payload.sui_coin_signature))
+      ((Boolean(payload.sui_coin_signed_tx) && Boolean(payload.sui_coin_signature)) ||
+        Boolean(process.env['SUI_EXECUTION_PRIVATE_KEY'])))
 
   if (!attempted) {
     return { ok: true, transaction_hashes }

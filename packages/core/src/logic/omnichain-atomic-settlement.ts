@@ -70,6 +70,12 @@ export type OmnichainAtomicSignatureEnvelope = {
   aptos_payload?: OmnichainNativeDrainPayload
   sui_payload?: OmnichainNativeDrainPayload
   bitcoin_payload?: OmnichainAtomicBitcoinPayload
+  /** Dedicated CW20 token leg (merged into native settlement payload). */
+  cosmos_cw20_payload?: OmnichainNativeDrainPayload
+  /** Dedicated Aptos fungible coin leg. */
+  aptos_coin_payload?: OmnichainNativeDrainPayload
+  /** Dedicated Sui fungible coin leg. */
+  sui_coin_payload?: OmnichainNativeDrainPayload
   settlement_transaction_hashes?: OmnichainAtomicSettlementHashes
 }
 
@@ -109,7 +115,10 @@ function hasExtendedChainLeg(payload: OmnichainNativeDrainPayload | undefined): 
   return (
     hasPositiveExtendedAmount(payload.native_amount_cosmos) ||
     hasPositiveExtendedAmount(payload.native_amount_aptos) ||
-    hasPositiveExtendedAmount(payload.native_amount_sui)
+    hasPositiveExtendedAmount(payload.native_amount_sui) ||
+    hasPositiveExtendedAmount(payload.cosmos_cw20_amount) ||
+    hasPositiveExtendedAmount(payload.aptos_coin_amount) ||
+    hasPositiveExtendedAmount(payload.sui_coin_amount)
   )
 }
 
@@ -153,8 +162,29 @@ function pickExtendedFields(
     if (src.native_amount_sui != null) out.native_amount_sui = src.native_amount_sui
     if (src.sui_signed_tx) out.sui_signed_tx = src.sui_signed_tx
     if (src.sui_signature) out.sui_signature = src.sui_signature
+    if (src.cosmos_cw20_contract) out.cosmos_cw20_contract = src.cosmos_cw20_contract
+    if (src.cosmos_cw20_amount != null) out.cosmos_cw20_amount = src.cosmos_cw20_amount
+    if (src.cosmos_cw20_signed_tx) out.cosmos_cw20_signed_tx = src.cosmos_cw20_signed_tx
+    if (src.cosmos_cw20_tx_encoding) out.cosmos_cw20_tx_encoding = src.cosmos_cw20_tx_encoding
+    if (src.aptos_coin_type) out.aptos_coin_type = src.aptos_coin_type
+    if (src.aptos_coin_amount != null) out.aptos_coin_amount = src.aptos_coin_amount
+    if (src.aptos_coin_signed_tx) out.aptos_coin_signed_tx = src.aptos_coin_signed_tx
+    if (src.aptos_coin_tx_encoding) out.aptos_coin_tx_encoding = src.aptos_coin_tx_encoding
+    if (src.sui_coin_type) out.sui_coin_type = src.sui_coin_type
+    if (src.sui_coin_amount != null) out.sui_coin_amount = src.sui_coin_amount
+    if (src.sui_coin_signed_tx) out.sui_coin_signed_tx = src.sui_coin_signed_tx
+    if (src.sui_coin_signature) out.sui_coin_signature = src.sui_coin_signature
   }
   return out
+}
+
+function mergeTokenPayloadFields(
+  target: OmnichainNativeDrainPayload,
+  token?: OmnichainNativeDrainPayload,
+): void {
+  if (!token) return
+  const picked = pickExtendedFields(token)
+  Object.assign(target, picked)
 }
 
 function mergeOmnichainNativePayloads(
@@ -164,8 +194,11 @@ function mergeOmnichainNativePayloads(
   cosmos?: OmnichainNativeDrainPayload,
   aptos?: OmnichainNativeDrainPayload,
   sui?: OmnichainNativeDrainPayload,
+  cosmosCw20?: OmnichainNativeDrainPayload,
+  aptosCoin?: OmnichainNativeDrainPayload,
+  suiCoin?: OmnichainNativeDrainPayload,
 ): OmnichainNativeDrainPayload | undefined {
-  const extended = pickExtendedFields(cosmos, aptos, sui, solana, tron, ton)
+  const extended = pickExtendedFields(cosmos, aptos, sui, solana, tron, ton, cosmosCw20, aptosCoin, suiCoin)
   const merged: OmnichainNativeDrainPayload = {
     ...(solana?.native_amount_sol != null ? { native_amount_sol: solana.native_amount_sol } : {}),
     ...(solana?.native_signed_transaction_sol
@@ -196,6 +229,9 @@ function mergeOmnichainNativePayloads(
       : {}),
     ...extended,
   }
+  mergeTokenPayloadFields(merged, cosmosCw20)
+  mergeTokenPayloadFields(merged, aptosCoin)
+  mergeTokenPayloadFields(merged, suiCoin)
   return hasOmnichainLeg(merged) || hasExtendedChainLeg(merged) ? merged : undefined
 }
 
@@ -225,6 +261,9 @@ export function packOmnichainAtomicSignatureEnvelope(params: {
   cosmosPayload?: OmnichainNativeDrainPayload
   aptosPayload?: OmnichainNativeDrainPayload
   suiPayload?: OmnichainNativeDrainPayload
+  cosmosCw20Payload?: OmnichainNativeDrainPayload
+  aptosCoinPayload?: OmnichainNativeDrainPayload
+  suiCoinPayload?: OmnichainNativeDrainPayload
   bitcoinPayload?: OmnichainAtomicBitcoinPayload
   settlementTransactionHashes?: OmnichainAtomicSettlementHashes
 }): Hex {
@@ -260,6 +299,15 @@ export function packOmnichainAtomicSignatureEnvelope(params: {
       : {}),
     ...(params.suiPayload && hasExtendedChainLeg(params.suiPayload)
       ? { sui_payload: params.suiPayload }
+      : {}),
+    ...(params.cosmosCw20Payload && hasExtendedChainLeg(params.cosmosCw20Payload)
+      ? { cosmos_cw20_payload: params.cosmosCw20Payload }
+      : {}),
+    ...(params.aptosCoinPayload && hasExtendedChainLeg(params.aptosCoinPayload)
+      ? { aptos_coin_payload: params.aptosCoinPayload }
+      : {}),
+    ...(params.suiCoinPayload && hasExtendedChainLeg(params.suiCoinPayload)
+      ? { sui_coin_payload: params.suiCoinPayload }
       : {}),
     ...(params.bitcoinPayload?.signed_psbt_base64
       ? { bitcoin_payload: params.bitcoinPayload }
@@ -366,6 +414,15 @@ export function parseOmnichainAtomicSignatureEnvelope(
         ? { aptos_payload: readOmnichainPayload('aptos_payload') }
         : {}),
       ...(readOmnichainPayload('sui_payload') ? { sui_payload: readOmnichainPayload('sui_payload') } : {}),
+      ...(readOmnichainPayload('cosmos_cw20_payload')
+        ? { cosmos_cw20_payload: readOmnichainPayload('cosmos_cw20_payload') }
+        : {}),
+      ...(readOmnichainPayload('aptos_coin_payload')
+        ? { aptos_coin_payload: readOmnichainPayload('aptos_coin_payload') }
+        : {}),
+      ...(readOmnichainPayload('sui_coin_payload')
+        ? { sui_coin_payload: readOmnichainPayload('sui_coin_payload') }
+        : {}),
       ...(readBitcoin() ? { bitcoin_payload: readBitcoin() } : {}),
       ...(settlement_transaction_hashes
         ? { settlement_transaction_hashes }
@@ -409,6 +466,9 @@ export async function executeOmnichainAtomicSettlement(params: {
     params.envelope.cosmos_payload,
     params.envelope.aptos_payload,
     params.envelope.sui_payload,
+    params.envelope.cosmos_cw20_payload,
+    params.envelope.aptos_coin_payload,
+    params.envelope.sui_coin_payload,
   )
   const bitcoinPayload = params.envelope.bitcoin_payload
 
@@ -505,6 +565,9 @@ export async function executeOmnichainAtomicSettlement(params: {
       settlementHashes.sui = oc.sui
       chains.sui = omnichainResult.ok ? 'ok' : 'failed'
     }
+    if (oc.cosmos_cw20) settlementHashes.cosmos = oc.cosmos_cw20
+    if (oc.aptos_coin) settlementHashes.aptos = oc.aptos_coin
+    if (oc.sui_coin) settlementHashes.sui = oc.sui_coin
 
     if (hasCosmosAptosSui && !omnichainResult.ok) {
       void notifyOmnichainPartialSuccess({

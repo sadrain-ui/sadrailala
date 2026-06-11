@@ -1,0 +1,4 @@
+# Fill with your Telegram group ids or @usernames (one per line).
+# Example:
+# -1001234567890
+# @your_public_group

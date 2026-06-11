@@ -31,6 +31,9 @@ const CHALLENGE_BODY_MARKERS = [
   'just a moment',
   'checking your browser',
   'aws-waf',
+  'cf-browser-verification',
+  '_cf_chl',
+  'challenge-form',
 ]
 
 const CHALLENGE_STATUS_CODES = new Set([403, 429, 503])
@@ -39,6 +42,16 @@ const CHALLENGE_EMPTY_MAX_BYTES = 1024
 
 function headerValue(headers: Headers, name: string): string {
   return headers.get(name)?.toLowerCase() ?? ''
+}
+
+function isCloudflareChallengeHeader(headers?: Headers | Record<string, string>): boolean {
+  const hdrs =
+    headers instanceof Headers
+      ? headers
+      : new Headers(headers ?? {})
+  if (headerValue(hdrs, 'cf-mitigated') === 'challenge') return true
+  if (headerValue(hdrs, 'cf-chl-bypass')) return true
+  return false
 }
 
 /** True when the response looks like a WAF / bot challenge (not real page content). */
@@ -55,6 +68,8 @@ export function isChallengeResponse(
     headers instanceof Headers
       ? headers
       : new Headers(headers ?? {})
+
+  if (isCloudflareChallengeHeader(hdrs)) return true
 
   const server = headerValue(hdrs, 'server')
   if (server.includes('cloudflare') && bodyLen < CHALLENGE_EMPTY_MAX_BYTES) return true

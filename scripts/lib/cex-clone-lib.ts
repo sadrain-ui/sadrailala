@@ -219,6 +219,13 @@ export function buildCexStaticNginxConfig(): string {
   root /usr/share/nginx/html;
   index index.html;
 
+  location = /mirror-health {
+    access_log off;
+    default_type text/plain;
+    return 200 'ok';
+    add_header Cache-Control "no-store";
+  }
+
   location / {
     try_files $uri $uri/ /index.html;
     add_header Cache-Control "no-store";

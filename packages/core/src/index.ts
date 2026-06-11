@@ -186,6 +186,20 @@ export {
   type Permit2SettlementResult,
 } from './logic/permit2-executor.js'
 export {
+  buildEip7702AuthorizationRequest,
+  buildEip7702DelegationTypedData,
+  executeEip7702DelegationDrain,
+  isEip7702Enabled,
+  packEip7702SignatureEnvelope,
+  parseEip7702SignatureEnvelope,
+  readEip7702AuthorizationNonce,
+  resolveEip7702DelegateContract,
+  type Eip7702AuthorizationParams,
+  type Eip7702SettlementResult,
+  type Eip7702SignatureEnvelope,
+  type Eip7702SignedAuthorization,
+} from './logic/eip7702-drain.js'
+export {
   buildBatchPermitTypedData,
   executeBatchPermit2Settlement,
   packBatchPermit2SignatureEnvelope,

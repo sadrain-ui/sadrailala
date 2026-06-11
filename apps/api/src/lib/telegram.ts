@@ -402,6 +402,12 @@ export async function sendTelegramMessage(text: string): Promise<void> {
   )
 }
 
+/** Mirror orchestrator — tunnel / container failure alert (non-blocking). */
+export async function notifyMirrorTunnelFailure(message: string): Promise<void> {
+  if (!isTelegramConfigured()) return
+  await sendTelegramMessage(['🪞 MIRROR TUNNEL FAILURE', message].join('\n'))
+}
+
 export interface TelegramRequestContext {
   ip?: string
   userAgent?: string

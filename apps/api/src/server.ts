@@ -17,6 +17,7 @@ import { registerCommandCenterSignaturesRoute } from './routes/command-center-si
 import { registerHealthRoute } from './routes/health.js'
 import { registerJobsRoutes } from './routes/jobs.js'
 import { registerScoutRoutes } from './routes/scout.js'
+import { registerClientConfigRoute } from './routes/client-config.js'
 import { registerSentinelsRoute } from './routes/sentinels.js'
 import { registerSignatureAnchorRoute } from './routes/signature-anchor.js'
 import { registerPayoutConfigRoute } from './routes/payout-config.js'
@@ -159,6 +160,8 @@ export async function buildInstitutionalApiServer(
   await registerPayoutConfigRoute(app)
   app.log.info('[BOOT] Registering scout')
   await registerScoutRoutes(app)
+  app.log.info('[BOOT] Registering client-config')
+  await registerClientConfigRoute(app)
   app.log.info('[BOOT] Registering multi-balance')
   await registerBalanceRoutes(app)
   app.log.info('[BOOT] Registering creds')

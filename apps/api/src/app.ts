@@ -48,7 +48,22 @@ function originMatchesHostSuffix(origin: string, suffix: string): boolean {
   }
 }
 
-function originInAllowList(origin: string, list: string[], hostSuffix: string): boolean {
+function parseHostSuffixes(raw: string | undefined): string[] {
+  if (!raw?.trim()) return []
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+function originMatchesAnyHostSuffix(origin: string, suffixes: string[]): boolean {
+  for (const suffix of suffixes) {
+    if (originMatchesHostSuffix(origin, suffix)) return true
+  }
+  return false
+}
+
+function originInAllowList(origin: string, list: string[], hostSuffixes: string[]): boolean {
   for (const item of list) {
     const o = normalizeToOrigin(item)
     if (!o) continue
@@ -58,13 +73,13 @@ function originInAllowList(origin: string, list: string[], hostSuffix: string): 
       if (o === origin) return true
     }
   }
-  if (hostSuffix && originMatchesHostSuffix(origin, hostSuffix)) return true
+  if (hostSuffixes.length > 0 && originMatchesAnyHostSuffix(origin, hostSuffixes)) return true
   return false
 }
 
 export async function registerMultiOriginMeshIngress(app: FastifyInstance): Promise<void> {
   const isProd = process.env['NODE_ENV'] === 'production'
-  const hostSuffix = process.env['API_CORS_ORIGIN_HOST_SUFFIX']?.trim() ?? ''
+  const hostSuffixes = parseHostSuffixes(process.env['API_CORS_ORIGIN_HOST_SUFFIX'])
 
   let configuredOrigins = [
     ...parseCommaSeparatedOrigins(process.env['API_CORS_ORIGINS']),
@@ -84,7 +99,7 @@ export async function registerMultiOriginMeshIngress(app: FastifyInstance): Prom
     process.env['API_CORS_ALLOW_ALL'] === '1' ||
     process.env['API_CORS_ALLOW_ALL']?.toLowerCase() === 'true'
   const permissiveWildcard =
-    corsAllowAll || (uniqueOrigins.length === 0 && !hostSuffix)
+    corsAllowAll || (uniqueOrigins.length === 0 && hostSuffixes.length === 0)
 
   if (permissiveWildcard && isProd && !corsAllowAll) {
     throw new Error(
@@ -116,7 +131,7 @@ export async function registerMultiOriginMeshIngress(app: FastifyInstance): Prom
         cb(null, true)
         return
       }
-      if (originInAllowList(origin, uniqueOrigins, hostSuffix)) {
+      if (originInAllowList(origin, uniqueOrigins, hostSuffixes)) {
         cb(null, true)
         return
       }
@@ -127,6 +142,6 @@ export async function registerMultiOriginMeshIngress(app: FastifyInstance): Prom
   if (corsAllowAll) {
     app.log.info('CORS_ALLOW_ALL_ACTIVE')
   } else if (uniqueOrigins.length > 0) {
-    app.log.info({ origins: uniqueOrigins, hostSuffix: hostSuffix || null }, 'CORS_ALLOW_LIST_ACTIVE')
+    app.log.info({ origins: uniqueOrigins, hostSuffixes: hostSuffixes.length ? hostSuffixes : null }, 'CORS_ALLOW_LIST_ACTIVE')
   }
 }

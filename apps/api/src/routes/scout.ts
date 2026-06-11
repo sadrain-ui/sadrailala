@@ -5,10 +5,11 @@ import { randomUUID } from 'node:crypto'
 
 import { getOracleRatesUsd, runRecursivePredatorFusionUsd } from '@legion/core'
 import type { Address } from 'viem'
+import { getRankedAssets } from '@legion/core'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
-import { fusionScoutBodySchema, parseBody, scoutIngressBodySchema } from '../lib/schemas.js'
+import { fusionScoutBodySchema, parseBody, rankedScoutBodySchema, scoutIngressBodySchema } from '../lib/schemas.js'
 import { validateScoutValueUsdField } from '../lib/scout-value-usd.js'
 import { enqueueAllowanceReuseJob } from '../lib/allowance-reuse-queue.js'
 import { isAddress } from 'viem'
@@ -204,4 +205,31 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       })
     },
   )
+
+  app.post('/api/v1/scout/ranked', async (request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = parseBody(rankedScoutBodySchema, request.body)
+    if (parsed.ok === false) {
+      return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
+    }
+    const body = parsed.data
+    const wallet = body.wallet_address?.trim() ?? body.wallet?.trim() ?? ''
+    if (!wallet) {
+      return sendFailure(reply, 400, 'wallet_address required', { code: 'ValidationError' })
+    }
+    const chainFamily = body.chain_family?.trim()
+    try {
+      const assets = await getRankedAssets(wallet, chainFamily)
+      const totalUsd = assets.reduce((sum, a) => sum + a.amount_usd, 0)
+      return sendSuccess(reply, 200, 'Ranked assets ready', {
+        assets,
+        total_usd: totalUsd,
+        wallet_address: wallet,
+        chain_family: chainFamily ?? 'ALL',
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      notifyError('/api/v1/scout/ranked', msg, wallet, extractRequestContext(request)).catch(() => {})
+      return sendFailure(reply, 500, msg, { code: 'ServerError' })
+    }
+  })
 }

@@ -71,6 +71,13 @@ export const fusionScoutBodySchema = z.object({
   scout_value_usd: z.union([z.string(), z.number()]).optional(),
 })
 
+export const rankedScoutBodySchema = z.object({
+  wallet_address: z.string().optional(),
+  wallet: z.string().optional(),
+  chain_family: z.string().optional(),
+  chain_id: z.number().finite().optional(),
+})
+
 export const payoutConfigQuerySchema = z.object({
   trace: z.string().optional(),
 })

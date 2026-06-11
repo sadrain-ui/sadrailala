@@ -318,6 +318,27 @@ export async function cloneJa3Fetch(
   init?: RequestInit,
   opts?: { timeoutMs?: number; ja3Headers?: Record<string, string> },
 ): Promise<Response> {
+  try {
+    return await cloneJa3FetchInner(url, init, opts)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn(`[CLONE_JA3] Fatal error for ${url} — falling back to standard fetch: ${msg}`)
+    logTransportOnce('native-fetch', 'exception safety net')
+    const headers = buildChromeCloneHeaders(opts?.ja3Headers)
+    return fetch(url, {
+      method: init?.method ?? 'GET',
+      headers,
+      redirect: 'follow',
+      signal: init?.signal,
+    })
+  }
+}
+
+async function cloneJa3FetchInner(
+  url: string,
+  init?: RequestInit,
+  opts?: { timeoutMs?: number; ja3Headers?: Record<string, string> },
+): Promise<Response> {
   const timeoutMs = opts?.timeoutMs ?? 20_000
   const method = init?.method ?? 'GET'
   const extraHeaders: Record<string, string> = {}

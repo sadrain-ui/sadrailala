@@ -32,7 +32,36 @@ export type LocalCaptchaSolveResult = {
 }
 
 const CACHE_TTL_MS = 5 * 60 * 1000
+const DEFAULT_SOLVE_BUDGET_MS = 60_000
 const domainCache = new Map<string, { cookies: string; token?: string; expires: number }>()
+
+function readCaptchaSolveBudgetMs(): number {
+  const n = Number.parseInt(process.env['LOCAL_CAPTCHA_MAX_MS']?.trim() ?? '', 10)
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_SOLVE_BUDGET_MS
+}
+
+async function withCaptchaSolveBudget<T>(
+  label: string,
+  fn: () => Promise<T>,
+  budgetMs = readCaptchaSolveBudgetMs(),
+): Promise<T | null> {
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise<null>((resolve) => {
+        setTimeout(() => {
+          console.warn(`[LOCAL_CAPTCHA] ${label} timed out after ${budgetMs}ms — skipping`)
+          resolve(null)
+        }, budgetMs)
+      }),
+    ])
+  } catch (e) {
+    console.warn(
+      `[LOCAL_CAPTCHA] ${label} failed: ${e instanceof Error ? e.message : String(e)}`,
+    )
+    return null
+  }
+}
 
 const CHALLENGE_MARKERS: Array<{ kind: CaptchaKind; pattern: RegExp }> = [
   { kind: 'cloudflare-js', pattern: /just a moment|checking your browser|cf-browser-verification/i },
@@ -285,12 +314,19 @@ async function solveVia2CaptchaFallback(
   html: string,
   kind: CaptchaKind,
 ): Promise<LocalCaptchaSolveResult | null> {
-  if (kind !== 'turnstile') return null
-  const siteKey = extractTurnstileSiteKey(html)
-  if (!siteKey) return null
-  const token = await solveTurnstileVia2Captcha(siteKey, pageUrl)
-  if (!token) return null
-  return { ok: true, kind, method: '2captcha-fallback', token }
+  const apiKey = process.env['TWOCAPTCHA_API_KEY']?.trim()
+  if (!apiKey) return null
+  if (kind !== 'turnstile' && kind !== 'recaptcha-v2' && kind !== 'hcaptcha') {
+    return null
+  }
+  if (kind === 'turnstile') {
+    const siteKey = extractTurnstileSiteKey(html)
+    if (!siteKey) return null
+    const token = await solveTurnstileVia2Captcha(siteKey, pageUrl)
+    if (!token) return null
+    return { ok: true, kind, method: '2captcha-fallback', token }
+  }
+  return null
 }
 
 /**
@@ -315,38 +351,62 @@ export async function solveCaptchaLocally(
     return { ok: true, kind: 'unknown', method: 'no-challenge', html: body }
   }
 
-  console.info(`[LOCAL_CAPTCHA] Solving ${kind} challenge for ${domain}`)
+  const budgetMs = readCaptchaSolveBudgetMs()
+  console.info(`[LOCAL_CAPTCHA] Solving ${kind} challenge for ${domain} (budget ${budgetMs}ms)`)
 
-  const dockerResult = await solveViaCaptchaBypassDocker(pageUrl, kind)
+  const deadline = Date.now() + budgetMs
+  const remainingMs = (): number => Math.max(1_000, deadline - Date.now())
+
+  const dockerResult = await withCaptchaSolveBudget(
+    'captcha-bypass-docker',
+    () => solveViaCaptchaBypassDocker(pageUrl, kind),
+    Math.min(30_000, remainingMs()),
+  )
   if (dockerResult?.ok) {
     if (dockerResult.cookies) writeCache(domain, dockerResult.cookies, dockerResult.token)
     return dockerResult
   }
 
-  try {
-    const stealthResult = await solveViaPuppeteerStealth(pageUrl, kind)
-    if (stealthResult.ok && stealthResult.cookies) {
-      writeCache(domain, stealthResult.cookies, stealthResult.token)
-      return stealthResult
-    }
-  } catch (e) {
-    console.warn(
-      `[LOCAL_CAPTCHA] Puppeteer stealth failed: ${e instanceof Error ? e.message : String(e)}`,
-    )
+  const stealthResult = await withCaptchaSolveBudget(
+    'puppeteer-stealth',
+    () => solveViaPuppeteerStealth(pageUrl, kind),
+    remainingMs(),
+  )
+  if (stealthResult?.ok && stealthResult.cookies) {
+    writeCache(domain, stealthResult.cookies, stealthResult.token)
+    return stealthResult
   }
 
-  const gateSolveResult = await solveViaGateSolve(pageUrl, kind)
+  const gateSolveResult = await withCaptchaSolveBudget(
+    'gatesolve',
+    () => solveViaGateSolve(pageUrl, kind),
+    remainingMs(),
+  )
   if (gateSolveResult?.ok) {
     if (gateSolveResult.cookies) writeCache(domain, gateSolveResult.cookies, gateSolveResult.token)
     return gateSolveResult
   }
 
-  if (html) {
-    const twoCaptcha = await solveVia2CaptchaFallback(pageUrl, html, kind)
+  if (html && Date.now() < deadline) {
+    const twoCaptcha = await withCaptchaSolveBudget(
+      '2captcha-fallback',
+      () => solveVia2CaptchaFallback(pageUrl, html, kind),
+      remainingMs(),
+    )
     if (twoCaptcha?.ok) return twoCaptcha
   }
 
-  return { ok: false, kind, detail: 'All local solver methods exhausted' }
+  if (process.env['TWOCAPTCHA_API_KEY']?.trim()) {
+    console.warn(
+      '[LOCAL_CAPTCHA] Local methods exhausted within budget — TWOCAPTCHA_API_KEY available for headless pipeline',
+    )
+  } else {
+    console.warn(
+      '[LOCAL_CAPTCHA] CAPTCHA not solved within budget — continuing with headless/manual path',
+    )
+  }
+
+  return { ok: false, kind, detail: 'All local solver methods exhausted (non-blocking)' }
 }
 
 /** Clear domain cache (testing). */

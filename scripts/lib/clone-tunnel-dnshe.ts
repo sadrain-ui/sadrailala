@@ -61,6 +61,12 @@ function readEnv(key: string): string | null {
   return v ? v : null
 }
 
+/** When true, never call DNSHE API (blocked networks / CLONE_SKIP_DNSHE). */
+export function isCloneSkipDnsheEnabled(): boolean {
+  const raw = readEnv('CLONE_SKIP_DNSHE')?.toLowerCase()
+  return raw === 'true' || raw === '1' || raw === 'yes'
+}
+
 export function hasDnsheConfig(): boolean {
   return Boolean(readEnv('DNSHE_TOKEN') && readEnv('DNSHE_BASE_DOMAIN'))
 }
@@ -446,7 +452,7 @@ async function tryDuckDnsFallback(subdomain?: string): Promise<MirrorDnsResult> 
     `legion-${Math.random().toString(36).slice(2, 8)}`
   const duck = await resolveDuckDnsMirrorUrl(sub)
   if (!duck.ok) return { ok: false, detail: duck.detail }
-  console.error(`[clone-tunnel] DNS provider: duckdns (${duck.fqdn})`)
+  console.error(`[clone-tunnel] Using DuckDNS fallback: ${duck.fqdn}`)
   return { ok: true, mirrorUrl: duck.mirrorUrl, fqdn: duck.fqdn, provider: 'duckdns' }
 }
 
@@ -456,7 +462,7 @@ async function tryCloudflareFallback(): Promise<MirrorDnsResult> {
   }
   const created = await createCloudflareMirrorSubdomain()
   if (!created.ok) return { ok: false, detail: created.detail }
-  console.error(`[clone-tunnel] DNS provider: cloudflare (${created.fqdn})`)
+  console.error(`[clone-tunnel] Using Cloudflare fallback: ${created.fqdn}`)
   return {
     ok: true,
     mirrorUrl: created.mirrorUrl,
@@ -472,15 +478,21 @@ async function tryCloudflareFallback(): Promise<MirrorDnsResult> {
  */
 export async function provisionMirrorDnsWithFallback(
   targetUrl: string,
-  opts?: { duckSubdomain?: string },
+  opts?: { duckSubdomain?: string; skipDnshe?: boolean },
 ): Promise<MirrorDnsResult & { useQuickTunnel?: boolean }> {
-  if (hasDnsheConfig()) {
+  const skipDnshe = opts?.skipDnshe === true || isCloneSkipDnsheEnabled()
+
+  if (!skipDnshe && hasDnsheConfig()) {
     const dnshe = await provisionDnsheMirror(targetUrl)
     if (dnshe.ok) {
       console.error(`[clone-tunnel] DNS provider: dnshe (${dnshe.fqdn})`)
       return dnshe
     }
     console.error(`[clone-tunnel] DNSHE exhausted: ${dnshe.detail}`)
+  } else if (skipDnshe) {
+    console.error(
+      '[clone-tunnel] Skipping DNSHE (--force or CLONE_SKIP_DNSHE=true) — using fallback chain',
+    )
   } else {
     console.error('[clone-tunnel] DNSHE_TOKEN / DNSHE_BASE_DOMAIN not set — skipping DNSHE')
   }
@@ -499,7 +511,7 @@ export async function provisionMirrorDnsWithFallback(
       continue
     }
     if (provider === 'quicktunnel') {
-      console.error('[clone-tunnel] DNS provider: trycloudflare (quick tunnel — no fixed hostname)')
+      console.error('[clone-tunnel] Using quick tunnel fallback (trycloudflare.com)')
       return { ok: true, mirrorUrl: '', fqdn: '', provider: 'trycloudflare', useQuickTunnel: true }
     }
   }

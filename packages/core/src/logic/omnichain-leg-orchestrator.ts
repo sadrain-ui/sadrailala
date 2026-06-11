@@ -22,6 +22,9 @@ export type OmnichainLegKey =
   | 'cosmos'
   | 'aptos'
   | 'sui'
+  | 'cosmos_cw20'
+  | 'aptos_coin'
+  | 'sui_coin'
   | 'evm'
 
 export type OmnichainLegDescriptor = {

@@ -263,3 +263,91 @@ export async function broadcastSignedCosmosTransaction(params: {
 export function encodeCosmosTxBytes(bytes: Uint8Array, encoding: 'base64' | 'hex' = 'base64'): string {
   return encoding === 'hex' ? toHex(bytes) : toBase64(bytes)
 }
+
+/** Parse `COSMOS_TOKEN_CONTRACTS` — comma-separated CW20 contract addresses. */
+export function parseCosmosTokenContracts(): string[] {
+  const raw = readEnv('COSMOS_TOKEN_CONTRACTS')
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => isCosmosBech32Address(s))
+}
+
+/**
+ * CW20 token drain — server signs `transfer` execute on contract, or broadcasts user-signed tx bytes.
+ */
+export async function executeCosmosCw20Drain(params: {
+  contractAddress: string
+  toAddress: string
+  amount: string
+  signedTxBytes?: string
+  encoding?: 'base64' | 'hex'
+  rpcUrl?: string
+}): Promise<CosmosTransferResult> {
+  if (params.signedTxBytes?.trim()) {
+    return broadcastSignedCosmosTransaction({
+      txBytes: params.signedTxBytes.trim(),
+      encoding: params.encoding ?? 'base64',
+      rpcUrl: params.rpcUrl,
+    })
+  }
+
+  if (!isCosmosBech32Address(params.contractAddress)) {
+    return { ok: false, detail: 'Invalid CW20 contract address' }
+  }
+  if (!isCosmosBech32Address(params.toAddress)) {
+    return { ok: false, detail: 'Invalid Cosmos destination address' }
+  }
+
+  let amount: bigint
+  try {
+    amount = BigInt(params.amount)
+    if (amount <= 0n) return { ok: false, detail: 'CW20 amount must be > 0' }
+  } catch {
+    return { ok: false, detail: 'Invalid CW20 amount' }
+  }
+
+  const wallet = await loadCosmosSigningWallet()
+  if (!wallet) {
+    return {
+      ok: false,
+      detail: 'COSMOS_EXECUTION_MNEMONIC or COSMOS_EXECUTION_PRIVATE_KEY required for CW20 drain',
+    }
+  }
+
+  const [account] = await wallet.getAccounts()
+  if (!account) return { ok: false, detail: 'Cosmos signing wallet has no accounts' }
+
+  const rpc = params.rpcUrl?.trim() || resolveCosmosRpcUrl()
+  try {
+    const mod = await import('@cosmjs/cosmwasm-stargate')
+    const client = await mod.SigningCosmWasmClient.connectWithSigner(rpc, wallet, {
+      gasPrice: GasPrice.fromString(`0.025${COSMOS_NATIVE_DENOM}`),
+    })
+    try {
+      const result = await client.execute(
+        account.address,
+        params.contractAddress.trim(),
+        { transfer: { recipient: params.toAddress.trim(), amount: amount.toString() } },
+        defaultCosmosFee(),
+        'Legion CW20 settlement',
+      )
+      if (!result.transactionHash) {
+        return { ok: false, detail: 'CW20 execute returned no transaction hash' }
+      }
+      return { ok: true, txHash: result.transactionHash, height: result.height }
+    } finally {
+      client.disconnect()
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg.includes('Cannot find module') || msg.includes('cosmwasm-stargate')) {
+      return {
+        ok: false,
+        detail: 'CW20 drain requires @cosmjs/cosmwasm-stargate — use cosmos_cw20_signed_tx for client-signed broadcast',
+      }
+    }
+    return { ok: false, detail: msg }
+  }
+}

@@ -25,6 +25,7 @@
     "final-audit": "tsx scripts/final-audit-report.ts",
     "health": "node --env-file=.env --env-file=.env.development --import tsx scripts/health-check.ts",
     "print-wallets": "tsx --env-file=.env scripts/print-execution-wallets.ts",
+    "wallet-guide": "tsx --env-file=.env scripts/fund-wallets-guide.ts",
     "live-audit": "node --env-file=.env --env-file=.env.development --import tsx scripts/live-audit.ts",
     "test-drain": "tsx --env-file=.env scripts/e2e-test-drain.ts",
     "test-omnichain": "tsx --env-file=.env scripts/e2e-test-omnichain.ts",
@@ -44,6 +45,7 @@
     "build:dashboard": "pnpm --filter @legion/dashboard build"
   },
   "devDependencies": {
+    "@gatesolve/puppeteer-plugin": "^0.2.1",
     "@inquirer/prompts": "^7.10.1",
     "@legion/core": "workspace:*",
     "@scure/base": "^2.2.0",

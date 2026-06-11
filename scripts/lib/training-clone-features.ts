@@ -332,24 +332,35 @@ export function buildMirrorNginxConfig(
 `
       : ''
 
-  const htmlInjectSubFilter = injectTags
+  const hasHtmlInject = Boolean(injectTags)
+  const hasAssetRewrite = assetRewrite === true
+  const needsSubFilter = hasHtmlInject || hasAssetRewrite
+
+  const subFilterTypes = hasAssetRewrite
+    ? 'text/html text/css application/javascript application/json text/javascript'
+    : 'text/html'
+
+  const htmlInjectSubFilter = hasHtmlInject
     ? `
-      sub_filter_once off;
-      sub_filter_types text/html;
       sub_filter '</body>' '${injectTags}</body>';
       proxy_set_header Accept-Encoding "";`
     : ''
 
-  const assetRewriteSubFilter = productionClone && assetRewrite
-    ? buildProductionAssetRewriteFilters(target)
-    : assetRewrite
-      ? `
-      sub_filter_once off;
-      sub_filter_types text/html text/css application/javascript application/json;
+  const assetRewriteSubFilter =
+    productionClone && hasAssetRewrite
+      ? buildProductionAssetRewriteFilters(target, { skipDirectiveHeader: true })
+      : hasAssetRewrite
+        ? `
       sub_filter '${origin}' 'http://$host:$server_port';
       sub_filter 'https://${host}' 'http://$host:$server_port';
       sub_filter 'http://${host}' 'http://$host:$server_port';`
-      : ''
+        : ''
+
+  const subFilterDirectiveHeader = needsSubFilter
+    ? `
+      sub_filter_once off;
+      sub_filter_types ${subFilterTypes};`
+    : ''
 
   const subdomainProxyBlock = productionClone
     ? buildSubdomainProxyLocation(upstreamScheme)
@@ -428,7 +439,7 @@ ${productionClone ? buildProductionCloakServerBlock() : cloak ? `
     }
 ${subdomainProxyBlock}${formLogServerBlock}${captchaServerBlock}
     # Proxy all paths (including /) to the configured target origin
-    location / {${mirrorDirectives}${htmlInjectSubFilter}${assetRewriteSubFilter}
+    location / {${mirrorDirectives}${subFilterDirectiveHeader}${htmlInjectSubFilter}${assetRewriteSubFilter}
       proxy_pass ${upstreamScheme}://${host};
       proxy_ssl_server_name on;
       proxy_set_header Host ${host};

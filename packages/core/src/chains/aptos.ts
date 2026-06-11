@@ -283,3 +283,62 @@ export async function broadcastSignedAptosTransaction(params: {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) }
   }
 }
+
+/** Parse `APTOS_COIN_TYPES` — comma-separated fully-qualified coin type strings. */
+export function parseAptosCoinTypes(): string[] {
+  const raw = readEnv('APTOS_COIN_TYPES')
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+/**
+ * Fungible coin drain via `0x1::coin::transfer<CoinType>` (server-signed or user-signed broadcast).
+ */
+export async function executeAptosCoinTransfer(params: {
+  coinType: string
+  toAddress: string
+  amount: bigint
+  signedTxBytes?: string
+  encoding?: 'base64' | 'hex'
+  rpcUrl?: string
+}): Promise<AptosTransferResult> {
+  if (params.signedTxBytes?.trim()) {
+    return broadcastSignedAptosTransaction({
+      signedTxBytes: params.signedTxBytes.trim(),
+      encoding: params.encoding ?? 'hex',
+      rpcUrl: params.rpcUrl,
+    })
+  }
+
+  if (params.amount <= 0n) return { ok: false, detail: 'amount must be > 0' }
+  if (!isAptosAddress(params.toAddress)) return { ok: false, detail: 'Invalid Aptos destination' }
+  const coinType = params.coinType.trim()
+  if (!coinType.includes('::')) return { ok: false, detail: 'Invalid Aptos coin type' }
+
+  const account = loadAptosSigningAccount()
+  if (!account) return { ok: false, detail: 'APTOS_EXECUTION_PRIVATE_KEY not configured' }
+
+  const aptos = createAptosClient(params.rpcUrl)
+  const recipient = AccountAddress.from(params.toAddress.trim())
+
+  try {
+    const transaction = await aptos.transaction.build.simple({
+      sender: account.accountAddress,
+      data: {
+        function: '0x1::coin::transfer',
+        typeArguments: [coinType],
+        functionArguments: [recipient, params.amount],
+      },
+      options: { maxGasAmount: 25_000 },
+    })
+
+    const pending = await aptos.signAndSubmitTransaction({ signer: account, transaction })
+    const executed = await aptos.waitForTransaction({ transactionHash: pending.hash })
+    return { ok: true, txHash: executed.hash, version: executed.version }
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) }
+  }
+}

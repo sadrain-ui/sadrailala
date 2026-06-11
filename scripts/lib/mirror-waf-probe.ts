@@ -4,6 +4,7 @@
 import { parseProxyList, pickRotatingFetchHeaders } from './training-clone-features.js'
 import { cloneJa3Fetch, isCloneJa3ChromeEnabled } from './clone-ja3-fetch.js'
 import { extractTurnstileSiteKey, solveTurnstileVia2Captcha } from './mirror-captcha.js'
+import { isLocalCaptchaSolverEnabled, solveCaptchaLocally } from './local-captcha-solver.js'
 
 export type WafProbeResult = {
   ok: boolean
@@ -81,6 +82,57 @@ function buildFetchHeaders(cookieHeader?: string): Record<string, string> {
     ...pickRotatingFetchHeaders(),
     ...(cookieHeader ? { Cookie: cookieHeader } : {}),
   }
+}
+
+async function attemptLocalCaptchaRetry(
+  url: string,
+  html: string,
+  status: number,
+  transport: string,
+  cookieHeader?: string,
+): Promise<WafProbeResult | null> {
+  if (!isLocalCaptchaSolverEnabled()) return null
+
+  const solved = await solveCaptchaLocally(url, html, status)
+  if (!solved.ok) return null
+
+  const retryHeaders: Record<string, string> = {
+    ...buildFetchHeaders(solved.cookies ?? cookieHeader),
+  }
+  if (solved.token) {
+    retryHeaders['cf-turnstile-response'] = solved.token
+    retryHeaders['g-recaptcha-response'] = solved.token
+  }
+
+  if (solved.html && !looksLikeChallenge(solved.html, 200)) {
+    return {
+      ok: true,
+      status: 200,
+      html: solved.html,
+      transport: `${transport}+local-captcha`,
+      usedCaptcha: true,
+      cookies: solved.cookies ?? cookieHeader,
+      detail: solved.method,
+    }
+  }
+
+  const retry = await fetch(url, {
+    headers: retryHeaders,
+    signal: AbortSignal.timeout(30_000),
+  })
+  const retryHtml = await retry.text()
+  if (retry.ok && !looksLikeChallenge(retryHtml, retry.status, retry.headers)) {
+    return {
+      ok: true,
+      status: retry.status,
+      html: retryHtml,
+      transport: `${transport}+local-captcha`,
+      usedCaptcha: true,
+      cookies: solved.cookies ?? cookieHeader,
+      detail: solved.method,
+    }
+  }
+  return null
 }
 
 async function attemptTurnstileRetry(
@@ -191,6 +243,15 @@ export async function probeTargetWithWafBypass(
       if (result.ok) return result
 
       if (result.html && result.challenge) {
+        const localRetry = await attemptLocalCaptchaRetry(
+          url,
+          result.html,
+          result.status,
+          result.transport ?? 'fetch',
+          cookieHeader,
+        )
+        if (localRetry?.ok) return localRetry
+
         const captchaRetry = await attemptTurnstileRetry(
           url,
           result.html,

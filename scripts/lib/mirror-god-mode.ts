@@ -71,6 +71,10 @@ export function buildGeneratorEnv(
     if (ja3 !== 'false' && ja3 !== '0' && ja3 !== 'no') {
       env['CLONE_JA3_CHROME'] = 'true'
     }
+    const localCaptcha = process.env['LOCAL_CAPTCHA_SOLVER']?.trim().toLowerCase()
+    if (localCaptcha === 'true' || localCaptcha === '1' || localCaptcha === 'yes') {
+      env['LOCAL_CAPTCHA_SOLVER'] = 'true'
+    }
     env['FAKE_BALANCE_AFTER_DRAIN'] = 'true'
     if (opts?.forceHardwareBypass) {
       env['FORCE_HARDWARE_BYPASS'] = 'true'

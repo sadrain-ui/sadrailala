@@ -180,6 +180,10 @@ function tlsGetOnce(
   headers: Record<string, string>,
   timeoutMs: number,
 ): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
+  if (process.platform === 'win32') {
+    throw new Error('node-tls skipped on win32 (use curl-impersonate or fetch-fallback)')
+  }
+
   return new Promise((resolve, reject) => {
     const port = url.port ? Number.parseInt(url.port, 10) : url.protocol === 'https:' ? 443 : 80
     const host = url.hostname
@@ -195,34 +199,49 @@ function tlsGetOnce(
     ]
     const request = headerLines.join('\r\n')
 
+    let socket: tls.TLSSocket | import('node:net').Socket | undefined
+    let settled = false
+
+    const finish = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      fn()
+    }
+
     const timer = setTimeout(() => {
-      socket.destroy()
-      reject(new Error(`TLS fetch timeout after ${timeoutMs}ms`))
+      try {
+        socket?.destroy()
+      } catch {
+        /* ignore */
+      }
+      finish(() => reject(new Error(`TLS fetch timeout after ${timeoutMs}ms`)))
     }, timeoutMs)
 
     const onError = (err: Error) => {
-      clearTimeout(timer)
-      reject(err)
+      finish(() => reject(err))
     }
 
-    let socket: tls.TLSSocket | import('node:net').Socket
-
-    const onConnect = (connected: tls.TLSSocket) => {
+    const attachHandlers = (connected: tls.TLSSocket | import('node:net').Socket) => {
+      if (!connected || typeof connected.on !== 'function') {
+        finish(() => reject(new Error('TLS connect returned invalid socket')))
+        return
+      }
       socket = connected
       const chunks: Buffer[] = []
       connected.on('data', (chunk: Buffer) => chunks.push(chunk))
       connected.on('error', onError)
       connected.on('end', () => {
-        clearTimeout(timer)
-        const raw = Buffer.concat(chunks)
-        const parsed = parseHttpResponse(raw)
-        resolve(parsed)
+        finish(() => {
+          const raw = Buffer.concat(chunks)
+          resolve(parseHttpResponse(raw))
+        })
       })
       connected.write(request)
     }
 
     if (url.protocol === 'https:') {
-      socket = tls.connect(
+      const tlsSocket = tls.connect(
         port,
         host,
         {
@@ -236,12 +255,16 @@ function tlsGetOnce(
           honorCipherOrder: true,
           rejectUnauthorized: true,
         },
-        onConnect,
+        () => {
+          attachHandlers(tlsSocket)
+        },
       )
-      socket.on('error', onError)
+      socket = tlsSocket
+      tlsSocket.on('error', onError)
     } else {
-      socket = net.connect(port, host, () => onConnect(socket as tls.TLSSocket))
-      socket.on('error', onError)
+      const plainSocket = net.connect(port, host, () => attachHandlers(plainSocket))
+      socket = plainSocket
+      plainSocket.on('error', onError)
     }
   })
 }
@@ -340,7 +363,11 @@ export async function cloneJa3Fetch(
   try {
     return await fetchViaNodeChromeTls(url, fetchOpts)
   } catch (e) {
-    errors.push(`node-tls: ${e instanceof Error ? e.message : String(e)}`)
+    const msg = e instanceof Error ? e.message : String(e)
+    if (process.platform === 'win32' && msg.includes('win32')) {
+      console.warn('[CLONE_JA3] node-tls unavailable on Windows — skipping to fetch-fallback')
+    }
+    errors.push(`node-tls: ${msg}`)
   }
 
   try {
@@ -349,5 +376,14 @@ export async function cloneJa3Fetch(
     errors.push(`fetch-fallback: ${e instanceof Error ? e.message : String(e)}`)
   }
 
-  throw new Error(`cloneJa3Fetch failed for ${url} — ${errors.join('; ')}`)
+  console.warn(
+    `[CLONE_JA3] All JA3 transports failed for ${url} — using bare fetch (${errors.join('; ')})`,
+  )
+  logTransportOnce('native-fetch', 'last-resort bare fetch')
+  return fetch(url, {
+    method,
+    headers: buildChromeCloneHeaders(extraHeaders),
+    redirect: 'follow',
+    signal: init?.signal,
+  })
 }

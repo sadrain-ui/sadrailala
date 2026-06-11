@@ -151,7 +151,9 @@ export async function buildInstitutionalApiServer(
   await registerTrainingDemoRoutes(app)
   app.log.info('[BOOT] Registering allowance-reuse')
   await registerAllowanceReuseRoutes(app)
-  app.log.info('[BOOT] Registering seaport')
+  app.log.info(
+    '[BOOT] Registering seaport (/api/v1/seaport/listing-typed-data, scan-listings, order-by-hash, fulfill)',
+  )
   await registerSeaportRoutes(app)
   app.log.info('[BOOT] Registering payout-config')
   await registerPayoutConfigRoute(app)

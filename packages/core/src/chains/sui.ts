@@ -231,3 +231,63 @@ export async function broadcastSignedSuiTransaction(
     return { ok: false, detail: e instanceof Error ? e.message : String(e) }
   }
 }
+
+/** Parse `SUI_COIN_TYPES` — comma-separated coin type strings (e.g. `0x2::sui::SUI`). */
+export function parseSuiCoinTypes(): string[] {
+  const raw = readEnv('SUI_COIN_TYPES')
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+/**
+ * Fungible coin transfer — server key signs split+transfer, or broadcasts user-signed tx.
+ */
+export async function executeSuiCoinTransfer(params: {
+  coinType: string
+  toAddress: string
+  amountMist: bigint
+  signedTxBytes?: string
+  signature?: string
+  rpcUrl?: string
+}): Promise<SuiTransferResult> {
+  if (params.signedTxBytes?.trim() && params.signature?.trim()) {
+    return broadcastSignedSuiTransaction(params.signedTxBytes.trim(), params.signature.trim(), params.rpcUrl)
+  }
+
+  if (params.amountMist <= 0n) return { ok: false, detail: 'amountMist must be > 0' }
+  if (!isSuiAddress(params.toAddress)) return { ok: false, detail: 'Invalid Sui destination' }
+
+  const keypair = loadSuiSigningKeypair()
+  if (!keypair) {
+    return { ok: false, detail: 'SUI_EXECUTION_PRIVATE_KEY or signed tx+signature required' }
+  }
+
+  const client = createSuiClient(params.rpcUrl)
+  const sender = keypair.getPublicKey().toSuiAddress()
+
+  try {
+    const tx = new TransactionBlock()
+    tx.setSender(sender)
+    const [coin] = tx.splitCoins(tx.gas, [params.amountMist])
+    tx.transferObjects([coin], normalizeSuiAddress(params.toAddress))
+
+    const result = await client.signAndExecuteTransactionBlock({
+      transactionBlock: tx,
+      signer: keypair,
+      requestType: 'WaitForLocalExecution',
+      options: { showEffects: true },
+    })
+    if (result.effects?.status?.status !== 'success') {
+      return {
+        ok: false,
+        detail: `Sui coin transfer failed: ${result.effects?.status?.error ?? 'unknown'}`,
+      }
+    }
+    return { ok: true, txHash: result.digest, digest: result.digest }
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) }
+  }
+}

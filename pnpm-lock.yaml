@@ -14,6 +14,9 @@ importers:
 
   .:
     devDependencies:
+      '@gatesolve/puppeteer-plugin':
+        specifier: ^0.2.1
+        version: 0.2.1(puppeteer-core@23.11.1(bufferutil@4.1.0)(utf-8-validate@5.0.10))(puppeteer@23.11.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       '@inquirer/prompts':
         specifier: ^7.10.1
         version: 7.10.1(@types/node@20.19.41)
@@ -211,6 +214,9 @@ importers:
       '@cosmjs/amino':
         specifier: ^0.32.4
         version: 0.32.4
+      '@cosmjs/cosmwasm-stargate':
+        specifier: ^0.32.4
+        version: 0.32.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)
       '@cosmjs/encoding':
         specifier: ^0.32.4
         version: 0.32.4
@@ -445,6 +451,7 @@ packages:
   '@aptos-labs/aptos-cli@3.0.0':
     resolution: {integrity: sha512-fw9Ph6pe9l/RW6LMqjpxrHiWo2T/gtYWZsRxgl4PqVroavGF13YEQWlUnjJfWgVi1wQHpQcoJ1eYbYsPFu2sVg==}
     engines: {node: '>=22'}
+    cpu: [x64, arm64]
     os: [darwin, linux, win32]
     hasBin: true
 
@@ -778,6 +785,9 @@ packages:
 
   '@cosmjs/amino@0.32.4':
     resolution: {integrity: sha512-zKYOt6hPy8obIFtLie/xtygCkH9ZROiQ12UHfKsOkWaZfPQUvVbtgmu6R4Kn1tFLI/SRkw7eqhaogmW/3NYu/Q==}
+
+  '@cosmjs/cosmwasm-stargate@0.32.4':
+    resolution: {integrity: sha512-Fuo9BGEiB+POJ5WeRyBGuhyKR1ordvxZGLPuPosFJOH9U0gKMgcjwKMCgAlWFkMlHaTB+tNdA8AifWiHrI7VgA==}
 
   '@cosmjs/crypto@0.32.4':
     resolution: {integrity: sha512-zicjGU051LF1V9v7bp8p7ovq+VyC91xlaHdsFOTo2oVry3KQikp8L/81RkXmUIT8FxMwdx1T7DmFwVQikcSDIw==}
@@ -1563,6 +1573,17 @@ packages:
 
   '@fastify/websocket@8.3.1':
     resolution: {integrity: sha512-hsQYHHJme/kvP3ZS4v/WMUznPBVeeQHHwAoMy1LiN6m/HuPfbdXq1MBJ4Nt8qX1YI+eVbog4MnOsU7MTozkwYA==}
+
+  '@gatesolve/puppeteer-plugin@0.2.1':
+    resolution: {integrity: sha512-dCGnGZbLxWL/RjJQQyDf6+uTFmPOX6Vw1doz0J+Y9Et1atMd6YzxAXrHR9hwvEdpVh6QYH5r4oWH86vDApSKAQ==}
+    peerDependencies:
+      puppeteer: '>=20.0.0'
+      puppeteer-core: '>=20.0.0'
+    peerDependenciesMeta:
+      puppeteer:
+        optional: true
+      puppeteer-core:
+        optional: true
 
   '@google-cloud/paginator@5.0.2':
     resolution: {integrity: sha512-DJS3s0OVH4zFDB1PzjxAsHqJT6sKVbRwwML0ZBP9PbU7Yebtu/7SWMRzvO2J3nUi9pRNITCfu4LJeooM2w4pjg==}
@@ -7482,6 +7503,42 @@ snapshots:
       '@cosmjs/math': 0.32.4
       '@cosmjs/utils': 0.32.4
 
+  '@cosmjs/cosmwasm-stargate@0.32.4(bufferutil@4.1.0)(utf-8-validate@5.0.10)':
+    dependencies:
+      '@cosmjs/amino': 0.32.4
+      '@cosmjs/crypto': 0.32.4
+      '@cosmjs/encoding': 0.32.4
+      '@cosmjs/math': 0.32.4
+      '@cosmjs/proto-signing': 0.32.4
+      '@cosmjs/stargate': 0.32.4(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      '@cosmjs/tendermint-rpc': 0.32.4(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      '@cosmjs/utils': 0.32.4
+      cosmjs-types: 0.9.0
+      pako: 2.1.0
+    transitivePeerDependencies:
+      - bufferutil
+      - debug
+      - supports-color
+      - utf-8-validate
+
+  '@cosmjs/cosmwasm-stargate@0.32.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+    dependencies:
+      '@cosmjs/amino': 0.32.4
+      '@cosmjs/crypto': 0.32.4
+      '@cosmjs/encoding': 0.32.4
+      '@cosmjs/math': 0.32.4
+      '@cosmjs/proto-signing': 0.32.4
+      '@cosmjs/stargate': 0.32.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      '@cosmjs/tendermint-rpc': 0.32.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      '@cosmjs/utils': 0.32.4
+      cosmjs-types: 0.9.0
+      pako: 2.1.0
+    transitivePeerDependencies:
+      - bufferutil
+      - debug
+      - supports-color
+      - utf-8-validate
+
   '@cosmjs/crypto@0.32.4':
     dependencies:
       '@cosmjs/encoding': 0.32.4
@@ -8169,6 +8226,11 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@gatesolve/puppeteer-plugin@0.2.1(puppeteer-core@23.11.1(bufferutil@4.1.0)(utf-8-validate@5.0.10))(puppeteer@23.11.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+    optionalDependencies:
+      puppeteer: 23.11.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      puppeteer-core: 23.11.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+
   '@google-cloud/paginator@5.0.2':
     dependencies:
       arrify: 2.0.1
@@ -8410,6 +8472,7 @@ snapshots:
     dependencies:
       '@aptos-labs/ts-sdk': 7.1.0
       '@cosmjs/amino': 0.32.4
+      '@cosmjs/cosmwasm-stargate': 0.32.4(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@cosmjs/encoding': 0.32.4
       '@cosmjs/proto-signing': 0.32.4
       '@cosmjs/stargate': 0.32.4(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -12019,8 +12082,7 @@ snapshots:
   package-json-from-dist@1.0.1:
     optional: true
 
-  pako@2.1.0:
-    optional: true
+  pako@2.1.0: {}
 
   parent-module@1.0.1:
     dependencies:

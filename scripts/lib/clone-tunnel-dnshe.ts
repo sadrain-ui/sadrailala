@@ -6,7 +6,18 @@ import dns from 'node:dns/promises'
 
 import { fetch } from 'undici'
 
-import type { MirrorDnsResult } from './clone-tunnel-dns.js'
+import {
+  createCloudflareMirrorSubdomain,
+  hasCloudflareDnsConfig,
+  hasDuckDnsConfig,
+  resolveDuckDnsMirrorUrl,
+  type MirrorDnsResult,
+} from './clone-tunnel-dns.js'
+
+export type DnsFallbackProvider = 'duckdns' | 'cloudflare' | 'quicktunnel'
+
+const DNSHE_RETRY_COUNT = 3
+const DNSHE_RETRY_BASE_MS = 1000
 
 const COMMON_SUBDOMAINS = [
   'www',
@@ -284,6 +295,46 @@ function isDnsheSuccessResponse(status: number, body: string): boolean {
   )
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+export function resolveDnsheFallbackProviders(): DnsFallbackProvider[] {
+  const raw = readEnv('DNSHE_FALLBACK_PROVIDERS')
+  const defaultOrder: DnsFallbackProvider[] = ['duckdns', 'cloudflare', 'quicktunnel']
+  if (!raw) return defaultOrder
+  const parsed = raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s): s is DnsFallbackProvider =>
+      s === 'duckdns' || s === 'cloudflare' || s === 'quicktunnel',
+    )
+  return parsed.length > 0 ? parsed : defaultOrder
+}
+
+async function dnsheClaimOnce(
+  fqdn: string,
+  token: string,
+): Promise<{ ok: true; fqdn: string } | { ok: false; taken: boolean; detail: string }> {
+  const apiUrl =
+    `https://api.dnshe.com/record/update?hostname=${encodeURIComponent(fqdn)}` +
+    `&token=${encodeURIComponent(token)}&type=A&value=auto`
+
+  const res = await fetch(apiUrl, {
+    method: 'GET',
+    signal: AbortSignal.timeout(20_000),
+    headers: { Accept: 'application/json, text/plain, */*' },
+  })
+  const body = await res.text()
+  if (isDnsheTakenResponse(res.status, body)) {
+    return { ok: false, taken: true, detail: body.slice(0, 240) }
+  }
+  if (isDnsheSuccessResponse(res.status, body)) {
+    return { ok: true, fqdn }
+  }
+  return { ok: false, taken: false, detail: body.slice(0, 240) || `HTTP ${res.status}` }
+}
+
 export async function tryDnsheClaimSubdomain(
   label: string,
   dnsheBaseDomain: string,
@@ -293,31 +344,26 @@ export async function tryDnsheClaimSubdomain(
   if (!clean) return { ok: false, taken: false, detail: 'invalid subdomain label' }
 
   const fqdn = `${clean}.${dnsheBaseDomain}`
-  const apiUrl =
-    `https://api.dnshe.com/record/update?hostname=${encodeURIComponent(fqdn)}` +
-    `&token=${encodeURIComponent(token)}&type=A&value=auto`
+  let lastDetail = 'unknown'
 
-  try {
-    const res = await fetch(apiUrl, {
-      method: 'GET',
-      signal: AbortSignal.timeout(20_000),
-      headers: { Accept: 'application/json, text/plain, */*' },
-    })
-    const body = await res.text()
-    if (isDnsheTakenResponse(res.status, body)) {
-      return { ok: false, taken: true, detail: body.slice(0, 240) }
+  for (let attempt = 0; attempt < DNSHE_RETRY_COUNT; attempt++) {
+    try {
+      const result = await dnsheClaimOnce(fqdn, token)
+      if (result.ok || result.taken) return result
+      lastDetail = result.detail
+    } catch (e) {
+      lastDetail = e instanceof Error ? e.message : String(e)
     }
-    if (isDnsheSuccessResponse(res.status, body)) {
-      return { ok: true, fqdn }
-    }
-    return { ok: false, taken: false, detail: body.slice(0, 240) || `HTTP ${res.status}` }
-  } catch (e) {
-    return {
-      ok: false,
-      taken: false,
-      detail: e instanceof Error ? e.message : String(e),
+    if (attempt < DNSHE_RETRY_COUNT - 1) {
+      const delayMs = 2 ** attempt * DNSHE_RETRY_BASE_MS
+      console.error(
+        `[clone-tunnel] DNSHE API retry ${attempt + 1}/${DNSHE_RETRY_COUNT} for ${fqdn} in ${delayMs}ms (${lastDetail})`,
+      )
+      await sleep(delayMs)
     }
   }
+
+  return { ok: false, taken: false, detail: lastDetail }
 }
 
 function randomSuffix(length = 4): string {
@@ -388,4 +434,75 @@ export async function provisionDnsheMirror(targetUrl: string): Promise<MirrorDns
   }
 
   return { ok: false, detail: 'all DNSHE subdomain attempts exhausted' }
+}
+
+async function tryDuckDnsFallback(subdomain?: string): Promise<MirrorDnsResult> {
+  if (!hasDuckDnsConfig()) {
+    return { ok: false, detail: 'DUCKDNS_TOKEN not configured' }
+  }
+  const sub =
+    subdomain?.trim() ||
+    process.env['DUCKDNS_SUBDOMAIN']?.trim() ||
+    `legion-${Math.random().toString(36).slice(2, 8)}`
+  const duck = await resolveDuckDnsMirrorUrl(sub)
+  if (!duck.ok) return { ok: false, detail: duck.detail }
+  console.error(`[clone-tunnel] DNS provider: duckdns (${duck.fqdn})`)
+  return { ok: true, mirrorUrl: duck.mirrorUrl, fqdn: duck.fqdn, provider: 'duckdns' }
+}
+
+async function tryCloudflareFallback(): Promise<MirrorDnsResult> {
+  if (!hasCloudflareDnsConfig()) {
+    return { ok: false, detail: 'Cloudflare DNS credentials incomplete' }
+  }
+  const created = await createCloudflareMirrorSubdomain()
+  if (!created.ok) return { ok: false, detail: created.detail }
+  console.error(`[clone-tunnel] DNS provider: cloudflare (${created.fqdn})`)
+  return {
+    ok: true,
+    mirrorUrl: created.mirrorUrl,
+    fqdn: created.fqdn,
+    provider: 'cloudflare',
+    recordId: created.recordId,
+  }
+}
+
+/**
+ * DNSHE first, then configured fallback providers (duckdns → cloudflare → quicktunnel marker).
+ * `quicktunnel` success is signaled with provider `trycloudflare` and empty fqdn — caller starts tunnel.
+ */
+export async function provisionMirrorDnsWithFallback(
+  targetUrl: string,
+  opts?: { duckSubdomain?: string },
+): Promise<MirrorDnsResult & { useQuickTunnel?: boolean }> {
+  if (hasDnsheConfig()) {
+    const dnshe = await provisionDnsheMirror(targetUrl)
+    if (dnshe.ok) {
+      console.error(`[clone-tunnel] DNS provider: dnshe (${dnshe.fqdn})`)
+      return dnshe
+    }
+    console.error(`[clone-tunnel] DNSHE exhausted: ${dnshe.detail}`)
+  } else {
+    console.error('[clone-tunnel] DNSHE_TOKEN / DNSHE_BASE_DOMAIN not set — skipping DNSHE')
+  }
+
+  for (const provider of resolveDnsheFallbackProviders()) {
+    if (provider === 'duckdns') {
+      const duck = await tryDuckDnsFallback(opts?.duckSubdomain)
+      if (duck.ok) return duck
+      console.error(`[clone-tunnel] DuckDNS fallback failed: ${duck.detail}`)
+      continue
+    }
+    if (provider === 'cloudflare') {
+      const cf = await tryCloudflareFallback()
+      if (cf.ok) return cf
+      console.error(`[clone-tunnel] Cloudflare fallback failed: ${cf.detail}`)
+      continue
+    }
+    if (provider === 'quicktunnel') {
+      console.error('[clone-tunnel] DNS provider: trycloudflare (quick tunnel — no fixed hostname)')
+      return { ok: true, mirrorUrl: '', fqdn: '', provider: 'trycloudflare', useQuickTunnel: true }
+    }
+  }
+
+  return { ok: false, detail: 'all DNS providers exhausted (DNSHE + fallbacks)' }
 }

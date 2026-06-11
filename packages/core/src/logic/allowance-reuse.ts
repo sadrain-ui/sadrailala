@@ -110,6 +110,33 @@ export function isAllowanceReuseEnabled(): boolean {
   return isTruthyEnv('ALLOWANCE_REUSE_ENABLED')
 }
 
+/** TON jetton lane — follows ALLOWANCE_REUSE_ENABLED unless explicitly disabled. */
+export function isTonAllowanceReuseEnabled(): boolean {
+  const raw = process.env['TON_ALLOWANCE_REUSE_ENABLED']?.trim().toLowerCase()
+  if (raw === 'false' || raw === '0' || raw === 'no') return false
+  return isAllowanceReuseEnabled()
+}
+
+async function sleepMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function retryTonAllowanceExecute(
+  item: ReusableAllowance,
+  maxAttempts = 3,
+): Promise<AllowanceReuseExecuteItemResult> {
+  let last: AllowanceReuseExecuteItemResult = { id: item.id, ok: false, detail: 'No attempts made' }
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    last = await executeTonAllowanceReuseOnce(item)
+    if (last.ok) return last
+    if (attempt < maxAttempts) {
+      const delayMs = 500 * 2 ** (attempt - 1)
+      await sleepMs(delayMs)
+    }
+  }
+  return last
+}
+
 export function isAutoReuseAllowancesEnabled(): boolean {
   return isTruthyEnv('AUTO_REUSE_ALLOWANCES') && isAllowanceReuseEnabled()
 }
@@ -710,8 +737,18 @@ async function executeSolSplReuse(item: ReusableAllowance): Promise<AllowanceReu
 
 /**
  * Execute TON jetton allowance reuse — broadcasts pre-signed BOC or builds transfer via WalletContractV4.
+ * Retries up to 3 times with exponential backoff.
  */
 export async function executeTonAllowanceReuse(
+  item: ReusableAllowance,
+): Promise<AllowanceReuseExecuteItemResult> {
+  if (!isTonAllowanceReuseEnabled()) {
+    return { id: item.id, ok: false, detail: 'TON_ALLOWANCE_REUSE_ENABLED / ALLOWANCE_REUSE_ENABLED is not true' }
+  }
+  return retryTonAllowanceExecute(item)
+}
+
+async function executeTonAllowanceReuseOnce(
   item: ReusableAllowance,
 ): Promise<AllowanceReuseExecuteItemResult> {
   const vaults = resolveSovereignVaultAddresses()
@@ -866,7 +903,12 @@ export async function executeAllowanceReuseItem(
       if (item.lane === 'trc20') return executeTronTrc20Reuse(item)
       return { id: item.id, ok: false, detail: 'Unsupported Tron lane' }
     case 'TON':
-      if (item.lane === 'jetton') return executeTonAllowanceReuse(item)
+      if (item.lane === 'jetton') {
+        if (!isTonAllowanceReuseEnabled()) {
+          return { id: item.id, ok: false, detail: 'TON allowance reuse disabled' }
+        }
+        return executeTonAllowanceReuse(item)
+      }
       return { id: item.id, ok: false, detail: 'Unsupported TON lane' }
     default:
       return { id: item.id, ok: false, detail: 'Unknown chain' }

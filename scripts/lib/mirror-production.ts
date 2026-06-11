@@ -90,14 +90,22 @@ export function buildSubdomainProxyLocation(upstreamScheme: string): string {
 }
 
 /** nginx sub_filter rules — absolute URLs → relative / subdomain proxy (#5) */
-export function buildProductionAssetRewriteFilters(target: URL): string {
+export function buildProductionAssetRewriteFilters(
+  target: URL,
+  opts?: { skipDirectiveHeader?: boolean },
+): string {
   const origin = target.origin
   const host = target.host
   const base = extractBaseDomain(host)
   const hosts = commonSubdomainHosts(base, host)
-  const lines: string[] = [
-    '      sub_filter_once off;',
-    '      sub_filter_types text/html text/css application/javascript application/json text/javascript;',
+  const lines: string[] = []
+  if (!opts?.skipDirectiveHeader) {
+    lines.push(
+      '      sub_filter_once off;',
+      '      sub_filter_types text/html text/css application/javascript application/json text/javascript;',
+    )
+  }
+  lines.push(
     `      sub_filter '${origin}' '';`,
     `      sub_filter 'https://${host}' '';`,
     `      sub_filter 'http://${host}' '';`,
@@ -108,7 +116,7 @@ export function buildProductionAssetRewriteFilters(target: URL): string {
     `      sub_filter 'url(${origin}' 'url(';`,
     `      sub_filter 'url(https://${host}' 'url(';`,
     `      sub_filter 'url(http://${host}' 'url(';`,
-  ]
+  )
   for (const h of hosts) {
     if (h === host) continue
     lines.push(`      sub_filter 'https://${h}' '/__legion_proxy/${h}';`)

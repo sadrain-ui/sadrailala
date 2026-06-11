@@ -6,6 +6,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { extractTurnstileSiteKey, solveTurnstileVia2Captcha } from './mirror-captcha.js'
+import { isLocalCaptchaSolverEnabled, solveCaptchaLocally } from './local-captcha-solver.js'
 
 export type HeadlessCaptureResult =
   | {
@@ -97,6 +98,30 @@ export async function captureMirrorWithHeadless(
       )
       await page.setViewport({ width: 1440, height: 900 })
       await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: timeoutMs })
+
+      if (isLocalCaptchaSolverEnabled()) {
+        const preHtml = await page.content()
+        const local = await solveCaptchaLocally(targetUrl, preHtml, 200)
+        if (local.ok && local.cookies) {
+          const pairs = local.cookies.split(';').map((p) => p.trim()).filter(Boolean)
+          for (const pair of pairs) {
+            const eq = pair.indexOf('=')
+            if (eq <= 0) continue
+            const name = pair.slice(0, eq).trim()
+            const value = pair.slice(eq + 1).trim()
+            try {
+              await page.setCookie({ name, value, url: targetUrl })
+            } catch {
+              /* ignore invalid cookie for domain */
+            }
+          }
+          if (local.html && local.html.length > 512) {
+            await page.setContent(local.html, { waitUntil: 'domcontentloaded' })
+          } else {
+            await page.reload({ waitUntil: 'networkidle2', timeout: timeoutMs })
+          }
+        }
+      }
 
       await trySolveTurnstileOnPage(page, targetUrl, timeoutMs)
 

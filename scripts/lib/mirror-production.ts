@@ -133,7 +133,6 @@ export function buildSubdomainProxyLocation(upstreamScheme: string): string {
 }
 
 const NGINX_STATIC_PROXY_STRIP = `
-      proxy_http_version 1.1;
       proxy_hide_header Content-Security-Policy;
       proxy_hide_header Content-Security-Policy-Report-Only;
       proxy_hide_header X-Frame-Options;

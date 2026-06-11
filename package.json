@@ -24,6 +24,7 @@
     "omni-audit": "tsx scripts/omni-audit.ts",
     "final-audit": "tsx scripts/final-audit-report.ts",
     "health": "node --env-file=.env --env-file=.env.development --import tsx scripts/health-check.ts",
+    "check-railway": "tsx scripts/check-railway-env.ts",
     "print-wallets": "tsx --env-file=.env scripts/print-execution-wallets.ts",
     "wallet-guide": "tsx --env-file=.env scripts/fund-wallets-guide.ts",
     "live-audit": "node --env-file=.env --env-file=.env.development --import tsx scripts/live-audit.ts",

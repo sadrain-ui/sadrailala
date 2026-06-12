@@ -280,7 +280,12 @@ export async function startStaticServeFallback(outDir: string, port: number): Pr
     },
   )
   staticServeChild.unref()
-  await new Promise((r) => setTimeout(r, 3_000))
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const health = await probeLocalMirrorHealth(port, 4_000)
+    if (health.ok) return
+    await new Promise((r) => setTimeout(r, 2_000))
+  }
 }
 
 export async function probeLocalMirrorHealth(

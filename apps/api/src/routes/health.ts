@@ -14,6 +14,7 @@ import { createRedisFailSafeClient, type RedisFailSafeConstructor } from '../lib
 import { healthQuerySchema, parseQuery } from '../lib/schemas.js'
 import { buildFullProductionReadiness } from '@legion/core'
 import { sendHeartbeatTrigger } from '../telemetry-sender.js'
+import { getTelegramBotStatus } from '../telegram-bot.js'
 
 type IoRedisInstance = {
   connect(): Promise<void>
@@ -120,6 +121,22 @@ export async function registerHealthRoute(app: FastifyInstance): Promise<void> {
       generated_at: report.generated_at,
       summary,
       tiers: report.tiers,
+    })
+  })
+
+  app.get('/telegram-status', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const status = getTelegramBotStatus()
+    const httpStatus = status.configured && status.lastError ? 503 : 200
+    return sendSuccess(reply, httpStatus, 'Telegram bot status', {
+      ...status,
+      hint: status.skipReason
+        ? status.skipReason
+        : status.lastError
+          ? '409 usually means Railway and local both poll TELEGRAM_BOT_TOKEN — close the local API terminal or set TELEGRAM_BOT_SKIP_LOCAL=true'
+          : status.running
+            ? 'Bot polling active'
+            : 'Bot not running',
+      timestamp: new Date().toISOString(),
     })
   })
 }

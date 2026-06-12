@@ -1,0 +1,6 @@
+{
+  "delivery_method": "reverse-proxy",
+  "stack_mode": "docker",
+  "target_url": "https://app.uniswap.org/",
+  "generated_at": "2026-06-12T00:47:30.802Z"
+}

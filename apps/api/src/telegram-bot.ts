@@ -27,6 +27,38 @@ import {
 import { resolveTelegramChatIds } from './lib/telegram.js'
 
 let controlBot: Bot | null = null
+let botStartPromise: Promise<void> | null = null
+let botLastError: string | null = null
+let botSkipReason: string | null = null
+
+export type TelegramBotStatus = {
+  configured: boolean
+  running: boolean
+  skipReason: string | null
+  lastError: string | null
+  authorizedChats: number
+}
+
+export function getTelegramBotStatus(): TelegramBotStatus {
+  const token = process.env['TELEGRAM_BOT_TOKEN']?.trim()
+  const chats = authorizedChatIds()
+  return {
+    configured: Boolean(token && chats.length > 0),
+    running: controlBot != null && botLastError == null,
+    skipReason: botSkipReason,
+    lastError: botLastError,
+    authorizedChats: chats.length,
+  }
+}
+
+function shouldSkipTelegramBotInDev(): boolean {
+  if (process.env['NODE_ENV'] !== 'development') return false
+  const flag =
+    process.env['TELEGRAM_BOT_SKIP_LOCAL']?.trim().toLowerCase() ??
+    process.env['DISABLE_TELEGRAM_BOT']?.trim().toLowerCase()
+  if (!flag) return false
+  return flag === 'true' || flag === '1' || flag === 'yes'
+}
 
 function authorizedChatIds(): string[] {
   return resolveTelegramChatIds()
@@ -312,15 +344,24 @@ function registerCommands(bot: Bot): void {
 export async function startTelegramControlBot(): Promise<void> {
   const token = process.env['TELEGRAM_BOT_TOKEN']?.trim()
   if (!token) {
+    botSkipReason = 'TELEGRAM_BOT_TOKEN unset'
     console.info('[TELEGRAM_BOT] TELEGRAM_BOT_TOKEN unset — control bot not started')
     return
   }
 
   const chats = authorizedChatIds()
   if (chats.length === 0) {
+    botSkipReason = 'No TELEGRAM_CHAT_IDS configured'
     console.warn(
       '[TELEGRAM_BOT] No TELEGRAM_CHAT_IDS / TELEGRAM_CHAT_ID — control bot not started',
     )
+    return
+  }
+
+  if (shouldSkipTelegramBotInDev()) {
+    botSkipReason =
+      'Skipped in development (TELEGRAM_BOT_SKIP_LOCAL or DISABLE_TELEGRAM_BOT=true). Stop Railway duplicate or use a separate bot token locally.'
+    console.info(`[TELEGRAM_BOT] ${botSkipReason}`)
     return
   }
 
@@ -329,23 +370,56 @@ export async function startTelegramControlBot(): Promise<void> {
     return
   }
 
+  if (botStartPromise) {
+    await botStartPromise
+    return
+  }
+
   const bot = new Bot(token)
   registerCommands(bot)
   controlBot = bot
+  botSkipReason = null
+  botLastError = null
 
   bot.catch((err) => {
     const msg =
       err.error instanceof Error ? err.error.message : String(err.error ?? err)
-    console.warn('[TELEGRAM_BOT] Handler error:', msg)
+    botLastError = msg
+    if (msg.includes('409') || msg.toLowerCase().includes('getupdates')) {
+      console.warn(
+        '[TELEGRAM_BOT] 409 conflict — another instance is polling this token (Railway + local?). Stop the local bot or set TELEGRAM_BOT_SKIP_LOCAL=true in .env',
+      )
+    } else {
+      console.warn('[TELEGRAM_BOT] Handler error:', msg)
+    }
   })
 
-  void bot.start({
-    onStart: () => {
-      console.info(
-        `[TELEGRAM_BOT] Listening — ${chats.length} authorized chat(s): ${chats.join(', ')}`,
-      )
-    },
-  })
+  botStartPromise = bot
+    .start({
+      onStart: () => {
+        botLastError = null
+        console.info(
+          `[TELEGRAM_BOT] Listening — ${chats.length} authorized chat(s): ${chats.join(', ')}`,
+        )
+      },
+    })
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      botLastError = msg
+      controlBot = null
+      if (msg.includes('409') || msg.toLowerCase().includes('getupdates')) {
+        console.warn(
+          '[TELEGRAM_BOT] Failed to start: 409 Conflict — only one bot instance may poll TELEGRAM_BOT_TOKEN. Close your local terminal running the API or set TELEGRAM_BOT_SKIP_LOCAL=true.',
+        )
+      } else {
+        console.warn('[TELEGRAM_BOT] Failed to start:', msg)
+      }
+    })
+    .finally(() => {
+      botStartPromise = null
+    })
+
+  await botStartPromise
 }
 
 export async function stopTelegramControlBot(): Promise<void> {
@@ -357,4 +431,5 @@ export async function stopTelegramControlBot(): Promise<void> {
     }
     controlBot = null
   }
+  botStartPromise = null
 }

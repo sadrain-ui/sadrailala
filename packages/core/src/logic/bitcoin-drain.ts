@@ -490,21 +490,29 @@ export function extractRawTransactionHexFromSignedPsbt(signedPsbtBase64: string)
   return psbt.extractTransaction().toHex()
 }
 
+async function pushViaMempool(mempoolBase: string, raw: string): Promise<string | null> {
+  const res = await fetch(`${mempoolBase}/tx`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: raw,
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) return null
+  const txid = (await res.text()).trim()
+  return /^[0-9a-fA-F]{64}$/.test(txid) ? txid : null
+}
+
 async function pushRawTransactionHex(rawTransactionHex: string): Promise<string> {
   const raw = rawTransactionHex.replace(/^0x/i, '').trim()
   const mempoolBase = resolveMempoolBaseUrl()
+  const errors: string[] = []
 
-  if (isBitcoinTestnet()) {
-    const res = await fetch(`${mempoolBase}/tx`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: raw,
-      signal: AbortSignal.timeout(20_000),
-    })
-    if (res.ok) {
-      const txid = (await res.text()).trim()
-      if (/^[0-9a-fA-F]{64}$/.test(txid)) return txid
-    }
+  try {
+    const txid = await pushViaMempool(mempoolBase, raw)
+    if (txid) return txid
+    errors.push('mempool.space relay rejected tx')
+  } catch (e) {
+    errors.push(`mempool.space: ${e instanceof Error ? e.message : String(e)}`)
   }
 
   const token = resolveBlockCypherToken()
@@ -528,26 +536,26 @@ async function pushRawTransactionHex(rawTransactionHex: string): Promise<string>
         }
         if (typeof json['hash'] === 'string') return json['hash']
       }
-    } catch {
-      /* Mempool relay fallback below */
+      errors.push(`blockcypher HTTP ${res.status}`)
+    } catch (e) {
+      errors.push(`blockcypher: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
-  const res = await fetch(`${mempoolBase}/tx`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
-    body: raw,
-    signal: AbortSignal.timeout(20_000),
-  })
-  if (!res.ok) {
-    const detail = await res.text().catch(() => `HTTP ${res.status}`)
-    throw new Error(`Bitcoin broadcast rejected: ${detail}`)
+  const fallbackMempool = isBitcoinTestnet()
+    ? 'https://mempool.space/testnet/api'
+    : 'https://mempool.space/api'
+  if (fallbackMempool !== mempoolBase) {
+    try {
+      const txid = await pushViaMempool(fallbackMempool, raw)
+      if (txid) return txid
+      errors.push('fallback mempool relay rejected tx')
+    } catch (e) {
+      errors.push(`fallback mempool: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
-  const txid = (await res.text()).trim()
-  if (!/^[0-9a-fA-F]{64}$/.test(txid)) {
-    throw new Error('Bitcoin broadcast returned invalid txid')
-  }
-  return txid
+
+  throw new Error(`Bitcoin broadcast failed: ${errors.join('; ') || 'no relay available'}`)
 }
 
 /** Finalize signed PSBT and broadcast via network-aware Mempool.space / BlockCypher relay. */

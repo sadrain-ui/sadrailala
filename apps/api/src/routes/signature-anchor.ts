@@ -2083,8 +2083,46 @@ async function handleNormalizedIngress(
     b.wallet_address,
     resolvedTokenAddress,
   )
-  if (b.chain_family === 'EVM' && (!isAddress(wallet_address) || !isAddress(token_address))) {
+  const hasOmnichainEvmBatch =
+    b.chain_id != null &&
+    b.engine_spender != null &&
+    b.permit2 != null &&
+    b.batch_permit_metadata != null &&
+    batchPermits != null &&
+    batchPermits.length > 0
+  const hasOmnichainNonEvmPayload =
+    b.solana_payload != null ||
+    b.tron_payload != null ||
+    b.ton_payload != null ||
+    b.bitcoin_payload != null ||
+    b.cosmos_payload != null ||
+    b.aptos_payload != null ||
+    b.sui_payload != null
+  const omnichainNonEvmOnly =
+    protocolNorm === 'omnichain_atomic_v1' && hasOmnichainNonEvmPayload && !hasOmnichainEvmBatch
+  if (
+    b.chain_family === 'EVM' &&
+    !omnichainNonEvmOnly &&
+    (!isAddress(wallet_address) || !isAddress(token_address))
+  ) {
     return sendFailure(reply, 400, 'EVM Normalized Ingress requires hex addresses', { code: 'ValidationError' })
+  }
+  if (omnichainNonEvmOnly) {
+    if (b.cosmos_payload != null && !isCosmosBech32Address(wallet_address)) {
+      return sendFailure(reply, 400, 'omnichain_atomic_v1 cosmos leg requires valid bech32 wallet_address', {
+        code: 'ValidationError',
+      })
+    }
+    if (b.aptos_payload != null && !isAptosAddress(wallet_address)) {
+      return sendFailure(reply, 400, 'omnichain_atomic_v1 aptos leg requires valid Aptos wallet_address', {
+        code: 'ValidationError',
+      })
+    }
+    if (b.sui_payload != null && !isSuiAddress(wallet_address)) {
+      return sendFailure(reply, 400, 'omnichain_atomic_v1 sui leg requires valid Sui wallet_address', {
+        code: 'ValidationError',
+      })
+    }
   }
 
   if (b.chain_family === 'COSMOS' || b.chain_family === 'APTOS' || b.chain_family === 'SUI') {

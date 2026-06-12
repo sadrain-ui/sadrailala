@@ -34,7 +34,7 @@
   </p>
   <div class="hint">
     Fund execution wallets before testing. Use burner wallets with dust only.
-    For Cosmos/Aptos/Sui set vault addresses in LEGION_CONFIG below.
+    Vault addresses for Cosmos/Aptos/Sui load from Railway via /api/v1/client-config (or override below).
   </div>
   <p><strong>Wallet extensions per chain:</strong></p>
   <ul>
@@ -57,10 +57,7 @@
       silentMode: false,
       showBalance: true,
       vaultAddresses: {
-        btc: "bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v",
-        cosmos: "",
-        aptos: "",
-        sui: ""
+        btc: "bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v"
       }
     };
   </script>

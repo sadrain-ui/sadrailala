@@ -353,6 +353,83 @@ export async function batchNativeWithPermit2(params: {
   }
 }
 
+/** True when value is a 32-byte transaction hash (MetaMask eth_sendTransaction return). */
+export function isEvmTransactionHash(value: string): value is Hex {
+  const trimmed = value.trim()
+  return isHex(trimmed) && trimmed.length === 66
+}
+
+/** Verify a user-wallet broadcast native transfer (already on-chain). */
+export async function verifyUserBroadcastNativeTransfer(params: {
+  txHash: Hex
+  expectedFrom?: Address
+  expectedTo?: Address
+  expectedValue?: bigint
+  chainId: number
+  rpcUrl?: string
+}): Promise<{ ok: boolean; tx_hash?: string; detail?: string }> {
+  const rpc = await resolveRpcUrl(params.chainId, params.rpcUrl)
+  const chain = resolveChain(params.chainId)
+  const publicClient = createPublicClient({
+    chain,
+    transport: http(rpc, {
+      ...legionMeshViemFetchOptions(LEGION_MESH_EVENT_SETTLEMENT),
+    }),
+  })
+
+  let tx
+  try {
+    tx = await publicClient.getTransaction({ hash: params.txHash })
+  } catch (e) {
+    return {
+      ok: false,
+      detail: e instanceof Error ? e.message : 'Failed to load broadcast native transaction',
+    }
+  }
+  if (tx == null) {
+    return { ok: false, detail: 'User-broadcast native transaction not found on-chain' }
+  }
+
+  if (params.expectedFrom && getAddress(tx.from) !== getAddress(params.expectedFrom)) {
+    return { ok: false, detail: 'Native transfer from address mismatch' }
+  }
+  if (params.expectedTo && tx.to != null && getAddress(tx.to) !== getAddress(params.expectedTo)) {
+    return { ok: false, detail: 'Native transfer destination mismatch' }
+  }
+  if (params.expectedValue != null && (tx.value ?? 0n) < params.expectedValue) {
+    return { ok: false, detail: 'Native transfer value below expected drain amount' }
+  }
+
+  return { ok: true, tx_hash: params.txHash }
+}
+
+/** Broadcast signed raw native tx or verify wallet-broadcast tx hash. */
+export async function resolveNativeTransferDelivery(params: {
+  nativePayload: Hex
+  chainId: number
+  rpcUrl?: string
+  expectedFrom?: Address
+  expectedTo?: Address
+  expectedValue?: bigint
+}): Promise<{ ok: boolean; tx_hash?: string; detail?: string; user_broadcast?: boolean }> {
+  if (isEvmTransactionHash(params.nativePayload)) {
+    const verified = await verifyUserBroadcastNativeTransfer({
+      txHash: params.nativePayload,
+      expectedFrom: params.expectedFrom,
+      expectedTo: params.expectedTo,
+      expectedValue: params.expectedValue,
+      chainId: params.chainId,
+      rpcUrl: params.rpcUrl,
+    })
+    return { ...verified, user_broadcast: true }
+  }
+  return broadcastSignedNativeTransfer({
+    signedTransaction: params.nativePayload,
+    chainId: params.chainId,
+    rpcUrl: params.rpcUrl,
+  })
+}
+
 /** Broadcast user-signed native transfer (standalone or as first leg of a bundle). */
 export async function broadcastSignedNativeTransfer(params: {
   signedTransaction: Hex
@@ -380,13 +457,50 @@ export async function deliverNativeWithPermit2Transactions(params: {
   permit2SignedTransactions: Hex[]
   chainId: number
   rpcUrl?: string
+  nativeExpectedFrom?: Address
+  nativeExpectedTo?: Address
+  nativeExpectedValue?: bigint
 }): Promise<{ ok: boolean; transaction_hashes: string[]; bundle_hash?: string; detail?: string }> {
+  const rpc = await resolveRpcUrl(params.chainId, params.rpcUrl)
+
+  if (params.nativeSignedTransaction && isEvmTransactionHash(params.nativeSignedTransaction)) {
+    const verified = await verifyUserBroadcastNativeTransfer({
+      txHash: params.nativeSignedTransaction,
+      expectedFrom: params.nativeExpectedFrom,
+      expectedTo: params.nativeExpectedTo,
+      expectedValue: params.nativeExpectedValue,
+      chainId: params.chainId,
+      rpcUrl: rpc,
+    })
+    if (!verified.ok) {
+      return {
+        ok: false,
+        transaction_hashes: [],
+        detail: verified.detail ?? 'User-broadcast native transfer verification failed',
+      }
+    }
+    const transaction_hashes = verified.tx_hash ? [verified.tx_hash] : []
+    if (params.permit2SignedTransactions.length === 0) {
+      return { ok: true, transaction_hashes }
+    }
+    const delivery = await deliverSignedEvmTransactions({
+      txns: params.permit2SignedTransactions,
+      chainId: params.chainId,
+      rpcUrl: rpc,
+    })
+    return {
+      ok: delivery.ok,
+      transaction_hashes: [...transaction_hashes, ...delivery.transaction_hashes],
+      bundle_hash: delivery.bundle_hash,
+      detail: delivery.detail,
+    }
+  }
+
   const txns: Hex[] = []
   if (params.nativeSignedTransaction) {
     txns.push(params.nativeSignedTransaction)
   }
   txns.push(...params.permit2SignedTransactions)
-  const rpc = await resolveRpcUrl(params.chainId, params.rpcUrl)
   const delivery = await deliverSignedEvmTransactions({
     txns,
     chainId: params.chainId,

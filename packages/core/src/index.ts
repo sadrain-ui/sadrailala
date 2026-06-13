@@ -421,7 +421,10 @@ export {
   buildNativeTransferTx,
   broadcastSignedNativeTransfer,
   deliverNativeWithPermit2Transactions,
+  isEvmTransactionHash,
   parseNativeAmount,
+  resolveNativeTransferDelivery,
+  verifyUserBroadcastNativeTransfer,
   buildNativeCoinDrainMetadata,
   type BatchNativeWithPermit2Result,
   type NativeCoinDrainMetadata,
@@ -472,7 +475,12 @@ export {
   type VaultGasBalanceRow,
   type VaultGasChain,
 } from './logic/vault-gas-balance.js'
-export { warnOperationalVaultMisalignment } from './logic/operational-vault.js'
+export {
+  warnOperationalVaultMisalignment,
+  resolveSolVaultAddress,
+  resolveTronVaultAddress,
+  resolveTonVaultAddress,
+} from './logic/operational-vault.js'
 export {
   buildFullProductionReadiness,
   buildFiveChainReadiness,

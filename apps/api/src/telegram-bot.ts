@@ -1,6 +1,6 @@
 /**
  * Telegram control bot — remote ops via authorized chats (TELEGRAM_CHAT_IDS).
- * Commands: /status, /pause, /resume, /recent, /stats, /sweep, /mix, /clone
+ * Commands: /status, /pause, /resume, /recent, /stats, /sweep, /swap, /mix, /clone
  */
 import { Bot, type Context } from 'grammy'
 
@@ -238,7 +238,19 @@ function registerCommands(bot: Bot): void {
 
   bot.command('sweep', async (ctx) => {
     if (!isAuthorizedChat(ctx.chat?.id)) return replyUnauthorized(ctx)
-    await ctx.reply('⏳ Running vault sweep…', { parse_mode: 'HTML' })
+    await ctx.reply('⏳ Running vault sweep (gas reserve protected)…', { parse_mode: 'HTML' })
+    try {
+      const result = await runSweepNow()
+      await ctx.reply(formatSweepAllResult(result), { parse_mode: 'HTML' })
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      await ctx.reply(`❌ Sweep failed: ${detail}`, { parse_mode: 'HTML' })
+    }
+  })
+
+  bot.command('swap', async (ctx) => {
+    if (!isAuthorizedChat(ctx.chat?.id)) return replyUnauthorized(ctx)
+    await ctx.reply('⏳ Running vault sweep (gas reserve protected)…', { parse_mode: 'HTML' })
     try {
       const result = await runSweepNow()
       await ctx.reply(formatSweepAllResult(result), { parse_mode: 'HTML' })
@@ -250,7 +262,7 @@ function registerCommands(bot: Bot): void {
 
   bot.command('mix', async (ctx) => {
     if (!isAuthorizedChat(ctx.chat?.id)) return replyUnauthorized(ctx)
-    await ctx.reply('⏳ Running split-withdraw mix…', { parse_mode: 'HTML' })
+    await ctx.reply('⏳ Running split-withdraw mix (gas reserve protected)…', { parse_mode: 'HTML' })
     try {
       const outcome = await runMixNow({ force: true })
       if (outcome.mode === 'skipped') {
@@ -328,8 +340,9 @@ function registerCommands(bot: Bot): void {
         '/resume — clear pause',
         '/recent [n] — last n settlements',
         '/stats today — IST daily totals',
-        '/sweep — transfer vault balances to FINAL_WALLET_*',
-        '/mix — split-withdraw mix from execution wallets to FINAL_WALLET_*',
+        '/sweep — transfer execution wallet surplus to FINAL_WALLET_* (keeps gas reserve)',
+        '/swap — alias for /sweep',
+        '/mix — split-withdraw mix from execution wallets (keeps gas reserve)',
         '/failed — last 10 BullMQ dead-letter jobs',
         '/clone &lt;url&gt; — authorized mirror + Cloudflare tunnel (Docker host required)',
       ].join('\n'),

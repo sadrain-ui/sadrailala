@@ -341,6 +341,8 @@ export {
   sweepBtcVault,
   formatSweepAllResult,
   readSweepErc20Tokens,
+  readExecutionGasReserve,
+  readExecutionGasReserveNative,
   type ChainSweepResult,
   type SweepAllResult,
   type SweepChain,

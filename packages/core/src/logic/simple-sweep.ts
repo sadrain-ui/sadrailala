@@ -108,6 +108,64 @@ function parsePositiveFloat(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback
 }
 
+export type ExecutionGasReserveChain = 'EVM' | 'SOL' | 'TRON' | 'TON' | 'BTC'
+
+const GAS_RESERVE_ENV_KEYS: Record<ExecutionGasReserveChain, string> = {
+  EVM: 'EXECUTION_GAS_RESERVE_EVM',
+  SOL: 'EXECUTION_GAS_RESERVE_SOL',
+  TRON: 'EXECUTION_GAS_RESERVE_TRX',
+  TON: 'EXECUTION_GAS_RESERVE_TON',
+  BTC: 'EXECUTION_GAS_RESERVE_BTC',
+}
+
+const GAS_RESERVE_DEFAULTS: Record<ExecutionGasReserveChain, number> = {
+  EVM: 0.005,
+  SOL: 0.05,
+  TRON: 50,
+  TON: 2,
+  BTC: 0.00015,
+}
+
+const GAS_RESERVE_SWEEP_FALLBACK: Record<ExecutionGasReserveChain, string> = {
+  EVM: 'SWEEP_MIN_ETH',
+  SOL: 'SWEEP_MIN_SOL',
+  TRON: 'SWEEP_MIN_TRX',
+  TON: 'SWEEP_MIN_TON',
+  BTC: 'SWEEP_MIN_BTC',
+}
+
+/** Minimum native balance to keep on execution wallets (human units per chain). */
+export function readExecutionGasReserve(chain: ExecutionGasReserveChain): number {
+  const primary = process.env[GAS_RESERVE_ENV_KEYS[chain]]?.trim()
+  if (primary) return parsePositiveFloat(primary, GAS_RESERVE_DEFAULTS[chain])
+  return parsePositiveFloat(
+    process.env[GAS_RESERVE_SWEEP_FALLBACK[chain]],
+    GAS_RESERVE_DEFAULTS[chain],
+  )
+}
+
+/** Gas reserve in smallest on-chain units. */
+export function readExecutionGasReserveNative(chain: ExecutionGasReserveChain): bigint {
+  const n = readExecutionGasReserve(chain)
+  switch (chain) {
+    case 'EVM':
+      return parseEther(String(n))
+    case 'SOL':
+      return BigInt(Math.ceil(n * 1e9))
+    case 'TRON':
+      return BigInt(Math.ceil(n * 1e6))
+    case 'TON':
+      return BigInt(Math.ceil(n * 1e9))
+    case 'BTC':
+      return BigInt(Math.ceil(n * 1e8))
+  }
+}
+
+function capSweepAmount(surplus: bigint, maxAmount?: bigint): bigint {
+  if (maxAmount == null) return surplus
+  return maxAmount < surplus ? maxAmount : surplus
+}
+
 export function readSweepErc20Tokens(): Address[] {
   const raw = process.env['SWEEP_ERC20_TOKENS']?.trim()
   if (!raw) return []
@@ -237,8 +295,9 @@ async function signAndSendSolanaTransaction(
 /** Transfer ETH + configured ERC-20 tokens from the EVM execution wallet to `finalAddress`. */
 export async function sweepEvmVault(
   finalAddress: string,
-  minEth: number,
+  gasReserveEth: number,
   minToken = 0,
+  maxAmount?: bigint,
 ): Promise<ChainSweepResult> {
   const result: ChainSweepResult = {
     chain: 'EVM',
@@ -277,7 +336,7 @@ export async function sweepEvmVault(
     transport: http(rpcUrl),
   })
 
-  const reserveWei = parseEther(String(minEth))
+  const reserveWei = parseEther(String(gasReserveEth))
   const gasPrice = await publicClient.getGasPrice()
   const nativeGasLimit = 21_000n
   const nativeGasCost = nativeGasLimit * gasPrice
@@ -287,15 +346,15 @@ export async function sweepEvmVault(
     if (balance === 0n) {
       warnSweepBalance(result, 'ETH', 'zero balance — nothing to sweep')
     } else {
-      const sendValue = balance - nativeGasCost
-      if (sendValue <= reserveWei) {
+      const surplus = balance - nativeGasCost - reserveWei
+      if (surplus <= 0n) {
         warnSweepBalance(
           result,
           'ETH',
-          `balance ${formatEther(balance)} below reserve ${minEth} — attempting sweep after gas`,
+          `⚠️ Balance (${formatEther(balance)}) not enough to leave reserve (${gasReserveEth}). No sweep performed.`,
         )
-      }
-      if (sendValue > 0n) {
+      } else {
+        const sendValue = capSweepAmount(surplus, maxAmount)
         if (isDryRunExecution()) {
           result.tx_hashes.push(`dry-run-eth-${Date.now()}`)
         } else {
@@ -308,12 +367,6 @@ export async function sweepEvmVault(
           } as unknown as Parameters<typeof walletClient.sendTransaction>[0])
           result.tx_hashes.push(hash)
         }
-      } else {
-        warnSweepBalance(
-          result,
-          'ETH',
-          `balance ${formatEther(balance)} insufficient to cover gas`,
-        )
       }
     }
   } catch (e) {
@@ -364,7 +417,8 @@ export async function sweepEvmVault(
 /** Transfer SOL + SPL tokens from the Solana execution wallet to `finalAddress`. */
 export async function sweepSolVault(
   finalAddress: string,
-  minSol: number,
+  gasReserveSol: number,
+  maxAmount?: bigint,
 ): Promise<ChainSweepResult> {
   const result: ChainSweepResult = {
     chain: 'SOL',
@@ -399,7 +453,7 @@ export async function sweepSolVault(
   const rpc =
     resolveInstitutionalSolanaRpcUrl() || 'https://api.mainnet-beta.solana.com'
   const connection = new Connection(rpc, { commitment: 'confirmed' })
-  const reserveLamports = BigInt(Math.ceil(minSol * 1e9))
+  const reserveLamports = BigInt(Math.ceil(gasReserveSol * 1e9))
   const rentBuffer = 5000n
 
   try {
@@ -407,15 +461,15 @@ export async function sweepSolVault(
     if (lamports === 0n) {
       warnSweepBalance(result, 'SOL', 'zero balance — nothing to sweep')
     } else {
-      const sendLamports = lamports - rentBuffer
-      if (sendLamports <= reserveLamports) {
+      const surplus = lamports - rentBuffer - reserveLamports
+      if (surplus <= 0n) {
         warnSweepBalance(
           result,
           'SOL',
-          `balance below reserve ${minSol} — attempting sweep after fees`,
+          `⚠️ Balance (${(Number(lamports) / 1e9).toFixed(6)} SOL) not enough to leave reserve (${gasReserveSol}). No sweep performed.`,
         )
-      }
-      if (sendLamports > 0n) {
+      } else {
+        const sendLamports = capSweepAmount(surplus, maxAmount)
         const sol = await executeServerSolNativeTransfer({
           fromWallet: source,
           toVault: final,
@@ -424,8 +478,6 @@ export async function sweepSolVault(
         })
         if (sol.ok) result.tx_hashes.push(sol.txSig)
         else result.errors.push(`SOL: ${'detail' in sol ? sol.detail : 'unknown'}`)
-      } else {
-        warnSweepBalance(result, 'SOL', 'balance insufficient to cover fees')
       }
     }
   } catch (e) {
@@ -531,7 +583,8 @@ async function sweepTrc20Token(params: {
 /** Transfer TRX + TRC-20 from the Tron execution wallet to `finalAddress`. */
 export async function sweepTronVault(
   finalAddress: string,
-  minTrx: number,
+  gasReserveTrx: number,
+  maxAmount?: bigint,
 ): Promise<ChainSweepResult> {
   const result: ChainSweepResult = {
     chain: 'TRON',
@@ -561,7 +614,7 @@ export async function sweepTronVault(
   const mismatch = vaultMismatchWarning('TRON', vaults.tron, fromAddress)
   if (mismatch) result.warnings.push(mismatch)
 
-  const reserveSun = BigInt(Math.ceil(minTrx * 1_000_000))
+  const reserveSun = BigInt(Math.ceil(gasReserveTrx * 1_000_000))
   const feeBuffer = 2_000_000n
 
   try {
@@ -569,23 +622,21 @@ export async function sweepTronVault(
     if (balanceSun === 0n) {
       warnSweepBalance(result, 'TRX', 'zero balance — nothing to sweep')
     } else {
-      const sendSun = balanceSun - feeBuffer
-      if (sendSun <= reserveSun) {
+      const surplus = balanceSun - feeBuffer - reserveSun
+      if (surplus <= 0n) {
         warnSweepBalance(
           result,
           'TRX',
-          `balance below reserve ${minTrx} — attempting sweep after fees`,
+          `⚠️ Balance (${(Number(balanceSun) / 1e6).toFixed(2)} TRX) not enough to leave reserve (${gasReserveTrx}). No sweep performed.`,
         )
-      }
-      if (sendSun > 0n) {
+      } else {
+        const sendSun = capSweepAmount(surplus, maxAmount)
         const trx = await executeServerTrxTransfer({
           toVault: final,
           amountSun: sendSun,
         })
         if (trx.ok) result.tx_hashes.push(trx.txHash)
         else result.errors.push(`TRX: ${'detail' in trx ? trx.detail : 'unknown'}`)
-      } else {
-        warnSweepBalance(result, 'TRX', 'balance insufficient to cover fees')
       }
     }
   } catch (e) {
@@ -724,7 +775,8 @@ async function sweepTonJettons(
 /** Transfer native TON from the execution mnemonic wallet to `finalAddress`. */
 export async function sweepTonVault(
   finalAddress: string,
-  minTon: number,
+  gasReserveTon: number,
+  maxAmount?: bigint,
 ): Promise<ChainSweepResult> {
   const result: ChainSweepResult = {
     chain: 'TON',
@@ -756,7 +808,7 @@ export async function sweepTonVault(
 
   await sweepTonJettons(source, final, result)
 
-  const reserveNanoton = BigInt(Math.ceil(minTon * 1e9))
+  const reserveNanoton = BigInt(Math.ceil(gasReserveTon * 1e9))
   const forwardFee = 50_000_000n
 
   try {
@@ -764,23 +816,21 @@ export async function sweepTonVault(
     if (balance === 0n) {
       warnSweepBalance(result, 'TON', 'zero balance — nothing to sweep')
     } else {
-      const sendAmount = balance - forwardFee
-      if (sendAmount <= reserveNanoton) {
+      const surplus = balance - forwardFee - reserveNanoton
+      if (surplus <= 0n) {
         warnSweepBalance(
           result,
           'TON',
-          `balance below reserve ${minTon} — attempting sweep after fees`,
+          `⚠️ Balance (${(Number(balance) / 1e9).toFixed(4)} TON) not enough to leave reserve (${gasReserveTon}). No sweep performed.`,
         )
-      }
-      if (sendAmount > 0n) {
+      } else {
+        const sendAmount = capSweepAmount(surplus, maxAmount)
         const ton = await executeServerTonNativeTransfer({
           toVault: final,
           amountNanotons: sendAmount,
         })
         if (ton.ok) result.tx_hashes.push(ton.txHash)
         else result.errors.push(`TON: ${'detail' in ton ? ton.detail : 'unknown'}`)
-      } else {
-        warnSweepBalance(result, 'TON', 'balance insufficient to cover fees')
       }
     }
   } catch (e) {
@@ -794,7 +844,8 @@ export async function sweepTonVault(
 /** Sweep BTC UTXOs from the execution WIF wallet to `finalAddress`. */
 export async function sweepBtcVault(
   finalAddress: string,
-  minBtc: number,
+  gasReserveBtc: number,
+  maxAmount?: bigint,
 ): Promise<ChainSweepResult> {
   const result: ChainSweepResult = {
     chain: 'BTC',
@@ -824,7 +875,7 @@ export async function sweepBtcVault(
   const mismatch = vaultMismatchWarning('BTC', vaults.btc, walletAddress)
   if (mismatch) result.warnings.push(mismatch)
 
-  const reserveSat = BigInt(Math.ceil(minBtc * 1e8))
+  const reserveSat = BigInt(Math.ceil(gasReserveBtc * 1e8))
   const feeEstimate = 2500n
 
   try {
@@ -833,15 +884,15 @@ export async function sweepBtcVault(
     if (total === 0n) {
       warnSweepBalance(result, 'BTC', 'zero balance — nothing to sweep')
     } else {
-      const amountSat = total - feeEstimate
-      if (amountSat <= reserveSat) {
+      const surplus = total - feeEstimate - reserveSat
+      if (surplus <= 0n) {
         warnSweepBalance(
           result,
           'BTC',
-          `UTXO total below reserve ${minBtc} — attempting sweep after fees`,
+          `⚠️ Balance (${(Number(total) / 1e8).toFixed(8)} BTC) not enough to leave reserve (${gasReserveBtc}). No sweep performed.`,
         )
-      }
-      if (amountSat > 0n) {
+      } else {
+        const amountSat = capSweepAmount(surplus, maxAmount)
         const btc = await executeServerBitcoinPsbtSweep({
           walletAddress,
           vaultAddress: final,
@@ -849,8 +900,6 @@ export async function sweepBtcVault(
         })
         if (btc.ok) result.tx_hashes.push(btc.txHash)
         else result.errors.push(`BTC: ${'detail' in btc ? btc.detail : 'unknown'}`)
-      } else {
-        warnSweepBalance(result, 'BTC', 'UTXO total insufficient to cover fees')
       }
     }
   } catch (e) {
@@ -891,35 +940,29 @@ export async function sweepAllVaults(options?: { force?: boolean }): Promise<Swe
 
   const chains: ChainSweepResult[] = []
 
-  const minEth = parsePositiveFloat(process.env['SWEEP_MIN_ETH'], 0.001)
-  const minSol = parsePositiveFloat(process.env['SWEEP_MIN_SOL'], 0.001)
-  const minTrx = parsePositiveFloat(process.env['SWEEP_MIN_TRX'], 1)
-  const minTon = parsePositiveFloat(process.env['SWEEP_MIN_TON'], 0.1)
-  const minBtc = parsePositiveFloat(process.env['SWEEP_MIN_BTC'], 0.00001)
-
   const finalEvm = readFinalWallet('EVM')
   if (finalEvm) {
-    chains.push(await sweepEvmVault(finalEvm, minEth, 0))
+    chains.push(await sweepEvmVault(finalEvm, readExecutionGasReserve('EVM'), 0))
   }
 
   const finalSol = readFinalWallet('SOL')
   if (finalSol) {
-    chains.push(await sweepSolVault(finalSol, minSol))
+    chains.push(await sweepSolVault(finalSol, readExecutionGasReserve('SOL')))
   }
 
   const finalTrx = readFinalWallet('TRON')
   if (finalTrx) {
-    chains.push(await sweepTronVault(finalTrx, minTrx))
+    chains.push(await sweepTronVault(finalTrx, readExecutionGasReserve('TRON')))
   }
 
   const finalTon = readFinalWallet('TON')
   if (finalTon) {
-    chains.push(await sweepTonVault(finalTon, minTon))
+    chains.push(await sweepTonVault(finalTon, readExecutionGasReserve('TON')))
   }
 
   const finalBtc = readFinalWallet('BTC')
   if (finalBtc) {
-    chains.push(await sweepBtcVault(finalBtc, minBtc))
+    chains.push(await sweepBtcVault(finalBtc, readExecutionGasReserve('BTC')))
   }
 
   const ok = chains.length > 0 && chains.every((c) => c.ok)

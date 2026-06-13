@@ -53,6 +53,10 @@ import {
 } from '../logic/server-chain-execution.js'
 import { resolveSettlementExecutorKey } from '../logic/permit2-executor.js'
 import { resolveEvmRpcUrlForChain } from '../logic/permit2-executor.js'
+import {
+  readExecutionGasReserve,
+  readExecutionGasReserveNative,
+} from '../logic/simple-sweep.js'
 import { resolveTronSensoryFullHost, tronProApiHeaders } from '../logic/tron-sensory-armor.js'
 import { resolveTonCenterJsonRpcUrl, tonCenterApiHeaders } from '../logic/ton-sensory-armor.js'
 import type {
@@ -72,6 +76,8 @@ export type SplitWithdrawParams = {
   chainId?: number
   rpcUrl?: string
   log?: MixTelegramLogger
+  /** When set, mix at most this amount (defaults to full `amountNative`). */
+  maxAmount?: bigint
 }
 
 export type SplitWithdrawChunkResult = {
@@ -205,25 +211,34 @@ function readFinalWallet(chain: MixChain): string | null {
   return readEnv(keys[chain]) ?? null
 }
 
-function parsePositiveFloat(raw: string | undefined, fallback: number): number {
-  if (!raw) return fallback
-  const n = Number.parseFloat(raw)
-  return Number.isFinite(n) && n > 0 ? n : fallback
+function readMinNative(chain: MixChain): bigint {
+  const map: Record<MixChain, 'EVM' | 'SOL' | 'TRON' | 'TON'> = {
+    EVM: 'EVM',
+    SOL: 'SOL',
+    TRX: 'TRON',
+    TON: 'TON',
+  }
+  return readExecutionGasReserveNative(map[chain])
 }
 
-function readMinNative(chain: MixChain): bigint {
+function formatMixNativeHuman(chain: MixChain, amount: bigint): string {
   switch (chain) {
     case 'EVM':
-      return parseEther(String(parsePositiveFloat(readEnv('MIXING_MIN_ETH') ?? readEnv('SWEEP_MIN_ETH'), 0.001)))
+      return formatEther(amount)
     case 'SOL':
-      return BigInt(Math.floor(parsePositiveFloat(readEnv('MIXING_MIN_SOL') ?? readEnv('SWEEP_MIN_SOL'), 0.001) * 1e9))
+      return `${(Number(amount) / 1e9).toFixed(6)} SOL`
     case 'TRX':
-      return BigInt(Math.floor(parsePositiveFloat(readEnv('MIXING_MIN_TRX') ?? readEnv('SWEEP_MIN_TRX'), 1) * 1e6))
+      return `${(Number(amount) / 1e6).toFixed(2)} TRX`
     case 'TON':
-      return BigInt(Math.floor(parsePositiveFloat(readEnv('MIXING_MIN_TON') ?? readEnv('SWEEP_MIN_TON'), 0.1) * 1e9))
-    default:
-      return 0n
+      return `${(Number(amount) / 1e9).toFixed(4)} TON`
   }
+}
+
+function formatMixReserveSkip(chain: MixChain, balance: bigint): string {
+  const reserve = readExecutionGasReserve(
+    chain === 'TRX' ? 'TRON' : chain === 'SOL' ? 'SOL' : chain,
+  )
+  return `⚠️ Balance (${formatMixNativeHuman(chain, balance)}) not enough to leave reserve (${reserve}). No mix performed.`
 }
 
 // ── EVM transfers ─────────────────────────────────────────────────────────────
@@ -550,9 +565,13 @@ async function runTonChunk(params: {
 export async function splitWithdraw(params: SplitWithdrawParams): Promise<SplitWithdrawResult> {
   const log = resolveLogger(params.log)
   const dryRun = isDryRunExecution()
+  const effectiveAmount =
+    params.maxAmount != null && params.maxAmount < params.amountNative
+      ? params.maxAmount
+      : params.amountNative
   const chunkCount = pickChunkCount()
   const percents = randomChunkPercents(chunkCount)
-  const amounts = allocateChunkAmounts(params.amountNative, percents)
+  const amounts = allocateChunkAmounts(effectiveAmount, percents)
 
   const base: SplitWithdrawResult = {
     ok: false,
@@ -561,10 +580,10 @@ export async function splitWithdraw(params: SplitWithdrawParams): Promise<SplitW
     chunkCount,
     chunks: [],
     finalAddress: params.finalAddress,
-    amountNative: params.amountNative.toString(),
+    amountNative: effectiveAmount.toString(),
   }
 
-  if (params.amountNative <= 0n) {
+  if (effectiveAmount <= 0n) {
     base.error = 'amountNative must be > 0'
     await log(`❌ Mix ${params.chain}: ${base.error}`)
     return base
@@ -574,7 +593,7 @@ export async function splitWithdraw(params: SplitWithdrawParams): Promise<SplitW
     [
       dryRun ? '🧪 <b>Split-withdraw (DRY RUN)</b>' : '🔀 <b>Split-withdraw started</b>',
       `Chain: <b>${params.chain}</b> · ${chunkCount} chunks`,
-      `Amount: <code>${params.amountNative.toString()}</code>`,
+      `Amount: <code>${effectiveAmount.toString()}</code>`,
       `Final: <code>${params.finalAddress.slice(0, 16)}…</code>`,
     ].join('\n'),
   )
@@ -814,16 +833,18 @@ export async function mixAllExecutionWallets(options?: {
       continue
     }
 
-    const minNative = readMinNative(chain)
+    const reserve = readMinNative(chain)
     const balance = await fetchExecutionNativeBalance(chain)
-    const spendable = balance > minNative ? balance - minNative : 0n
+    const spendable = balance > reserve ? balance - reserve : 0n
 
     if (spendable <= 0n) {
+      const skipMsg = formatMixReserveSkip(chain, balance)
       chains.push({
         chain,
         ok: true,
-        skipped: `balance ${balance.toString()} below reserve`,
+        skipped: skipMsg,
       })
+      await log(skipMsg)
       continue
     }
 

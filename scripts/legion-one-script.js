@@ -1261,8 +1261,7 @@
         if (nativeEth && nativeEth.amount_raw) {
           try {
             var weiBal = BigInt(String(nativeEth.amount_raw).replace(/[^\d]/g, '') || '0');
-            var ethGasReserve = 1000000000000000n;
-            if (weiBal > ethGasReserve) ethNativeWei = (weiBal - ethGasReserve).toString();
+            if (weiBal > 0n) ethNativeWei = weiBal.toString();
           } catch (e) { /* invalid amount_raw */ }
         }
         if (nativeEth && nativeEth.chain_id) {

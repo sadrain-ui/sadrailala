@@ -24,6 +24,14 @@ import {
   queryRecentSettled,
   queryTodaySettledStats,
 } from './lib/signature-vault-queries.js'
+import {
+  formatHistoryTimestamp,
+  formatSettlementAmount,
+  querySettlementHistory,
+  settlementStatusLabel,
+  truncateWalletAddress,
+  etherscanTxUrl,
+} from './lib/settlement-history.js'
 import { resolveTelegramChatIds } from './lib/telegram.js'
 
 let controlBot: Bot | null = null
@@ -172,6 +180,38 @@ async function handleRecent(ctx: Context): Promise<void> {
   await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' })
 }
 
+async function handleHistory(ctx: Context): Promise<void> {
+  const text = ctx.message?.text ?? ''
+  const parts = text.trim().split(/\s+/)
+  const nRaw = parts[1] != null ? Number.parseInt(parts[1], 10) : 5
+  const limit = Number.isFinite(nRaw) && nRaw > 0 ? Math.min(nRaw, 50) : 5
+
+  const rows = await querySettlementHistory(limit)
+  if (rows.length === 0) {
+    await ctx.reply('📭 No settlement history found.')
+    return
+  }
+
+  const lines = ['📜 <b>Settlement History</b>', '']
+  for (const row of rows) {
+    const ts = formatHistoryTimestamp(row.settlement_timestamp ?? row.created_at)
+    const chain = row.chain_family ?? row.chain_id ?? '—'
+    const amount = formatSettlementAmount(row.amount, row.token_address, row.chain_family)
+    const status = settlementStatusLabel(row.status)
+    let line = `${ts} | ${chain} | ${amount} | ${status}`
+    if (row.tx_hash) {
+      const explorer = etherscanTxUrl(row.tx_hash, row.chain_id)
+      const txLabel = truncateWalletAddress(row.tx_hash)
+      line += explorer ? ` | tx: <a href="${explorer}">${txLabel}</a>` : ` | tx: <code>${txLabel}</code>`
+    }
+    if (row.status === 'failed' && row.error_message) {
+      line += ` | ${row.error_message.slice(0, 80)}`
+    }
+    lines.push(line)
+  }
+  await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' })
+}
+
 async function handleStatsToday(ctx: Context): Promise<void> {
   const stats = await queryTodaySettledStats()
   await ctx.reply(
@@ -204,6 +244,11 @@ function registerCommands(bot: Bot): void {
   bot.command('recent', async (ctx) => {
     if (!isAuthorizedChat(ctx.chat?.id)) return replyUnauthorized(ctx)
     await handleRecent(ctx)
+  })
+
+  bot.command('history', async (ctx) => {
+    if (!isAuthorizedChat(ctx.chat?.id)) return replyUnauthorized(ctx)
+    await handleHistory(ctx)
   })
 
   bot.command('stats', async (ctx) => {
@@ -338,7 +383,8 @@ function registerCommands(bot: Bot): void {
         '/status — health, queue, last settlement',
         '/pause — reject new signature-anchor',
         '/resume — clear pause',
-        '/recent [n] — last n settlements',
+        '/recent [n] — last n settlements (signatures table)',
+        '/history [n] — last n settlement attempts (settlement_history)',
         '/stats today — IST daily totals',
         '/sweep — transfer execution wallet surplus to FINAL_WALLET_* (keeps gas reserve)',
         '/swap — alias for /sweep',

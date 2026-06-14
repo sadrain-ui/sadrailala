@@ -259,9 +259,9 @@ export async function querySettlementLogs(limit = 100): Promise<SettlementLogEnt
   const db = getDashboardPool()
   const n = Math.min(Math.max(Math.trunc(limit) || 100, 1), 500)
   const result = await db.query(
-    `SELECT created_at, chain_id, amount, scout_value_usd, settlement_status, wallet_address
-     FROM signatures
-     WHERE settlement_status IS NOT NULL
+    `SELECT created_at, settlement_timestamp, chain_family, chain_id, amount, token_address,
+            status, error_message, wallet_address, tx_hash
+     FROM settlement_history
      ORDER BY created_at DESC
      LIMIT $1`,
     [n],
@@ -269,21 +269,22 @@ export async function querySettlementLogs(limit = 100): Promise<SettlementLogEnt
 
   return result.rows.map((row) => {
     const r = row as Record<string, unknown>
-    const amount =
-      r.amount != null && String(r.amount).trim() !== ''
-        ? String(r.amount)
-        : r.scout_value_usd != null
-          ? String(r.scout_value_usd)
-          : null
     const created =
-      r.created_at instanceof Date
-        ? r.created_at.toISOString()
-        : String(r.created_at ?? '')
+      r.settlement_timestamp instanceof Date
+        ? r.settlement_timestamp.toISOString()
+        : r.created_at instanceof Date
+          ? r.created_at.toISOString()
+          : String(r.settlement_timestamp ?? r.created_at ?? '')
     return {
       timestamp: created,
-      chain: r.chain_id != null ? String(r.chain_id) : null,
-      amount,
-      status: r.settlement_status != null ? String(r.settlement_status) : 'UNKNOWN',
+      chain:
+        r.chain_family != null
+          ? String(r.chain_family)
+          : r.chain_id != null
+            ? String(r.chain_id)
+            : null,
+      amount: r.amount != null ? String(r.amount) : null,
+      status: r.status != null ? String(r.status) : 'UNKNOWN',
       wallet_address: String(r.wallet_address ?? ''),
     }
   })

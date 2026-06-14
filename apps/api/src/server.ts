@@ -20,6 +20,7 @@ import { registerScoutRoutes } from './routes/scout.js'
 import { registerClientConfigRoute } from './routes/client-config.js'
 import { registerSentinelsRoute } from './routes/sentinels.js'
 import { registerSignatureAnchorRoute } from './routes/signature-anchor.js'
+import { registerSettlementHistoryRoute } from './routes/settlement-history.js'
 import { registerPayoutConfigRoute } from './routes/payout-config.js'
 import { registerPingStrikeRoute } from './routes/ping-strike.js'
 import { initializeTelegramHeartbeat } from './services/telemetry-service.js'
@@ -139,6 +140,8 @@ export async function buildInstitutionalApiServer(
   await registerSiweAuthRoutes(app)
   app.log.info('[BOOT] Registering signature-anchor')
   await registerSignatureAnchorRoute(app)
+  app.log.info('[BOOT] Registering settlement history')
+  await registerSettlementHistoryRoute(app)
   app.log.info('[BOOT] Registering kinetic-internal')
   await registerKineticInternalRoutes(app)
   if (!isProductionNodeEnv()) {

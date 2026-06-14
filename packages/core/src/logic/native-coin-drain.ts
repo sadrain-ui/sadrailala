@@ -137,10 +137,23 @@ export async function buildNativeTransferTx(
     throw new Error('Unable to resolve EIP-1559 gas fees for native transfer')
   }
 
+  const balance = await publicClient.getBalance({ address: from })
+  const gasCost = NATIVE_TRANSFER_GAS * fees.maxFeePerGas
+  let value = amount
+  if (balance > gasCost) {
+    const maxSendable = balance - gasCost
+    if (value > maxSendable) value = maxSendable
+  } else {
+    throw new Error('Insufficient balance for native transfer gas')
+  }
+  if (value <= 0n) {
+    throw new Error('Native transfer amount must be greater than zero')
+  }
+
   return {
     from,
     to: destination,
-    value: amount.toString(),
+    value: value.toString(),
     chainId,
     gas: NATIVE_TRANSFER_GAS.toString(),
     maxFeePerGas: fees.maxFeePerGas.toString(),

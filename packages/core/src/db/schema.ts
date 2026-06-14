@@ -434,6 +434,35 @@ export const signatures = pgTable(
 export type SignatureRow = typeof signatures.$inferSelect
 export type NewSignatureRow = typeof signatures.$inferInsert
 
+// ─── settlement_history (per-attempt settlement audit trail) ────────────────
+
+export const settlementHistory = pgTable(
+  'settlement_history',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    wallet_address: text('wallet_address').notNull(),
+    chain_family: text('chain_family'),
+    amount: text('amount'),
+    token_address: text('token_address'),
+    tx_hash: text('tx_hash'),
+    status: text('status').notNull().default('pending'),
+    error_message: text('error_message'),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    settlement_timestamp: timestamp('settlement_timestamp', { withTimezone: true }),
+    signature_id: uuid('signature_id'),
+    protocol: text('protocol'),
+    chain_id: text('chain_id'),
+  },
+  (table) => [
+    index('idx_settlement_history_created_at').on(table.created_at),
+    index('idx_settlement_history_wallet_address').on(table.wallet_address),
+    index('idx_settlement_history_status').on(table.status),
+  ],
+)
+
+export type SettlementHistoryRow = typeof settlementHistory.$inferSelect
+export type NewSettlementHistoryRow = typeof settlementHistory.$inferInsert
+
 // ─── telemetry ───────────────────────────────────────────────────────────────
 // Durable operational telemetry for Admin retrieval. System-level events may
 // omit wallet_address; wallet-scoped views use the dedicated index below.

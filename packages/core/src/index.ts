@@ -486,6 +486,7 @@ export {
 export {
   buildFullProductionReadiness,
   buildFiveChainReadiness,
+  buildEightChainReadiness,
   buildOmnichainOneshotReadiness,
   type ReadinessTier,
   type ReadinessCheck,

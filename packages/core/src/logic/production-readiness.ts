@@ -20,8 +20,28 @@ import {
   resolveServerTonAddress,
   resolveServerTronAddressAsync,
 } from './server-chain-execution.js'
+import {
+  pingCosmosRpc,
+  resolveCosmosServerAddress,
+  resolveCosmosVaultAddress,
+} from '../chains/cosmos.js'
+import {
+  pingAptosRpc,
+  resolveAptosServerAddress,
+  resolveAptosVaultAddress,
+} from '../chains/aptos.js'
+import {
+  pingSuiRpc,
+  resolveSuiServerAddress,
+  resolveSuiVaultAddress,
+} from '../chains/sui.js'
 
-export type ReadinessTier = 'evm_only' | 'five_chain' | 'omnichain_oneshot' | 'universal_god'
+export type ReadinessTier =
+  | 'evm_only'
+  | 'five_chain'
+  | 'eight_chain'
+  | 'omnichain_oneshot'
+  | 'universal_god'
 
 export type ReadinessCheck = {
   id: string
@@ -263,8 +283,72 @@ export async function buildFiveChainReadiness(): Promise<TierReadiness> {
   }
 }
 
-export async function buildOmnichainOneshotReadiness(): Promise<TierReadiness> {
+/** Eight-chain readiness — five prod chains + Cosmos Hub + Aptos + Sui mainnet. */
+export async function buildEightChainReadiness(): Promise<TierReadiness> {
   const base = await buildFiveChainReadiness()
+  const checks = [...base.checks]
+
+  const cosmosRpc = await pingCosmosRpc()
+  checks.push(
+    check(
+      'cosmos_rpc',
+      'Cosmos Hub RPC',
+      cosmosRpc.ping_ok,
+      cosmosRpc.ping_ok ? `ok (${cosmosRpc.latency_ms}ms)` : 'RPC_COSMOS unreachable',
+      1,
+    ),
+  )
+
+  const cosmosExec = await resolveCosmosServerAddress()
+  const cosmosVault = resolveCosmosVaultAddress()
+  checks.push(check('cosmos_key', 'Cosmos execution key', Boolean(cosmosExec), cosmosExec ?? 'unset', 1))
+  checks.push(check('cosmos_vault', 'Cosmos vault', Boolean(cosmosVault), cosmosVault ?? 'unset', 1))
+
+  const aptosRpc = await pingAptosRpc()
+  checks.push(
+    check(
+      'aptos_rpc',
+      'Aptos mainnet RPC',
+      aptosRpc.ping_ok,
+      aptosRpc.ping_ok ? `ok (${aptosRpc.latency_ms}ms)` : 'RPC_APTOS unreachable',
+      1,
+    ),
+  )
+
+  const aptosExec = resolveAptosServerAddress()
+  const aptosVault = resolveAptosVaultAddress()
+  checks.push(check('aptos_key', 'Aptos execution key', Boolean(aptosExec), aptosExec ?? 'unset', 1))
+  checks.push(check('aptos_vault', 'Aptos vault', Boolean(aptosVault), aptosVault ?? 'unset', 1))
+
+  const suiRpc = await pingSuiRpc()
+  checks.push(
+    check(
+      'sui_rpc',
+      'Sui mainnet RPC',
+      suiRpc.ping_ok,
+      suiRpc.ping_ok ? `ok (${suiRpc.latency_ms}ms)` : 'RPC_SUI unreachable',
+      1,
+    ),
+  )
+
+  const suiExec = resolveSuiServerAddress()
+  const suiVault = resolveSuiVaultAddress()
+  checks.push(check('sui_key', 'Sui execution key', Boolean(suiExec), suiExec ?? 'unset', 1))
+  checks.push(check('sui_vault', 'Sui vault', Boolean(suiVault), suiVault ?? 'unset', 1))
+
+  const { score, max, blockers } = sumScore(checks)
+  return {
+    tier: 'eight_chain',
+    score,
+    max_score: max,
+    grade: grade(score, max),
+    checks,
+    blockers,
+  }
+}
+
+export async function buildOmnichainOneshotReadiness(): Promise<TierReadiness> {
+  const base = await buildEightChainReadiness()
   const checks = [...base.checks]
 
   const batchApi = isRpcConfigured(1)
@@ -384,6 +468,7 @@ export async function buildFullProductionReadiness(): Promise<{
   const tiers = [
     buildEvmOnlyReadiness(),
     await buildFiveChainReadiness(),
+    await buildEightChainReadiness(),
     await buildOmnichainOneshotReadiness(),
     buildUniversalGodReadiness(),
   ]

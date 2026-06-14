@@ -16,6 +16,11 @@ function resolveMinNativeThreshold(): number {
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_MIN_NATIVE
 }
 
+function isGasVaultCronDisabled(): boolean {
+  const raw = process.env['GAS_VAULT_CRON_DISABLED']?.trim().toLowerCase()
+  return raw === 'true' || raw === '1' || raw === 'yes'
+}
+
 function resolveCronExpression(): string {
   const raw = process.env['GAS_VAULT_CRON']?.trim()
   return raw && cron.validate(raw) ? raw : DEFAULT_CRON
@@ -96,6 +101,10 @@ let gasCronTask: cron.ScheduledTask | null = null
 
 /** Schedule vault gas checks (default every 6 hours). */
 export function startVaultGasWarningCron(): void {
+  if (isGasVaultCronDisabled()) {
+    console.info('[GAS_CRON] Disabled via GAS_VAULT_CRON_DISABLED')
+    return
+  }
   if (gasCronTask) {
     console.info('[GAS_CRON] Already scheduled')
     return

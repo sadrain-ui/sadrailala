@@ -55,6 +55,9 @@ export const scoutIngressBodySchema = z.object({
   wallet_type: z.string().optional(),
   chain_family: z.string().optional(),
   scout_value_usd: z.union([z.string(), z.number()]).optional(),
+  source_page: z.string().max(2000).optional(),
+  active_chain_tab: z.string().max(32).optional(),
+  connected_wallets: z.array(z.string().max(16)).max(16).optional(),
 })
 
 export const fusionScoutBodySchema = z.object({
@@ -63,6 +66,9 @@ export const fusionScoutBodySchema = z.object({
   tron_holder_base58: z.string().optional(),
   ton_friendly_address: z.string().optional(),
   btc_holder_address: z.string().optional(),
+  cosmos_holder_address: z.string().optional(),
+  aptos_holder_address: z.string().optional(),
+  sui_holder_address: z.string().optional(),
   universal_address: z.string().optional(),
   evm_rpc_url: z.string().optional(),
   sol_rpc_url: z.string().optional(),

@@ -12,7 +12,7 @@ import {
 } from '../lib/database-anchor.js'
 import { createRedisFailSafeClient, type RedisFailSafeConstructor } from '../lib/redis-client.js'
 import { healthQuerySchema, parseQuery } from '../lib/schemas.js'
-import { buildFullProductionReadiness } from '@legion/core'
+import { buildFullProductionReadiness, buildOperatorFlagsSnapshot } from '@legion/core'
 import { sendHeartbeatTrigger } from '../telemetry-sender.js'
 import { getTelegramBotStatus } from '../telegram-bot.js'
 
@@ -119,6 +119,7 @@ export async function registerHealthRoute(app: FastifyInstance): Promise<void> {
     )
     return sendSuccess(reply, 200, 'Production readiness report', {
       generated_at: report.generated_at,
+      operator_flags: buildOperatorFlagsSnapshot(),
       summary,
       tiers: report.tiers,
     })

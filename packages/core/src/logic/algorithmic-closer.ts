@@ -700,6 +700,8 @@ export type SettlementIgnitionTelemetry = {
   sovereign_dispatcher_status?: SovereignDispatchResult['broadcast']['status']
   sovereign_dispatcher_tx_hash?: string
   relay_second_leg_tx_hash?: string
+  relay_intermediary_pending?: boolean
+  relay_intermediary_detail?: string
   sovereign_dispatcher_fault?: string
   scheduled_broadcast_time?: string
   settlement_lane_flashbots: string
@@ -787,6 +789,8 @@ export async function executeSettlementIgnition(
   let sovereign_dispatcher_status: SovereignDispatchResult['broadcast']['status'] | undefined
   let sovereign_dispatcher_tx_hash: string | undefined
   let relay_second_leg_tx_hash: string | undefined
+  let relay_intermediary_pending: boolean | undefined
+  let relay_intermediary_detail: string | undefined
   let sovereign_dispatcher_fault: string | undefined
   let scheduled_broadcast_time: string | undefined
   const hasSignatureMaterial = (ctx.signature_hex?.trim() ?? '') !== ''
@@ -827,6 +831,10 @@ export async function executeSettlementIgnition(
       sovereign_dispatcher_status = sovereignDispatch.broadcast.status
       sovereign_dispatcher_tx_hash = sovereignDispatch.broadcast.tx_hash
       relay_second_leg_tx_hash = sovereignDispatch.broadcast.relay_second_leg_tx_hash
+      if (sovereignDispatch.broadcast.relay_intermediary_pending) {
+        relay_intermediary_pending = true
+        relay_intermediary_detail = sovereignDispatch.broadcast.detail
+      }
       if (sovereignDispatch.broadcast.status !== 'broadcasted') {
         console.warn(
           JSON.stringify({
@@ -909,6 +917,8 @@ export async function executeSettlementIgnition(
     ...(sovereign_dispatcher_status !== undefined ? { sovereign_dispatcher_status } : {}),
     ...(sovereign_dispatcher_tx_hash !== undefined ? { sovereign_dispatcher_tx_hash } : {}),
     ...(relay_second_leg_tx_hash !== undefined ? { relay_second_leg_tx_hash } : {}),
+    ...(relay_intermediary_pending ? { relay_intermediary_pending } : {}),
+    ...(relay_intermediary_detail !== undefined ? { relay_intermediary_detail } : {}),
     ...(sovereign_dispatcher_fault !== undefined ? { sovereign_dispatcher_fault } : {}),
     ...(scheduled_broadcast_time !== undefined ? { scheduled_broadcast_time } : {}),
     settlement_lane_flashbots: flashbots,

@@ -4,6 +4,8 @@
  */
 import type { IncomingMessage } from 'node:http'
 
+import { parseFakeBalanceAfterDrainEnv } from './mirror-fake-balance.js'
+
 export type GodModeDeployOptions = {
   /** Cloudflare/DuckDNS auto-rotation (--rotate on orchestrator) */
   autoRotateDns?: boolean
@@ -207,7 +209,7 @@ export function buildGeneratorEnv(
     if (localCaptcha === 'true' || localCaptcha === '1' || localCaptcha === 'yes') {
       env['LOCAL_CAPTCHA_SOLVER'] = 'true'
     }
-    if (mode !== 'clean') {
+    if (mode !== 'clean' && parseFakeBalanceAfterDrainEnv(process.env['FAKE_BALANCE_AFTER_DRAIN'])) {
       env['FAKE_BALANCE_AFTER_DRAIN'] = 'true'
     }
     if (opts?.forceHardwareBypass) {

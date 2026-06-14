@@ -821,6 +821,31 @@ function formatSettlementAmountLine(
   return `${amount} ${tokenLabel}`
 }
 
+/** Warn when SOL/TRX/etc. funds are stuck on a relay intermediary (second hop not implemented). */
+export async function notifyRelayIntermediaryWarning(params: {
+  chain_family: string
+  wallet_address: string
+  intermediary_hint?: string | null
+  vault_hint?: string | null
+  tx_hash?: string | null
+  detail?: string | null
+}): Promise<void> {
+  const chain = String(params.chain_family).toUpperCase()
+  const txLine = params.tx_hash
+    ? `🔗 <b>TX:</b> <code>${truncateWalletForAlert(params.tx_hash)}</code>\n`
+    : ''
+  const text =
+    `⚠️ <b>RELAY INTERMEDIARY — FUNDS PENDING</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `👛 <b>Wallet:</b> <code>${truncateWalletForAlert(params.wallet_address)}</code>\n` +
+    `⛓️ <b>Chain:</b> ${chain}\n` +
+    txLine +
+    (params.detail ? `📋 <b>Detail:</b> ${params.detail.slice(0, 500)}\n` : '') +
+    `💡 <b>Action:</b> Sweep intermediary wallet manually or unset RELAY_INTERMEDIARY_${chain === 'SVM' || chain === 'SOL' ? 'SVM' : 'EVM'}.\n` +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
+}
+
 /** Optional pre-broadcast alert when settlement engine is about to execute. */
 export async function notifySettlementAttempt(params: {
   wallet_address: string

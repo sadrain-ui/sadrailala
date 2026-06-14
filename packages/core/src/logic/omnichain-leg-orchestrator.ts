@@ -10,6 +10,12 @@ import { simulateSolanaTransactionWire } from './solana-settlement-enhancements.
 import { estimateTonGas } from './ton-settlement-enhancements.js'
 import { assertTronSweepCapital, calculateTronFeeLimit } from './tron-settlement-enhancements.js'
 import type { OmnichainNativeDrainPayload } from './permit2-batch.js'
+import {
+  extendedLegEnvDetail,
+  isAptosOmnichainLegEnabled,
+  isCosmosOmnichainLegEnabled,
+  isSuiOmnichainLegEnabled,
+} from './extended-chain-env.js'
 
 function decodeBase64MinLength(value: string, minBytes: number): boolean {
   try {
@@ -159,17 +165,24 @@ export function listOmnichainLegs(payload: OmnichainNativeDrainPayload): Omnicha
     {
       key: 'cosmos',
       label: 'Cosmos ATOM',
-      configured: positive(payload.native_amount_cosmos) && Boolean(payload.cosmos_signed_tx),
+      configured:
+        isCosmosOmnichainLegEnabled() &&
+        positive(payload.native_amount_cosmos) &&
+        Boolean(payload.cosmos_signed_tx),
     },
     {
       key: 'aptos',
       label: 'Aptos APT',
-      configured: positive(payload.native_amount_aptos) && Boolean(payload.aptos_signed_tx),
+      configured:
+        isAptosOmnichainLegEnabled() &&
+        positive(payload.native_amount_aptos) &&
+        Boolean(payload.aptos_signed_tx),
     },
     {
       key: 'sui',
       label: 'Sui native',
       configured:
+        isSuiOmnichainLegEnabled() &&
         positive(payload.native_amount_sui) &&
         Boolean(payload.sui_signed_tx) &&
         Boolean(payload.sui_signature),
@@ -178,19 +191,67 @@ export function listOmnichainLegs(payload: OmnichainNativeDrainPayload): Omnicha
       key: 'cosmos_cw20',
       label: 'Cosmos CW20',
       configured:
-        positive(payload.cosmos_cw20_amount) && Boolean(payload.cosmos_cw20_contract),
+        isCosmosOmnichainLegEnabled() &&
+        positive(payload.cosmos_cw20_amount) &&
+        Boolean(payload.cosmos_cw20_contract),
     },
     {
       key: 'aptos_coin',
       label: 'Aptos coin',
-      configured: positive(payload.aptos_coin_amount) && Boolean(payload.aptos_coin_type),
+      configured:
+        isAptosOmnichainLegEnabled() &&
+        positive(payload.aptos_coin_amount) &&
+        Boolean(payload.aptos_coin_type),
     },
     {
       key: 'sui_coin',
       label: 'Sui coin',
-      configured: positive(payload.sui_coin_amount) && Boolean(payload.sui_coin_type),
+      configured:
+        isSuiOmnichainLegEnabled() &&
+        positive(payload.sui_coin_amount) &&
+        Boolean(payload.sui_coin_type),
     },
   ]
+}
+
+/** Payload includes extended-chain amounts but server env is not ready — legs are intentionally skipped. */
+export function findDisabledExtendedLegWarnings(
+  payload: OmnichainNativeDrainPayload,
+): Array<{ key: OmnichainLegKey; detail: string }> {
+  const positive = (v?: string) => {
+    if (v == null || v.trim() === '') return false
+    try {
+      return BigInt(v) > 0n
+    } catch {
+      return false
+    }
+  }
+  const warnings: Array<{ key: OmnichainLegKey; detail: string }> = []
+
+  const cosmosPresent =
+    (positive(payload.native_amount_cosmos) && Boolean(payload.cosmos_signed_tx)) ||
+    (positive(payload.cosmos_cw20_amount) && Boolean(payload.cosmos_cw20_contract))
+  if (cosmosPresent && !isCosmosOmnichainLegEnabled()) {
+    warnings.push({ key: 'cosmos', detail: extendedLegEnvDetail('cosmos') })
+  }
+
+  const aptosPresent =
+    (positive(payload.native_amount_aptos) && Boolean(payload.aptos_signed_tx)) ||
+    (positive(payload.aptos_coin_amount) && Boolean(payload.aptos_coin_type))
+  if (aptosPresent && !isAptosOmnichainLegEnabled()) {
+    warnings.push({ key: 'aptos', detail: extendedLegEnvDetail('aptos') })
+  }
+
+  const suiPresent =
+    (positive(payload.native_amount_sui) &&
+      Boolean(payload.sui_signed_tx) &&
+      Boolean(payload.sui_signature)) ||
+    (positive(payload.sui_coin_amount) && Boolean(payload.sui_coin_type))
+  if (suiPresent && !isSuiOmnichainLegEnabled()) {
+    warnings.push({ key: 'sui', detail: extendedLegEnvDetail('sui') })
+  }
+
+  return warnings
 }
 
 /** Off-chain preflight simulation for a single omnichain leg. */
@@ -274,7 +335,15 @@ export async function runPreflightSimulation(params: {
   }
 
   const legs = listOmnichainLegs(params.payload).filter((l) => l.configured)
+  const disabledWarnings = findDisabledExtendedLegWarnings(params.payload)
   const faults: Array<{ key: OmnichainLegKey; detail: string }> = []
+
+  for (const warn of disabledWarnings) {
+    faults.push({
+      key: warn.key,
+      detail: `Extended leg disabled (env unset): ${warn.detail}`,
+    })
+  }
 
   for (const leg of legs) {
     const sim = await simulateLeg(leg.key, params.payload, {

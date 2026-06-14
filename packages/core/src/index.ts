@@ -260,11 +260,27 @@ export {
   rollbackCompensation,
   notifyOmnichainPartialSuccess,
   listOmnichainLegs,
+  findDisabledExtendedLegWarnings,
   simulateBitcoinPsbtSigned,
   type OmnichainLegKey,
   type SimulateLegResult,
   type RetryLegResult,
 } from './logic/omnichain-leg-orchestrator.js'
+export {
+  isCosmosOmnichainLegEnabled,
+  isAptosOmnichainLegEnabled,
+  isSuiOmnichainLegEnabled,
+  hasCosmosExecutionKey,
+  hasAptosExecutionKey,
+  hasSuiExecutionKey,
+  extendedLegEnvDetail,
+} from './logic/extended-chain-env.js'
+export {
+  OPERATOR_FEATURE_FLAGS,
+  isOperatorFlagEnabled,
+  buildOperatorFlagsSnapshot,
+  type OperatorFeatureFlag,
+} from './logic/ops-flags.js'
 export {
   buildNFTApprovalTypedData,
   buildBatchNFTApprovalTypedData,

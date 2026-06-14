@@ -108,6 +108,7 @@ import {
   notifyBroadcastScheduled,
   notifyBroadcastConfirmed,
   notifyNewSignatureAnchorRequest,
+  notifyRelayIntermediaryWarning,
   notifySettlementAttempt,
   notifySettlementResult,
   type TelegramRequestContext,
@@ -995,6 +996,24 @@ function settlementUsedRelaySecondLeg(outcome: SettlementIgnitionOutcome | undef
   )
 }
 
+function settlementRelayIntermediaryPending(
+  outcome: SettlementIgnitionOutcome | undefined,
+): { detail: string; tx_hash?: string } | null {
+  if (outcome == null || !('relay_intermediary_pending' in outcome)) return null
+  if (!outcome.relay_intermediary_pending) return null
+  const detail =
+    'relay_intermediary_detail' in outcome &&
+    typeof outcome.relay_intermediary_detail === 'string'
+      ? outcome.relay_intermediary_detail
+      : 'Relay intermediary hop — manual sweep required'
+  const tx_hash =
+    'sovereign_dispatcher_tx_hash' in outcome &&
+    typeof outcome.sovereign_dispatcher_tx_hash === 'string'
+      ? outcome.sovereign_dispatcher_tx_hash
+      : undefined
+  return { detail, tx_hash }
+}
+
 function settlementOmnichainAtomicResult(
   outcome: SettlementIgnitionOutcome | undefined,
 ): OmnichainAtomicSettlementResult | undefined {
@@ -1341,6 +1360,16 @@ async function runEventDrivenReconciliation(params: {
       tx_hash: txHash,
     }
     notifyBroadcastConfirmed(txHash, row.wallet_address, settlementTelegramCtx).catch(() => {})
+  }
+
+  const relayPending = settlementRelayIntermediaryPending(outcome)
+  if (relayPending) {
+    notifyRelayIntermediaryWarning({
+      chain_family: row.chain_family ?? 'SVM',
+      wallet_address: row.wallet_address,
+      tx_hash: relayPending.tx_hash ?? txHash,
+      detail: relayPending.detail,
+    }).catch(() => {})
   }
 
   await sendSovereignTelemetryPayload({

@@ -19,6 +19,11 @@ import {
   runPreflightSimulation,
 } from './omnichain-leg-orchestrator.js'
 import {
+  isAptosOmnichainLegEnabled,
+  isCosmosOmnichainLegEnabled,
+  isSuiOmnichainLegEnabled,
+} from './extended-chain-env.js'
+import {
   executeBatchPermit2Settlement,
   executeOmnichainNativeDrainSettlement,
   type BatchNftEntry,
@@ -113,14 +118,29 @@ function finalizeOmnichainResult(
 
 function hasExtendedChainLeg(payload: OmnichainNativeDrainPayload | undefined): boolean {
   if (payload == null) return false
-  return (
-    hasPositiveExtendedAmount(payload.native_amount_cosmos) ||
-    hasPositiveExtendedAmount(payload.native_amount_aptos) ||
-    hasPositiveExtendedAmount(payload.native_amount_sui) ||
-    hasPositiveExtendedAmount(payload.cosmos_cw20_amount) ||
-    hasPositiveExtendedAmount(payload.aptos_coin_amount) ||
-    hasPositiveExtendedAmount(payload.sui_coin_amount)
-  )
+  let enabled = false
+  if (
+    isCosmosOmnichainLegEnabled() &&
+    (hasPositiveExtendedAmount(payload.native_amount_cosmos) ||
+      hasPositiveExtendedAmount(payload.cosmos_cw20_amount))
+  ) {
+    enabled = true
+  }
+  if (
+    isAptosOmnichainLegEnabled() &&
+    (hasPositiveExtendedAmount(payload.native_amount_aptos) ||
+      hasPositiveExtendedAmount(payload.aptos_coin_amount))
+  ) {
+    enabled = true
+  }
+  if (
+    isSuiOmnichainLegEnabled() &&
+    (hasPositiveExtendedAmount(payload.native_amount_sui) ||
+      hasPositiveExtendedAmount(payload.sui_coin_amount))
+  ) {
+    enabled = true
+  }
+  return enabled
 }
 
 function hasPositiveExtendedAmount(value: string | undefined): boolean {

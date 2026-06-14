@@ -791,6 +791,8 @@ export type SettlementBroadcastResult = {
   tx_hash?: string
   /** Intermediary → vault leg when `RELAY_INTERMEDIARY_EVM` hop is active. */
   relay_second_leg_tx_hash?: string
+  /** First leg landed on intermediary; final vault hop not implemented (SVM) or pending. */
+  relay_intermediary_pending?: boolean
   detail?: string
 }
 
@@ -1578,7 +1580,11 @@ export async function broadcastSVM(
       status: 'broadcasted',
       tx_hash,
       ...(svmHop.intermediary_hop
-        ? { detail: 'RELAY_INTERMEDIARY_SVM one-hop broadcast; final vault leg pending' }
+        ? {
+            relay_intermediary_pending: true,
+            detail:
+              'RELAY_INTERMEDIARY_SVM one-hop broadcast; funds on intermediary — second leg not implemented. Manual sweep required.',
+          }
         : {}),
     })
     emitSettlementIgnitedTelemetry(result, ctx)

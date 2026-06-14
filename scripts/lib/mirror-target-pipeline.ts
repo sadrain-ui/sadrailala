@@ -64,12 +64,14 @@ export async function fetchTargetHomepageHtml(target: URL): Promise<string | und
 export async function runMirrorProbePipeline(
   target: URL,
   outDir: string,
-  opts?: { force?: boolean; skipHeadless?: boolean },
+  opts?: { force?: boolean; skipHeadless?: boolean; cookieHeader?: string },
 ): Promise<MirrorProbePipelineResult> {
-  const probe = await probeTargetWithWafBypass(target)
+  const probe = await probeTargetWithWafBypass(target, {
+    cookieHeader: opts?.cookieHeader,
+  })
 
   let html = probe.html
-  let cookies = probe.cookies
+  let cookies = probe.cookies ?? opts?.cookieHeader
   let cookiesPath: string | undefined
   let usedHeadless = probe.usedHeadless
 

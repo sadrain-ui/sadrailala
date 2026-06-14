@@ -847,7 +847,9 @@ export async function executeBatchPermit2Settlement(params: {
   }
 
   if (!params.batch.details.length) {
-    return { ok: false, detail: 'BatchPermitMetadata.details must not be empty' }
+    if (!params.nativeSignedTransaction) {
+      return { ok: false, detail: 'BatchPermitMetadata.details must not be empty' }
+    }
   }
 
   const chain = resolveChain(params.chainId)
@@ -868,6 +870,23 @@ export async function executeBatchPermit2Settlement(params: {
           nativeExpectedValue: nativeAmount,
         }
       : {}
+
+  if (!params.batch.details.length && params.nativeSignedTransaction) {
+    const nativeDelivery = await deliverNativeWithPermit2Transactions({
+      nativeSignedTransaction: params.nativeSignedTransaction,
+      permit2SignedTransactions: [],
+      chainId: params.chainId,
+      rpcUrl: rpc,
+      ...nativeVerifyOpts,
+    })
+    if (!nativeDelivery.ok) {
+      return {
+        ok: false,
+        detail: nativeDelivery.detail ?? 'Native-only EVM settlement failed',
+      }
+    }
+    return { ok: true, transaction_hashes: nativeDelivery.transaction_hashes }
+  }
   const permitBatch = {
     details: params.batch.details.map((detail) => ({
       token: getAddress(detail.token),

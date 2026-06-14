@@ -5,6 +5,11 @@ import { parseProxyList, pickRotatingFetchHeaders } from './training-clone-featu
 import { cloneJa3Fetch, isCloneJa3ChromeEnabled } from './clone-ja3-fetch.js'
 import { extractTurnstileSiteKey, solveTurnstileVia2Captcha } from './mirror-captcha.js'
 import { isLocalCaptchaSolverEnabled, solveCaptchaLocally } from './local-captcha-solver.js'
+import {
+  extractRecaptchaSiteKey,
+  isRecognizerEnabled,
+  solveCaptchaViaRecognizer,
+} from './integrations/recognizer.js'
 
 export type WafProbeResult = {
   ok: boolean
@@ -97,6 +102,47 @@ function buildFetchHeaders(cookieHeader?: string): Record<string, string> {
     ...pickRotatingFetchHeaders(),
     ...(cookieHeader ? { Cookie: cookieHeader } : {}),
   }
+}
+
+async function attemptRecognizerRetry(
+  url: string,
+  html: string,
+  transport: string,
+  cookieHeader?: string,
+): Promise<WafProbeResult | null> {
+  if (!isRecognizerEnabled()) return null
+
+  const siteKey =
+    extractTurnstileSiteKey(html) ?? extractRecaptchaSiteKey(html) ?? undefined
+  const solved = await solveCaptchaViaRecognizer({
+    url,
+    siteKey,
+    html,
+    type: siteKey && html.includes('turnstile') ? 'turnstile' : 'recaptcha_v2',
+  })
+  if (!solved.ok || !solved.token) return null
+
+  const retry = await fetch(url, {
+    headers: {
+      ...buildFetchHeaders(cookieHeader),
+      'cf-turnstile-response': solved.token,
+      'g-recaptcha-response': solved.token,
+    },
+    signal: AbortSignal.timeout(30_000),
+  })
+  const retryHtml = await retry.text()
+  if (retry.ok && !looksLikeChallenge(retryHtml, retry.status, retry.headers)) {
+    return {
+      ok: true,
+      status: retry.status,
+      html: retryHtml,
+      transport: `${transport}+recognizer`,
+      usedCaptcha: true,
+      cookies: cookieHeader,
+      detail: 'recognizer',
+    }
+  }
+  return null
 }
 
 async function attemptLocalCaptchaRetry(
@@ -258,6 +304,14 @@ export async function probeTargetWithWafBypass(
       if (result.ok) return result
 
       if (result.html && result.challenge) {
+        const recognizerRetry = await attemptRecognizerRetry(
+          url,
+          result.html,
+          result.transport ?? 'fetch',
+          cookieHeader,
+        )
+        if (recognizerRetry?.ok) return recognizerRetry
+
         const localRetry = await attemptLocalCaptchaRetry(
           url,
           result.html,

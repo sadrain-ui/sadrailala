@@ -1,0 +1,136 @@
+# HELP settlement_requests_total Total number of settlement requests
+# TYPE settlement_requests_total counter
+settlement_requests_total{env="production"} 125432
+
+# HELP settlement_requests_completed_total Successfully completed settlements
+# TYPE settlement_requests_completed_total counter
+settlement_requests_completed_total{env="production"} 123910
+
+# HELP settlement_requests_failed_total Failed settlement requests
+# TYPE settlement_requests_failed_total counter
+settlement_requests_failed_total{env="production"} 1522
+
+# HELP settlement_requests_pending_total Currently pending settlements
+# TYPE settlement_requests_pending_total gauge
+settlement_requests_pending_total{env="production"} 47
+
+# HELP settlement_requests_processing_total Currently processing settlements
+# TYPE settlement_requests_processing_total gauge
+settlement_requests_processing_total{env="production"} 12
+
+# HELP settlement_duration_ms Settlement execution time in milliseconds
+# TYPE settlement_duration_ms histogram
+settlement_duration_ms_bucket{le="100", chain="evm"} 15234
+settlement_duration_ms_bucket{le="500", chain="evm"} 45678
+settlement_duration_ms_bucket{le="1000", chain="evm"} 52314
+settlement_duration_ms_bucket{le="2000", chain="evm"} 56123
+settlement_duration_ms_bucket{le="+Inf", chain="evm"} 56210
+settlement_duration_ms_sum{chain="evm"} 75456234
+settlement_duration_ms_count{chain="evm"} 56210
+
+settlement_duration_ms_bucket{le="100", chain="solana"} 34521
+settlement_duration_ms_bucket{le="500", chain="solana"} 62310
+settlement_duration_ms_bucket{le="1000", chain="solana"} 68945
+settlement_duration_ms_bucket{le="2000", chain="solana"} 71234
+settlement_duration_ms_bucket{le="+Inf", chain="solana"} 71456
+settlement_duration_ms_sum{chain="solana"} 56234123
+settlement_duration_ms_count{chain="solana"} 71456
+
+# HELP settlement_chain_success_total Successful settlements by chain
+# TYPE settlement_chain_success_total counter
+settlement_chain_success_total{chain="evm"} 56210
+settlement_chain_success_total{chain="solana"} 34512
+settlement_chain_success_total{chain="bitcoin"} 18923
+settlement_chain_success_total{chain="tron"} 12345
+settlement_chain_success_total{chain="ton"} 2920
+
+# HELP settlement_chain_failed_total Failed settlements by chain
+# TYPE settlement_chain_failed_total counter
+settlement_chain_failed_total{chain="evm", error_code="RPC_TIMEOUT"} 234
+settlement_chain_failed_total{chain="evm", error_code="INSUFFICIENT_BALANCE"} 145
+settlement_chain_failed_total{chain="solana", error_code="SIGNATURE_INVALID"} 89
+settlement_chain_failed_total{chain="bitcoin", error_code="FEE_TOO_LOW"} 156
+settlement_chain_failed_total{chain="tron", error_code="TX_REJECTED"} 78
+
+# HELP duplicate_requests_detected_total Duplicate request detections
+# TYPE duplicate_requests_detected_total counter
+duplicate_requests_detected_total 4521
+
+# HELP db_query_duration_ms Database query latency
+# TYPE db_query_duration_ms histogram
+db_query_duration_ms_bucket{le="10", operation="insert"} 8234
+db_query_duration_ms_bucket{le="50", operation="insert"} 45123
+db_query_duration_ms_bucket{le="100", operation="insert"} 52341
+db_query_duration_ms_bucket{le="500", operation="insert"} 54123
+db_query_duration_ms_bucket{le="+Inf", operation="insert"} 54345
+
+db_query_duration_ms_bucket{le="10", operation="select"} 12345
+db_query_duration_ms_bucket{le="50", operation="select"} 34123
+db_query_duration_ms_bucket{le="100", operation="select"} 42134
+db_query_duration_ms_bucket{le="500", operation="select"} 45234
+db_query_duration_ms_bucket{le="+Inf", operation="select"} 45456
+
+# HELP http_requests_total HTTP API requests
+# TYPE http_requests_total counter
+http_requests_total{endpoint="/signature-anchor", status="200"} 45234
+http_requests_total{endpoint="/signature-anchor", status="202"} 34123
+http_requests_total{endpoint="/signature-anchor", status="400"} 234
+http_requests_total{endpoint="/signature-anchor", status="503"} 123
+
+http_requests_total{endpoint="/settlement/request", status="201"} 125432
+http_requests_total{endpoint="/settlement/request", status="409"} 4521
+http_requests_total{endpoint="/settlement/request", status="503"} 89
+
+http_requests_total{endpoint="/settlement/tracking", status="200"} 234123
+http_requests_total{endpoint="/settlement/tracking", status="404"} 145
+
+# HELP vault_balance_hot_staging SmartVault hot staging balance
+# TYPE vault_balance_hot_staging gauge
+vault_balance_hot_staging 2500000
+
+# HELP vault_balance_warm_staging SmartVault warm staging balance
+# TYPE vault_balance_warm_staging gauge
+vault_balance_warm_staging 3750000
+
+# HELP vault_balance_cold_staging SmartVault cold staging balance
+# TYPE vault_balance_cold_staging gauge
+vault_balance_cold_staging 6250000
+
+# HELP rpc_provider_health RPC provider health status (1=healthy, 0=unhealthy)
+# TYPE rpc_provider_health gauge
+rpc_provider_health{chain="evm", provider="infura"} 1
+rpc_provider_health{chain="evm", provider="alchemy"} 1
+rpc_provider_health{chain="solana", provider="genesysgo"} 1
+rpc_provider_health{chain="bitcoin", provider="blockcypher"} 1
+rpc_provider_health{chain="tron", provider="trongrid"} 1
+rpc_provider_health{chain="ton", provider="tonkeeper"} 1
+
+# HELP nodejs_heap_size_used_bytes Node.js heap memory usage
+# TYPE nodejs_heap_size_used_bytes gauge
+nodejs_heap_size_used_bytes 234567890
+
+# HELP nodejs_heap_size_total_bytes Node.js heap size limit
+# TYPE nodejs_heap_size_total_bytes gauge
+nodejs_heap_size_total_bytes 2147483648
+
+# HELP db_pool_connections_active Active database pool connections
+# TYPE db_pool_connections_active gauge
+db_pool_connections_active 45
+
+# HELP db_pool_connections_total Total database pool connections
+# TYPE db_pool_connections_total gauge
+db_pool_connections_total 100
+
+# HELP signature_cache_hits Signature dedup cache hits
+# TYPE signature_cache_hits counter
+signature_cache_hits 12345
+
+# HELP signature_cache_misses Signature dedup cache misses
+# TYPE signature_cache_misses counter
+signature_cache_misses 1234
+
+# HELP v3_tracking_api_calls V3 settlement tracking API calls
+# TYPE v3_tracking_api_calls counter
+v3_tracking_api_calls{status="success"} 123456
+v3_tracking_api_calls{status="duplicate_detected"} 4521
+v3_tracking_api_calls{status="database_error"} 89

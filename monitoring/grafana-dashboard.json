@@ -1,0 +1,252 @@
+{
+  "dashboard": {
+    "title": "Legion Settlement Engine - Production Monitor",
+    "description": "Real-time omnichain settlement monitoring across 8 blockchains",
+    "tags": ["legion", "settlement", "omnichain", "production"],
+    "timezone": "UTC",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Settlement Success Rate (%)",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "rate(settlement_requests_completed_total[5m]) / rate(settlement_requests_total[5m]) * 100",
+            "legendFormat": "Success %"
+          }
+        ],
+        "options": {
+          "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true,
+          "min": 0,
+          "max": 100
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "red", "value": 0 },
+                { "color": "yellow", "value": 95 },
+                { "color": "green", "value": 99 }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Average Settlement Time",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.5, rate(settlement_duration_ms_bucket[5m]))",
+            "legendFormat": "P50 Settlement Time"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "P95 & P99 Settlement Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(settlement_duration_ms_bucket[5m]))",
+            "legendFormat": "P95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(settlement_duration_ms_bucket[5m]))",
+            "legendFormat": "P99"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Settlements Per Chain",
+        "type": "bargauge",
+        "targets": [
+          {
+            "expr": "sum(rate(settlement_chain_success_total{chain=\"evm\"}[5m])) by (chain)",
+            "legendFormat": "{{chain}}"
+          },
+          {
+            "expr": "sum(rate(settlement_chain_success_total{chain=\"solana\"}[5m])) by (chain)",
+            "legendFormat": "{{chain}}"
+          },
+          {
+            "expr": "sum(rate(settlement_chain_success_total{chain=\"bitcoin\"}[5m])) by (chain)",
+            "legendFormat": "{{chain}}"
+          },
+          {
+            "expr": "sum(rate(settlement_chain_success_total{chain=\"tron\"}[5m])) by (chain)",
+            "legendFormat": "{{chain}}"
+          },
+          {
+            "expr": "sum(rate(settlement_chain_success_total{chain=\"ton\"}[5m])) by (chain)",
+            "legendFormat": "{{chain}}"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Failed Settlements by Chain",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "sum(rate(settlement_chain_failed_total[5m])) by (chain, error_code)",
+            "format": "table",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Duplicate Request Detection",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(duplicate_requests_detected_total[5m])",
+            "legendFormat": "Duplicates/sec"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Database Latency",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, rate(db_query_duration_ms_bucket[5m]))",
+            "legendFormat": "P99 DB Query Time"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "API Request Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total{endpoint=\"/signature-anchor\"}[5m])",
+            "legendFormat": "/signature-anchor"
+          },
+          {
+            "expr": "rate(http_requests_total{endpoint=\"/settlement/request\"}[5m])",
+            "legendFormat": "/settlement/request"
+          },
+          {
+            "expr": "rate(http_requests_total{endpoint=\"/settlement/tracking\"}[5m])",
+            "legendFormat": "/settlement/tracking"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "HTTP Error Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total{status=~\"4..|5..\"}[5m])",
+            "legendFormat": "{{status}}"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Settlement Pipeline Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "settlement_requests_pending_total",
+            "legendFormat": "Pending"
+          },
+          {
+            "expr": "settlement_requests_processing_total",
+            "legendFormat": "Processing"
+          },
+          {
+            "expr": "settlement_requests_completed_total",
+            "legendFormat": "Completed"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "RPC Provider Health",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "rpc_provider_health{chain=~\"evm|solana|bitcoin|tron|ton\"}",
+            "format": "table",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "SmartVaultRouter Fund Distribution",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "vault_balance_hot_staging",
+            "legendFormat": "Hot (20%)"
+          },
+          {
+            "expr": "vault_balance_warm_staging",
+            "legendFormat": "Warm (30%)"
+          },
+          {
+            "expr": "vault_balance_cold_staging",
+            "legendFormat": "Cold (50%)"
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "nodejs_heap_size_used_bytes / nodejs_heap_size_total_bytes * 100",
+            "legendFormat": "Heap Usage %"
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Active Database Connections",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "db_pool_connections_active",
+            "legendFormat": "Active Connections"
+          }
+        ]
+      }
+    ],
+    "refresh": "10s",
+    "schemaVersion": 38,
+    "style": "dark",
+    "templating": {
+      "list": [
+        {
+          "name": "chain",
+          "type": "query",
+          "datasource": "Prometheus",
+          "query": "label_values(settlement_chain_success_total, chain)",
+          "current": { "text": "All", "value": "$__all" },
+          "multi": true
+        },
+        {
+          "name": "env",
+          "type": "query",
+          "datasource": "Prometheus",
+          "query": "label_values(settlement_requests_total, env)",
+          "current": { "text": "production", "value": "production" }
+        }
+      ]
+    }
+  },
+  "overwrite": true
+}

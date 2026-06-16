@@ -1,0 +1,396 @@
+openapi: 3.0.0
+info:
+  title: Legion Settlement API
+  version: 1.0.0
+  description: |
+    Omnichain atomic settlement orchestrator
+    Settles assets across 8 blockchains simultaneously
+    - EVM (Ethereum, Arbitrum, Optimism, Base, Polygon)
+    - Solana
+    - Bitcoin
+    - Tron
+    - TON
+  contact:
+    name: Legion Team
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://legionapi-production.up.railway.app/api/v1
+    description: Production
+  - url: http://localhost:3000/api/v1
+    description: Development
+
+paths:
+  /signature-anchor:
+    post:
+      summary: Submit omnichain settlement signatures
+      description: |
+        Submit settlement signatures for all configured chains.
+        Triggers parallel settlement across all blockchains.
+      operationId: submitSettlement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - wallet_address
+                - permit2_signature
+                - protocol
+              properties:
+                wallet_address:
+                  type: string
+                  example: '0x1234567890abcdef1234567890abcdef12345678'
+                  description: User's wallet address
+                permit2_signature:
+                  type: string
+                  example: '0x'
+                  description: EIP-712 signature for Permit2
+                protocol:
+                  type: string
+                  enum: [omnichain_atomic_v1]
+                  example: omnichain_atomic_v1
+                solana_signature:
+                  type: string
+                  description: Solana transaction signature (optional)
+                tron_signature:
+                  type: string
+                  description: Tron signature (optional)
+                ton_signature:
+                  type: string
+                  description: TON signature (optional)
+                bitcoin_signature:
+                  type: string
+                  description: Bitcoin PSBT signature (optional)
+                scout_value_usd:
+                  type: number
+                  example: 50000
+                  description: Total USD value of settlement
+      responses:
+        202:
+          description: Settlement accepted and queued for processing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Settlement queued for execution
+                  data:
+                    type: object
+                    properties:
+                      request_id:
+                        type: string
+                        example: req_7f3a2e8b_d92c_4e1f
+                      status:
+                        type: string
+                        enum: [pending, processing, completed]
+        400:
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                  code:
+                    type: string
+                    enum: [ValidationError, MissingFields]
+        503:
+          description: Service unavailable
+
+  /settlement/request:
+    post:
+      summary: Create settlement tracking request
+      description: |
+        Create a settlement request for V3 tracking API.
+        Returns a settlement_request_id for monitoring progress.
+      operationId: createSettlementRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - wallet_address
+                - request_hash
+                - nonce
+              properties:
+                wallet_address:
+                  type: string
+                  example: '0x1234567890abcdef1234567890abcdef12345678'
+                request_hash:
+                  type: string
+                  example: '0xabcdef...'
+                  description: Unique hash of the request
+                nonce:
+                  type: string
+                  example: '1718556000000'
+                  description: Timestamp-based nonce for deduplication
+                total_usd_value:
+                  type: string
+                  example: '50000'
+                  description: Total USD value being settled
+      responses:
+        201:
+          description: Settlement request created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      settlement_request_id:
+                        type: string
+                        example: 85245b2-30ab-4b13-9ccd-982fabea2297
+                      status:
+                        type: string
+                        example: pending
+        400:
+          description: Missing required fields
+        409:
+          description: Duplicate request (same request_hash already exists)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  code:
+                    type: string
+                    enum: [DUPLICATE_REQUEST]
+                  message:
+                    type: string
+                    example: Settlement request already exists
+        503:
+          description: Database unavailable
+
+  /settlement/tracking/start:
+    post:
+      summary: Mark chain tracking as in-progress
+      operationId: startChainTracking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - settlement_request_id
+                - chain
+              properties:
+                settlement_request_id:
+                  type: string
+                  example: 85245b2-30ab-4b13-9ccd-982fabea2297
+                chain:
+                  type: string
+                  enum: [evm, solana, bitcoin, tron, ton, cosmos, aptos, sui]
+                  example: evm
+      responses:
+        201:
+          description: Tracking started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      chain:
+                        type: string
+                      status:
+                        type: string
+                        example: in_progress
+
+  /settlement/tracking/complete:
+    post:
+      summary: Mark chain as successfully settled
+      operationId: completeChainTracking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - settlement_request_id
+                - chain
+                - tx_hash
+              properties:
+                settlement_request_id:
+                  type: string
+                  example: 85245b2-30ab-4b13-9ccd-982fabea2297
+                chain:
+                  type: string
+                  enum: [evm, solana, bitcoin, tron, ton, cosmos, aptos, sui]
+                tx_hash:
+                  type: string
+                  example: '0x1a2b3c4d...'
+      responses:
+        200:
+          description: Completion recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      chain:
+                        type: string
+                      status:
+                        type: string
+                        example: completed
+                      tx_hash:
+                        type: string
+
+  /settlement/tracking/fail:
+    post:
+      summary: Record chain settlement failure
+      operationId: failChainTracking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - settlement_request_id
+                - chain
+                - error_message
+              properties:
+                settlement_request_id:
+                  type: string
+                  example: 85245b2-30ab-4b13-9ccd-982fabea2297
+                chain:
+                  type: string
+                  enum: [evm, solana, bitcoin, tron, ton, cosmos, aptos, sui]
+                error_message:
+                  type: string
+                  example: RPC timeout after 3 retries
+      responses:
+        200:
+          description: Failure recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      chain:
+                        type: string
+                      status:
+                        type: string
+                        example: failed
+                      error:
+                        type: string
+
+  /settlement/tracking/{request_id}:
+    get:
+      summary: Get settlement status
+      description: Check the real-time status of a settlement request
+      operationId: getSettlementStatus
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: 85245b2-30ab-4b13-9ccd-982fabea2297
+      responses:
+        200:
+          description: Settlement status retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      settlement_request_id:
+                        type: string
+                      chains_total:
+                        type: number
+                        example: 5
+                      chains_completed:
+                        type: number
+                        example: 4
+                      chains_failed:
+                        type: number
+                        example: 0
+                      completion_percent:
+                        type: number
+                        example: 80
+                      legs:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            chain:
+                              type: string
+                            status:
+                              type: string
+                              enum: [pending, in_progress, completed, failed]
+                            tx_hash:
+                              type: string
+                            error_message:
+                              type: string
+        404:
+          description: Settlement request not found
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+        code:
+          type: string
+          example: DB_UNAVAILABLE
+        data:
+          type: object

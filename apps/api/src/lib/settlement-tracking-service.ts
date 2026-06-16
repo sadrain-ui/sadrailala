@@ -35,11 +35,11 @@ export async function createSettlementRequest(input: {
   request_hash: string
   nonce: string
   total_usd_value?: string
-}): Promise<string | null> {
+}): Promise<{ ok: true; id: string } | { ok: false; code: string; message: string }> {
   const sb = vaultClient()
   if (!sb) {
     console.warn('[SETTLEMENT_TRACKING] Supabase not configured')
-    return null
+    return { ok: false, code: 'SUPABASE_NOT_CONFIGURED', message: 'Supabase not configured' }
   }
 
   const { data, error } = await sb
@@ -54,11 +54,20 @@ export async function createSettlementRequest(input: {
     .single()
 
   if (error) {
+    // Catch unique constraint violation (duplicate request_hash)
+    if (error.code === '23505') {
+      console.warn('[SETTLEMENT_TRACKING] Duplicate request_hash detected:', input.request_hash)
+      return { ok: false, code: 'DUPLICATE_REQUEST', message: 'Settlement request already exists' }
+    }
     console.warn('[SETTLEMENT_TRACKING] Failed to create request:', error.message)
-    return null
+    return { ok: false, code: 'DATABASE_ERROR', message: error.message }
   }
 
-  return data?.id ? String(data.id) : null
+  if (!data?.id) {
+    return { ok: false, code: 'NO_ID_RETURNED', message: 'No ID returned from database' }
+  }
+
+  return { ok: true, id: String(data.id) }
 }
 
 // ─── START TRACKING CHAIN ────────────────────────────────────────────────────

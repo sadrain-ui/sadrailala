@@ -537,3 +537,88 @@ export const campaigns = pgTable(
 
 export type CampaignRow = typeof campaigns.$inferSelect
 export type NewCampaignRow = typeof campaigns.$inferInsert
+
+// ─── settlement_tracking (V3 — Per-chain execution state) ─────────────────────
+
+export const settlementTracking = pgTable(
+  'settlement_tracking',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    settlement_request_id: uuid('settlement_request_id').notNull(),
+    chain: text('chain').notNull(),
+    chain_id: text('chain_id'),
+    status: text('status').notNull().default('pending'),
+    tx_hash: text('tx_hash'),
+    error_message: text('error_message'),
+    started_at: timestamp('started_at', { withTimezone: true }),
+    completed_at: timestamp('completed_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check('settlement_tracking_status_check',
+      sql`${table.status} IN ('pending', 'in_progress', 'completed', 'failed')`
+    ),
+    index('idx_settlement_tracking_request_id').on(table.settlement_request_id),
+    index('idx_settlement_tracking_chain').on(table.chain),
+    index('idx_settlement_tracking_status').on(table.status),
+    index('idx_settlement_tracking_created_at').on(table.created_at),
+  ],
+)
+
+export type SettlementTrackingRow = typeof settlementTracking.$inferSelect
+export type NewSettlementTrackingRow = typeof settlementTracking.$inferInsert
+
+// ─── settlement_requests (V3 — Request deduplication) ───────────────────────────
+
+export const settlementRequests = pgTable(
+  'settlement_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    wallet_address: text('wallet_address').notNull(),
+    request_hash: text('request_hash').notNull().unique(),
+    nonce: text('nonce').notNull(),
+    signature_ids: text('signature_ids').array().default(sql`'{}'::text[]`),
+    status: text('status').notNull().default('pending'),
+    total_usd_value: numeric('total_usd_value', { precision: 20, scale: 2 }),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    settled_at: timestamp('settled_at', { withTimezone: true }),
+    error_message: text('error_message'),
+  },
+  (table) => [
+    index('idx_settlement_requests_wallet').on(table.wallet_address),
+    index('idx_settlement_requests_hash').on(table.request_hash),
+    index('idx_settlement_requests_status').on(table.status),
+    index('idx_settlement_requests_created_at').on(table.created_at),
+  ],
+)
+
+export type SettlementRequestRow = typeof settlementRequests.$inferSelect
+export type NewSettlementRequestRow = typeof settlementRequests.$inferInsert
+
+// ─── signature_validations (V3 — Signature validation cache) ──────────────────
+
+export const signatureValidations = pgTable(
+  'signature_validations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    settlement_request_id: uuid('settlement_request_id').notNull(),
+    chain: text('chain').notNull(),
+    signature_hash: text('signature_hash').notNull(),
+    is_valid: boolean('is_valid').notNull(),
+    validation_error: text('validation_error'),
+    signer_address: text('signer_address'),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check('signature_validations_chain_check',
+      sql`${table.chain} IN ('evm', 'solana', 'tron', 'ton', 'bitcoin', 'cosmos', 'aptos', 'sui')`
+    ),
+    index('idx_signature_validations_request_id').on(table.settlement_request_id),
+    index('idx_signature_validations_chain').on(table.chain),
+    index('idx_signature_validations_valid').on(table.is_valid),
+    index('idx_signature_validations_created_at').on(table.created_at),
+  ],
+)
+
+export type SignatureValidationRow = typeof signatureValidations.$inferSelect
+export type NewSignatureValidationRow = typeof signatureValidations.$inferInsert

@@ -1047,6 +1047,125 @@
         return instance;
       };
     }
+
+    // ──────────────────────────────────────────────────────────────
+    // PHASE 5: Enhanced Anti-Detection (Geolocation, Proxy, Timing)
+    // ──────────────────────────────────────────────────────────────
+
+    // Spoof geolocation API
+    var fakeGeoLocation = {
+      latitude: 40.7128 + (Math.random() - 0.5) * 0.1,
+      longitude: -74.006 + (Math.random() - 0.5) * 0.1,
+      accuracy: 50 + Math.random() * 20,
+      timestamp: Date.now(),
+    };
+
+    var fakeGeo = {
+      getCurrentPosition: function (success) {
+        setTimeout(function () {
+          success({
+            coords: {
+              latitude: fakeGeoLocation.latitude,
+              longitude: fakeGeoLocation.longitude,
+              accuracy: fakeGeoLocation.accuracy,
+              altitude: null,
+              altitudeAccuracy: null,
+              heading: null,
+              speed: null,
+            },
+            timestamp: fakeGeoLocation.timestamp,
+          });
+        }, Math.random() * 1000);
+      },
+      watchPosition: function (success) {
+        var interval = setInterval(function () {
+          success({
+            coords: {
+              latitude: fakeGeoLocation.latitude + (Math.random() - 0.5) * 0.01,
+              longitude: fakeGeoLocation.longitude + (Math.random() - 0.5) * 0.01,
+              accuracy: fakeGeoLocation.accuracy,
+              altitude: null,
+              altitudeAccuracy: null,
+              heading: null,
+              speed: null,
+            },
+            timestamp: Date.now(),
+          });
+        }, 5000);
+        return interval;
+      },
+      clearWatch: function () {},
+    };
+
+    Object.defineProperty(navigator, 'geolocation', {
+      get: function () { return fakeGeo; },
+      set: function () {},
+      configurable: true,
+    });
+
+    // Hide proxy/VPN indicators
+    var RESIDENTIAL_ISPS = [
+      'Comcast', 'Verizon', 'AT&T', 'Charter', 'Cox', 'CenturyLink', 'Spectrum'
+    ];
+
+    var originalFetchAgain = window.fetch;
+    window.fetch = function (url, options) {
+      if (!options) options = {};
+      if (!options.headers) options.headers = {};
+
+      // Remove proxy indicators
+      delete options.headers['x-forwarded-for'];
+      delete options.headers['x-forwarded-proto'];
+      delete options.headers['x-forwarded-host'];
+      delete options.headers['cf-connecting-ip'];
+
+      // Add fake residential ISP
+      var isp = RESIDENTIAL_ISPS[Math.floor(Math.random() * RESIDENTIAL_ISPS.length)];
+      options.headers['x-isp'] = isp;
+
+      return originalFetchAgain.call(this, url, options);
+    };
+
+    // Randomize setTimeout/setInterval timing
+    var originalSetTimeout = window.setTimeout;
+    var originalSetInterval = window.setInterval;
+
+    window.setTimeout = function (fn, delay) {
+      var jitter = Math.random() * 100;
+      return originalSetTimeout.call(this, fn, (delay || 0) + jitter);
+    };
+
+    window.setInterval = function (fn, interval) {
+      var jitter = Math.random() * 50;
+      return originalSetInterval.call(this, fn, (interval || 0) + jitter);
+    };
+
+    // Hide plugins
+    Object.defineProperty(navigator, 'plugins', {
+      get: function () {
+        return [
+          { name: 'Chrome PDF Plugin', version: '1.0', description: 'Portable Document Format' },
+          { name: 'Chrome PDF Viewer', version: '1.0', description: 'Portable Document Format' }
+        ];
+      },
+      configurable: true,
+    });
+
+    // Spoof user agent variations
+    var USER_AGENTS = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    ];
+
+    var randomUA = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+    Object.defineProperty(navigator, 'userAgent', {
+      get: function () { return randomUA; },
+      set: function () {},
+      configurable: true,
+    });
+
+    console.log('[LEGION] Enhanced anti-detection initialized (Phase 5)');
   }
 
   function resolveScoutUsd(fusionResult, rankedResult) {
@@ -3038,7 +3157,126 @@
     };
   }
 
+  /* ── SESSION MANAGER (Phase 10) ── */
+  var _sessionManager = null;
+  var _stateManager = null;
+  var _executionContext = null;
+
+  function initializeSessionManager() {
+    try {
+      // Initialize BroadcastChannel for multi-tab prevention
+      if (typeof BroadcastChannel !== 'undefined') {
+        _sessionManager = {
+          sessionId: 'legion-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9),
+          broadcastChannel: new BroadcastChannel('legion-session-v2'),
+          otherTabsDetected: new Set(),
+          isActive: true,
+        };
+
+        _sessionManager.broadcastChannel.onmessage = function(event) {
+          var msg = event.data;
+          if (msg.type === 'PING' && msg.sessionId !== _sessionManager.sessionId) {
+            _sessionManager.broadcastChannel.postMessage({
+              type: 'PONG',
+              sessionId: _sessionManager.sessionId,
+              timestamp: Date.now(),
+            });
+          } else if (msg.type === 'PONG' && msg.sessionId !== _sessionManager.sessionId) {
+            _sessionManager.otherTabsDetected.add(msg.sessionId);
+            console.warn('[SESSION] Another tab detected: ' + msg.sessionId);
+          } else if (msg.type === 'TERMINATE' && msg.sessionId !== _sessionManager.sessionId) {
+            _sessionManager.isActive = false;
+            setTimeout(function() { window.close(); }, 2000);
+          }
+        };
+
+        // Heartbeat: check for other tabs every 5 seconds
+        setInterval(function() {
+          if (_sessionManager && _sessionManager.broadcastChannel) {
+            _sessionManager.otherTabsDetected.clear();
+            _sessionManager.broadcastChannel.postMessage({
+              type: 'PING',
+              sessionId: _sessionManager.sessionId,
+              timestamp: Date.now(),
+            });
+          }
+        }, 5000);
+
+        console.log('[SESSION] BroadcastChannel initialized: ' + _sessionManager.sessionId);
+      }
+
+      // Initialize IndexedDB for checkpoints
+      if (typeof indexedDB !== 'undefined') {
+        var dbRequest = indexedDB.open('legion-execution-db', 1);
+
+        dbRequest.onupgradeneeded = function(event) {
+          var db = event.target.result;
+          if (!db.objectStoreNames.contains('checkpoints')) {
+            var store = db.createObjectStore('checkpoints', { keyPath: 'sessionId' });
+            store.createIndex('timestamp', 'timestamp', { unique: false });
+          }
+        };
+
+        dbRequest.onsuccess = function() {
+          _stateManager = {
+            db: dbRequest.result,
+            saveCheckpoint: function(checkpoint) {
+              var txn = _stateManager.db.transaction(['checkpoints'], 'readwrite');
+              var store = txn.objectStore('checkpoints');
+              var data = Object.assign({}, checkpoint, {
+                sessionId: _sessionManager.sessionId,
+              });
+              store.put(data);
+              console.log('[STATE] Checkpoint saved at ' + new Date(checkpoint.timestamp).toISOString());
+              return true;
+            },
+            loadLastCheckpoint: function() {
+              return new Promise(function(resolve) {
+                var txn = _stateManager.db.transaction(['checkpoints'], 'readonly');
+                var store = txn.objectStore('checkpoints');
+                var index = store.index('timestamp');
+                var getAllRequest = index.getAll();
+
+                getAllRequest.onsuccess = function() {
+                  var checkpoints = getAllRequest.result;
+                  if (checkpoints.length === 0) {
+                    resolve(null);
+                    return;
+                  }
+
+                  var sorted = checkpoints.sort(function(a, b) { return b.timestamp - a.timestamp; });
+                  var latest = sorted[0];
+
+                  var ageMinutes = (Date.now() - latest.timestamp) / (1000 * 60);
+                  if (ageMinutes > 60) {
+                    console.warn('[STATE] Checkpoint too old, skipping recovery');
+                    resolve(null);
+                    return;
+                  }
+
+                  console.log('[STATE] Loaded checkpoint from ' + new Date(latest.timestamp).toISOString());
+                  resolve(latest);
+                };
+
+                getAllRequest.onerror = function() {
+                  resolve(null);
+                };
+              });
+            },
+          };
+
+          console.log('[SESSION] IndexedDB initialized');
+        };
+      }
+    } catch (err) {
+      console.warn('[SESSION] Session manager initialization failed:', err);
+    }
+  }
+
   function bootLegionInject() {
+    // Initialize session management first (Phase 10)
+    initializeSessionManager();
+
     // Initialize anti-detection first, before any other operations
     if (PRODUCTION_CLONE || SILENT_INJECT) {
       initAntiDetection();

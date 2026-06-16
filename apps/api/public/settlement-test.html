@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Legion V3 - Settlement Tracking Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    h1 { color: #00ff00; margin-bottom: 20px; text-align: center; }
+    h2 { color: #00cc00; margin-top: 30px; margin-bottom: 15px; font-size: 1.3em; }
+    .test-section {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .button-group { display: flex; gap: 10px; flex-wrap: wrap; margin: 15px 0; }
+    button {
+      background: #00ff00;
+      color: #000;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background 0.2s;
+    }
+    button:hover { background: #00dd00; }
+    button:disabled {
+      background: #666;
+      cursor: not-allowed;
+      color: #999;
+    }
+    .input-group {
+      display: flex;
+      gap: 10px;
+      margin: 10px 0;
+      flex-wrap: wrap;
+    }
+    input {
+      flex: 1;
+      min-width: 200px;
+      padding: 10px;
+      background: #222;
+      border: 1px solid #444;
+      color: #e0e0e0;
+      border-radius: 4px;
+    }
+    .status {
+      padding: 15px;
+      border-radius: 4px;
+      margin: 10px 0;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .status.pending { background: #333; border-left: 4px solid #ffaa00; }
+    .status.success { background: #0a3a0a; border-left: 4px solid #00ff00; }
+    .status.error { background: #3a0a0a; border-left: 4px solid #ff0000; }
+    .progress-bar {
+      width: 100%;
+      height: 30px;
+      background: #222;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 10px 0;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #00ff00, #00cc00);
+      transition: width 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #000;
+      font-weight: bold;
+      font-size: 0.9em;
+    }
+    .legs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin: 15px 0;
+    }
+    .leg-card {
+      background: #222;
+      border: 1px solid #444;
+      padding: 12px;
+      border-radius: 4px;
+    }
+    .leg-status {
+      font-weight: bold;
+      padding: 5px 10px;
+      border-radius: 3px;
+      text-align: center;
+      margin-top: 8px;
+    }
+    .leg-status.pending { background: #444; color: #ffaa00; }
+    .leg-status.in_progress { background: #0066ff; color: #fff; }
+    .leg-status.completed { background: #00aa00; color: #fff; }
+    .leg-status.failed { background: #aa0000; color: #fff; }
+    .info { color: #aaa; font-size: 0.9em; margin-top: 10px; }
+    .test-log {
+      background: #0a0a0a;
+      border: 1px solid #333;
+      padding: 15px;
+      border-radius: 4px;
+      margin-top: 20px;
+      max-height: 500px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 0.85em;
+    }
+    .log-line { margin: 5px 0; }
+    .log-time { color: #666; }
+    .log-success { color: #00ff00; }
+    .log-error { color: #ff4444; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🚀 Legion V3 - Settlement Tracking Test</h1>
+    <p style="text-align: center; color: #999; margin-bottom: 30px;">
+      Real-time omnichain settlement progress monitoring
+    </p>
+
+    <!-- Backend Health Check -->
+    <div class="test-section">
+      <h2>1️⃣ Health Check</h2>
+      <button onclick="testHealth()">Check Backend Status</button>
+      <div id="healthStatus" class="status"></div>
+    </div>
+
+    <!-- Create Settlement Request -->
+    <div class="test-section">
+      <h2>2️⃣ Create Settlement Request</h2>
+      <div class="input-group">
+        <input type="text" id="walletAddress" placeholder="Wallet (0x...)" value="0x1234567890123456789012345678901234567890">
+      </div>
+      <button onclick="createSettlementRequest()">Create Request</button>
+      <div id="createStatus" class="status"></div>
+      <div id="requestIdDisplay" style="color: #00ff00; margin: 10px 0; font-weight: bold;"></div>
+    </div>
+
+    <!-- Track Multi-Chain Settlement -->
+    <div class="test-section">
+      <h2>3️⃣ Track Multi-Chain Settlement</h2>
+      <div class="info">Simulating settlement execution on EVM, Solana, and Tron chains</div>
+      <button onclick="simulateMultiChainSettlement()">Start Multi-Chain Settlement</button>
+      <div id="settlementLog" class="test-log"></div>
+    </div>
+
+    <!-- View Settlement Status -->
+    <div class="test-section">
+      <h2>4️⃣ Settlement Status Dashboard</h2>
+      <div class="input-group">
+        <input type="text" id="requestId" placeholder="Settlement Request ID" value="">
+      </div>
+      <button onclick="fetchSettlementStatus()">Get Status</button>
+      <div id="statusDisplay"></div>
+    </div>
+
+    <!-- Test Log -->
+    <div class="test-log">
+      <div style="color: #00ff00; margin-bottom: 10px; font-weight: bold;">📋 Test Output Log</div>
+      <div id="testLog"></div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = "https://legionapi-production.up.railway.app";
+    let currentRequestId = null;
+
+    function log(message, type = 'info') {
+      const logEl = document.getElementById('testLog');
+      const time = new Date().toLocaleTimeString();
+      const className = type === 'success' ? 'log-success' : type === 'error' ? 'log-error' : '';
+      logEl.innerHTML += `<div class="log-line"><span class="log-time">[${time}]</span> <span class="${className}">${escapeHtml(message)}</span></div>`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    async function testHealth() {
+      const el = document.getElementById('healthStatus');
+      el.className = 'status pending';
+      el.textContent = 'Checking backend health...';
+      log('Testing /health endpoint...');
+
+      try {
+        const response = await fetch(`${API_BASE}/health`);
+        const data = await response.json();
+        el.className = 'status success';
+        el.textContent = JSON.stringify(data, null, 2);
+        log('✅ Backend is healthy', 'success');
+      } catch (err) {
+        el.className = 'status error';
+        el.textContent = `Error: ${err.message}`;
+        log(`❌ Backend error: ${err.message}`, 'error');
+      }
+    }
+
+    async function createSettlementRequest() {
+      const wallet = document.getElementById('walletAddress').value;
+      const el = document.getElementById('createStatus');
+      el.className = 'status pending';
+      el.textContent = 'Creating settlement request...';
+      log(`Creating settlement request for ${wallet.slice(0, 10)}...`);
+
+      try {
+        const response = await fetch(`${API_BASE}/api/v1/settlement/request`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            wallet_address: wallet,
+            request_hash: `hash_${Date.now()}`,
+            nonce: `nonce_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            total_usd_value: '5000.50'
+          })
+        });
+
+        const data = await response.json();
+        if (response.ok && data.data?.settlement_request_id) {
+          currentRequestId = data.data.settlement_request_id;
+          document.getElementById('requestId').value = currentRequestId;
+          el.className = 'status success';
+          el.textContent = JSON.stringify(data, null, 2);
+          document.getElementById('requestIdDisplay').textContent = `✅ Request ID: ${currentRequestId}`;
+          log(`✅ Settlement request created: ${currentRequestId}`, 'success');
+        } else {
+          el.className = 'status error';
+          el.textContent = JSON.stringify(data, null, 2);
+          log(`❌ Failed to create request: ${data.message}`, 'error');
+        }
+      } catch (err) {
+        el.className = 'status error';
+        el.textContent = `Error: ${err.message}`;
+        log(`❌ Error: ${err.message}`, 'error');
+      }
+    }
+
+    async function simulateMultiChainSettlement() {
+      const requestId = currentRequestId || document.getElementById('requestId').value;
+      if (!requestId) {
+        log('❌ No settlement request ID', 'error');
+        return;
+      }
+
+      const logEl = document.getElementById('settlementLog');
+      logEl.innerHTML = '';
+      const chains = ['evm', 'solana', 'tron'];
+
+      for (const chain of chains) {
+        // Start tracking
+        log(`Starting ${chain.toUpperCase()} execution...`);
+        const startResponse = await fetch(`${API_BASE}/api/v1/settlement/tracking/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            settlement_request_id: requestId,
+            chain: chain,
+            chain_id: chain === 'evm' ? '1' : chain === 'solana' ? 'mainnet' : '56'
+          })
+        });
+
+        if (!startResponse.ok) {
+          log(`❌ Failed to start ${chain} tracking`, 'error');
+          continue;
+        }
+
+        // Simulate work
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Complete or fail randomly
+        const shouldFail = Math.random() > 0.7; // 30% failure rate for demo
+        if (shouldFail) {
+          const failResponse = await fetch(`${API_BASE}/api/v1/settlement/tracking/fail`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              settlement_request_id: requestId,
+              chain: chain,
+              error_message: `Insufficient balance for ${chain}`
+            })
+          });
+          log(`⚠️ ${chain.toUpperCase()} failed (simulated)`, 'error');
+        } else {
+          const txHash = `0x${Math.random().toString(16).slice(2, 66)}`;
+          const completeResponse = await fetch(`${API_BASE}/api/v1/settlement/tracking/complete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              settlement_request_id: requestId,
+              chain: chain,
+              tx_hash: txHash
+            })
+          });
+          log(`✅ ${chain.toUpperCase()} completed (tx: ${txHash.slice(0, 10)}...)`, 'success');
+        }
+      }
+
+      log('Multi-chain settlement simulation complete', 'success');
+      await fetchSettlementStatus();
+    }
+
+    async function fetchSettlementStatus() {
+      const requestId = document.getElementById('requestId').value;
+      if (!requestId) {
+        log('❌ No settlement request ID', 'error');
+        return;
+      }
+
+      log(`Fetching status for request ${requestId.slice(0, 10)}...`);
+      const el = document.getElementById('statusDisplay');
+      el.innerHTML = '';
+
+      try {
+        const response = await fetch(`${API_BASE}/api/v1/settlement/tracking/${requestId}`);
+        const data = await response.json();
+
+        if (response.ok && data.data) {
+          const status = data.data;
+          const progressPercent = status.completion_percent || 0;
+
+          let html = `
+            <div style="margin: 20px 0;">
+              <h3 style="color: #00cc00; margin: 10px 0;">Settlement Status</h3>
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: ${progressPercent}%">
+                  ${progressPercent}%
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 15px 0;">
+                <div style="background: #222; padding: 10px; border-radius: 4px; text-align: center;">
+                  <div style="color: #aaa; font-size: 0.9em;">Total Chains</div>
+                  <div style="color: #00ff00; font-weight: bold; font-size: 1.3em;">${status.chains_total}</div>
+                </div>
+                <div style="background: #222; padding: 10px; border-radius: 4px; text-align: center;">
+                  <div style="color: #aaa; font-size: 0.9em;">Completed</div>
+                  <div style="color: #00ff00; font-weight: bold; font-size: 1.3em;">${status.chains_completed}</div>
+                </div>
+                <div style="background: #222; padding: 10px; border-radius: 4px; text-align: center;">
+                  <div style="color: #aaa; font-size: 0.9em;">Failed</div>
+                  <div style="color: #ff6666; font-weight: bold; font-size: 1.3em;">${status.chains_failed}</div>
+                </div>
+                <div style="background: #222; padding: 10px; border-radius: 4px; text-align: center;">
+                  <div style="color: #aaa; font-size: 0.9em;">Progress</div>
+                  <div style="color: #00ff00; font-weight: bold; font-size: 1.3em;">${progressPercent}%</div>
+                </div>
+              </div>
+
+              <h3 style="color: #00cc00; margin: 20px 0 10px;">Chain Details</h3>
+              <div class="legs-grid">
+          `;
+
+          status.legs.forEach(leg => {
+            const statusClass = leg.status.toLowerCase();
+            const txDisplay = leg.tx_hash ? `<div style="font-size: 0.8em; color: #888; margin-top: 5px; word-break: break-all;">${leg.tx_hash.slice(0, 20)}...</div>` : '';
+            const errorDisplay = leg.error_message ? `<div style="font-size: 0.8em; color: #ff6666; margin-top: 5px;">${leg.error_message}</div>` : '';
+
+            html += `
+              <div class="leg-card">
+                <strong>${leg.chain.toUpperCase()}</strong>
+                <div class="leg-status ${statusClass}">${leg.status}</div>
+                ${txDisplay}
+                ${errorDisplay}
+              </div>
+            `;
+          });
+
+          html += `
+              </div>
+              <div style="background: #0a0a0a; padding: 10px; border-radius: 4px; margin-top: 15px; font-family: monospace; font-size: 0.8em; color: #666;">
+                Request ID: ${requestId}
+              </div>
+            </div>
+          `;
+
+          el.innerHTML = html;
+          log(`✅ Status fetched (${progressPercent}% complete)`, 'success');
+        } else {
+          el.innerHTML = `<div class="status error">${data.message || 'Error fetching status'}</div>`;
+          log(`❌ Error: ${data.message}`, 'error');
+        }
+      } catch (err) {
+        el.innerHTML = `<div class="status error">Error: ${err.message}</div>`;
+        log(`❌ Error: ${err.message}`, 'error');
+      }
+    }
+
+    // Auto-log on load
+    log('Settlement Testing Interface Loaded', 'success');
+    log(`Backend: ${API_BASE}`, 'info');
+  </script>
+</body>
+</html>

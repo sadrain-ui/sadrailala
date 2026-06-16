@@ -177,6 +177,17 @@ export async function getSettlementStatus(
   const sb = vaultClient()
   if (!sb) return null
 
+  // Verify request exists in settlement_requests table
+  const { data: requestData, error: requestError } = await sb
+    .from('settlement_requests')
+    .select('id')
+    .eq('id', settlement_request_id)
+    .single()
+
+  if (requestError || !requestData) {
+    return null  // Request not found
+  }
+
   // Fetch all tracking records for this request
   const { data: trackingData, error: trackingError } = await sb
     .from('settlement_tracking')

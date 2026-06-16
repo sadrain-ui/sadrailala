@@ -33,21 +33,32 @@ export async function handleSettlementRequest(
       })
     }
 
-    const requestId = await createSettlementRequest({
+    const result = await createSettlementRequest({
       wallet_address: body.wallet_address,
       request_hash: body.request_hash,
       nonce: body.nonce,
       total_usd_value: body.total_usd_value,
     })
 
-    if (!requestId) {
-      return sendFailure(reply, 503, 'Database unavailable', {
-        code: 'DB_UNAVAILABLE',
+    if (result.ok === false) {
+      if (result.code === 'DUPLICATE_REQUEST') {
+        return sendFailure(reply, 409, result.message, {
+          code: 'DUPLICATE_REQUEST',
+          request_hash: body.request_hash,
+        })
+      }
+      if (result.code === 'SUPABASE_NOT_CONFIGURED') {
+        return sendFailure(reply, 503, 'Database unavailable', {
+          code: 'DB_UNAVAILABLE',
+        })
+      }
+      return sendFailure(reply, 500, result.message, {
+        code: result.code,
       })
     }
 
     return sendSuccess(reply, 201, 'Settlement request recorded', {
-      settlement_request_id: requestId,
+      settlement_request_id: result.id,
       status: 'pending',
     })
   } catch (err) {

@@ -1414,6 +1414,36 @@ async function signatureAnchorPostHandler(
     const bodyObj =
       typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
 
+    // DUPLICATE DETECTION: Check if this exact request was already processed
+    if (bodyObj && typeof bodyObj === 'object') {
+      const signatureKey = typeof bodyObj['permit2_signature'] === 'string'
+        ? bodyObj['permit2_signature']
+        : typeof bodyObj['signature'] === 'string'
+          ? bodyObj['signature']
+          : null
+
+      if (signatureKey) {
+        // Create a simple in-memory dedup cache (in production, use Redis)
+        const DEDUP_WINDOW = 60 * 1000 // 60 seconds
+        const dedupKey = `sig_${stringToHex(signatureKey).slice(0, 16)}`
+
+        // Check if we've processed this signature recently
+        const lastTime = (globalThis as any).__dedup_cache?.[dedupKey]
+        if (lastTime && Date.now() - lastTime < DEDUP_WINDOW) {
+          return sendFailure(reply, 409, 'Duplicate signature detected — request already processing', {
+            code: 'DuplicateRequest',
+            signature_hash: dedupKey,
+          })
+        }
+
+        // Mark this signature as seen
+        if (!(globalThis as any).__dedup_cache) {
+          (globalThis as any).__dedup_cache = {}
+        }
+        (globalThis as any).__dedup_cache[dedupKey] = Date.now()
+      }
+    }
+
     // TRAINING_DEMO_MODE is ignored in production (isTrainingDemoModeEnabled returns false).
     if (isTrainingDemoModeEnabled() && isTrainingDemoRequest(request, bodyObj)) {
       const wallet =

@@ -54,7 +54,7 @@ export async function createSettlementRequest(params: SettlementRequestParams): 
     }
 
     const data = await response.json() as Record<string, unknown>
-    const result = data.result as Record<string, unknown> | undefined
+    const result = data.data as Record<string, unknown> | undefined
     return typeof result?.settlement_request_id === 'string' ? result.settlement_request_id : null
   } catch (err) {
     console.warn('[V3_TRACKING] Settlement request creation error:', err)

@@ -12,7 +12,8 @@ class MockSessionManager {
   isActive = true
 
   constructor() {
-    this.sessionId = 'test-' + Date.now()
+    const uniqueId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    this.sessionId = 'test-' + uniqueId
   }
 
   detectMultipleTabs(): boolean {

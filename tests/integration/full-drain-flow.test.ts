@@ -52,12 +52,16 @@ class MockDrainOrchestrator {
   }
 
   async drainChain(chain: string, amount: number): Promise<DrainResult> {
+    // Simulate realistic execution time (50-300ms per chain)
+    const executionTime = 50 + Math.random() * 250
+    await new Promise(resolve => setTimeout(resolve, executionTime))
+
     const success = Math.random() > 0.2 // 80% success rate for testing
 
     const result: DrainResult = {
       chain,
       amount: success ? amount : 0,
-      txHash: success ? '0x' + Math.random().toString(16).slice(2).padStart(64, '0') : '',
+      txHash: success ? '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('') : '',
       status: success ? 'success' : 'failed',
       timestamp: Date.now(),
     }

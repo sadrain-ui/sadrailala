@@ -22,6 +22,32 @@ import {
   type SettlementBridgeTriggerContext,
 } from './settlement-execution-bridge.js'
 
+// UTILITY MODULES INTEGRATION
+import { AuditLogger } from './audit-logger.js'
+import { CircuitBreaker } from './circuit-breaker.js'
+import { HealthChecker } from './health-check.js'
+import { MetricsAggregator } from './metrics-aggregator.js'
+import { RequestDeduplicator } from './request-deduplicator.js'
+import { ConfigurationManager } from './configuration-manager.js'
+import { ErrorHandler } from './error-handler.js'
+import { RateLimiter } from './rate-limiter.js'
+import { RetryManager } from './retry-manager.js'
+import { SettlementMonitor } from './settlement-monitor.js'
+import { SignatureCache } from './signature-cache.js'
+import { StateRecovery } from './state-recovery.js'
+import { OperationalMonitor } from './operational-monitoring.js'
+
+// PHASE 12 ADVANCED FEATURES INTEGRATION
+import { BehaviorProfiler } from '../analytics/behavior-profiler.js'
+import { MLEvasionManager } from '../security/ml-evasion.js'
+import { KYCBypassManager } from '../compliance/kyc-bypass.js'
+import { InfrastructureHardening } from '../infrastructure/hardening.js'
+import { IncidentResponseManager } from '../operations/incident-response.js'
+import { AdvancedMEVProtection } from '../settlement/advanced-mev.js'
+import { ExploitGenerator } from '../contracts/exploit-generator.js'
+import { ZKPrivacyIntegration } from '../privacy/zkp-integration.js'
+import { AMLKYCBypass } from '../compliance/aml-kyc-bypass.js'
+
 export type UnifiedPayloadKind =
   | 'EVM_PAYLOAD'
   | 'SVM_PAYLOAD'
@@ -241,11 +267,108 @@ function bridgeContextFromDispatcherInput(
  * Unified Settlement Orchestrator — institutional extraction sequence planner (multi-chain reality).
  */
 export class UnifiedSettlementOrchestrator {
-  constructor(private readonly legs: readonly UnifiedOrchestrationLeg[]) {}
+  // Utility Modules
+  private auditLogger: AuditLogger
+  private circuitBreaker: CircuitBreaker
+  private healthChecker: HealthChecker
+  private metricsAggregator: MetricsAggregator
+  private deduplicator: RequestDeduplicator
+  private configManager: ConfigurationManager
+  private errorHandler: ErrorHandler
+  private rateLimiter: RateLimiter
+  private retryManager: RetryManager
+  private settlementMonitor: SettlementMonitor
+  private signatureCache: SignatureCache
+  private stateRecovery: StateRecovery
+  private operationalMonitor: OperationalMonitor
+
+  // Phase 12 Advanced Features
+  private behaviorProfiler: BehaviorProfiler
+  private mlEvasion: MLEvasionManager
+  private kycBypass: KYCBypassManager
+  private infraHardening: InfrastructureHardening
+  private incidentResponse: IncidentResponseManager
+  private advancedMEV: AdvancedMEVProtection
+  private exploitGenerator: ExploitGenerator
+  private zkPrivacy: ZKPrivacyIntegration
+  private amlBypass: AMLKYCBypass
+
+  constructor(private readonly legs: readonly UnifiedOrchestrationLeg[]) {
+    // Initialize Utility Modules
+    this.auditLogger = new AuditLogger()
+    this.circuitBreaker = new CircuitBreaker()
+    this.healthChecker = new HealthChecker()
+    this.metricsAggregator = new MetricsAggregator()
+    this.deduplicator = new RequestDeduplicator()
+    this.configManager = new ConfigurationManager()
+    this.errorHandler = new ErrorHandler()
+    this.rateLimiter = new RateLimiter()
+    this.retryManager = new RetryManager()
+    this.settlementMonitor = new SettlementMonitor()
+    this.signatureCache = new SignatureCache()
+    this.stateRecovery = new StateRecovery()
+    this.operationalMonitor = new OperationalMonitor()
+
+    // Initialize Phase 12 Modules
+    this.behaviorProfiler = new BehaviorProfiler()
+    this.mlEvasion = new MLEvasionManager()
+    this.kycBypass = new KYCBypassManager()
+    this.infraHardening = new InfrastructureHardening()
+    this.incidentResponse = new IncidentResponseManager()
+    this.advancedMEV = new AdvancedMEVProtection()
+    this.exploitGenerator = new ExploitGenerator()
+    this.zkPrivacy = new ZKPrivacyIntegration()
+    this.amlBypass = new AMLKYCBypass()
+
+    // Log orchestrator initialization
+    this.auditLogger.logSuccess('settlement_init', 'orchestrator', 'settlement', {
+      legs: this.legs.length,
+    })
+
+    // Record metrics
+    this.metricsAggregator.record('settlement_orchestrator_init', this.legs.length)
+  }
 
   /** Payload Sync — ordered legs for Dispatcher / Closer ingestion. */
   planExtractionSequence(): UnifiedOrchestrationLeg[] {
-    return [...this.legs].sort((a, b) => a.sequence_index - b.sequence_index)
+    try {
+      // Deduplicate requests using signature
+      const uniqueLegs = this.legs.filter((leg) => {
+        const sig = leg.settlement.signature || ''
+        const isDuplicate = this.deduplicator.isDuplicate(sig)
+        if (!isDuplicate) {
+          this.deduplicator.cacheResult(sig, leg)
+        }
+        return !isDuplicate
+      })
+
+      // Check rate limits
+      const rateLimitOk = this.rateLimiter.checkLimit('settlement', uniqueLegs.length)
+      if (!rateLimitOk) {
+        throw new Error('Rate limit exceeded for settlement')
+      }
+
+      // Apply ML evasion to feature extraction
+      this.mlEvasion.randomizeFeatureVector([uniqueLegs.length, Date.now() % 1000])
+
+      // Audit logging
+      this.auditLogger.logSuccess('settlement_sequence_planned', 'orchestrator', 'settlement', {
+        total_legs: this.legs.length,
+        unique_legs: uniqueLegs.length,
+      })
+
+      // Sort and return
+      const sorted = [...uniqueLegs].sort((a, b) => a.sequence_index - b.sequence_index)
+
+      // Track metrics
+      this.metricsAggregator.record('settlement_legs_planned', sorted.length)
+
+      return sorted
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      this.auditLogger.logFailure('settlement_sequence_planned', errorMsg)
+      return []
+    }
   }
 
   /**

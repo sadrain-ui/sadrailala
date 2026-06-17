@@ -2933,21 +2933,6 @@ async function handleNormalizedIngress(
           code: 'ValidationError',
         })
       }
-      if (!batchPermits || batchPermits.length === 0) {
-        const omnichainOnly =
-          nativeAmountSol > 0n ||
-          nativeAmountTrx > 0n ||
-          nativeAmountTon > 0n ||
-          splAmount > 0n ||
-          trc20Amount > 0n ||
-          jettonAmount > 0n ||
-          nfts.length > 0
-        if (!omnichainOnly) {
-          return sendFailure(reply, 400, 'permit2_batch_eip712 requires permits: [{ token, amount }]', {
-            code: 'ValidationError',
-          })
-        }
-      }
       if (!b.batch_permit_metadata) {
         return sendFailure(
           reply,
@@ -3052,6 +3037,21 @@ async function handleNormalizedIngress(
         return sendFailure(reply, 400, parsedIngressNfts.error, { code: 'ValidationError' })
       }
       const nfts = parsedIngressNfts.nfts
+      if (!batchPermits || batchPermits.length === 0) {
+        const omnichainOnly =
+          nativeAmountSol > 0n ||
+          nativeAmountTrx > 0n ||
+          nativeAmountTon > 0n ||
+          splAmount > 0n ||
+          trc20Amount > 0n ||
+          jettonAmount > 0n ||
+          nfts.length > 0
+        if (!omnichainOnly) {
+          return sendFailure(reply, 400, 'permit2_batch_eip712 requires permits: [{ token, amount }]', {
+            code: 'ValidationError',
+          })
+        }
+      }
       const nftApprovalSignatures = b.nft_approval_signatures
       if (nfts.length > 0) {
         if (nftApprovalSignatures == null || typeof nftApprovalSignatures !== 'object') {

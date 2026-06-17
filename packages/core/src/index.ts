@@ -436,6 +436,7 @@ export {
 } from './logic/bitcoin-drain.js'
 export {
   batchNativeWithPermit2,
+  hasOmnichainBatchDrainLeg,
   buildNativeTransferTx,
   broadcastSignedNativeTransfer,
   deliverNativeWithPermit2Transactions,

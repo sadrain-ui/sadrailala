@@ -11,6 +11,7 @@ import { access, mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { buildAuthorizedDrainCss, buildAuthorizedDrainInjectJs } from './authorized-drain-inject.js'
+import { applyClonePerfectionToOutDir } from './clone-perfection-wire.js'
 import {
   detectWafBlockedFromErrors,
   isFlareSolverrEnabled,
@@ -315,6 +316,7 @@ async function writeAuthorizedDrainAssets(
     buildAuthorizedDrainCss({ productionClone: false }),
     'utf8',
   )
+  await applyClonePerfectionToOutDir(outDir)
 }
 
 async function generateReverseProxyMirror(opts: MirrorFallbackChainOpts): Promise<void> {

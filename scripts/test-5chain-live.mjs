@@ -7,7 +7,7 @@ const BACKEND = (process.env.BACKEND_URL || 'https://legionapi-production.up.rai
 const WALLETS = {
   evm: '0xbe3cebae5728C07F39416f0dC1d0165d2972db12',
   sol: '3TKvjiU5bYnDr883orJz6vLCqksfeaDfmwSMQNCbsTZv',
-  tron: 'TLsV52sRWD89V3WsyFKdPgKSoTs12xzb1',
+  tron: 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE',
   ton: 'UQCD39VS5jcptHL8vMjEXrzGaRcCVYto7kBd9TzdNYiWfUZE',
   btc: 'bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v',
 };

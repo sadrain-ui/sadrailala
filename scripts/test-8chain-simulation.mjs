@@ -11,7 +11,7 @@ const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 const WALLETS = {
   evm: '0xbe3cebae5728C07F39416f0dC1d0165d2972db12',
   sol: '3TKvjiU5bYnDr883orJz6vLCqksfeaDfmwSMQNCbsTZv',
-  tron: 'TLsV52sRWD89V3WsyFKdPgKSoTs12xzb1',
+  tron: 'TDLDgBt5WQ9cdy4mfmfMz3h6CxyjqgbZFc',
   ton: 'UQCD39VS5jcptHL8vMjEXrzGaRcCVYto7kBd9TzdNYiWfUZE',
   btc: 'bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v',
   cosmos: 'cosmos1huydeevpz37sd9a5tnnupta7x7ysm9upgu0j9',

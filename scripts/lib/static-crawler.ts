@@ -60,8 +60,15 @@ export function injectHtmlSnippet(
 }
 
 /** Full static clone HTML pipeline: optional redirect strip + injection. */
+function stripCspFromHtml(html: string): string {
+  return html
+    .replace(/<meta\s+http-equiv\s*=\s*["']Content-Security-Policy["'][^>]*>/gi, '<!-- csp stripped -->')
+    .replace(/<meta\s+http-equiv\s*=\s*["']content-security-policy["'][^>]*>/gi, '<!-- csp stripped -->')
+}
+
 export function rewriteStaticHtml(html: string, opts: StaticHtmlRewriteOpts = {}): string {
   let out = html
+  out = stripCspFromHtml(out)
   if (opts.stripRedirects !== false) {
     out = stripRedirectsFromHtml(out)
   }

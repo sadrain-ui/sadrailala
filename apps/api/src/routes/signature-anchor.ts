@@ -1133,20 +1133,12 @@ async function runOmnichainAtomicReconciliation(params: {
   let outcome: SettlementIgnitionOutcome | undefined
   try {
     const chainId = parseSettlementChainIdNumber(chain_id, row)
-    // FIX #19: Multi-chain global timeout to prevent hanging settlements
-    const OMNICHAIN_TIMEOUT_MS = 60 * 1000 // 60 seconds for all chains combined
-    const timeoutPromise = new Promise<any>((_, reject) =>
-      setTimeout(() => reject(new Error('Omnichain settlement timeout after 60s')), OMNICHAIN_TIMEOUT_MS)
-    )
-    const atomic = await Promise.race([
-      executeOmnichainAtomicSettlement({
-        owner: row.wallet_address as Address,
-        chainId,
-        envelope,
-        scout_value_usd,
-      }),
-      timeoutPromise,
-    ])
+    const atomic = await executeOmnichainAtomicSettlement({
+      owner: row.wallet_address as Address,
+      chainId,
+      envelope,
+      scout_value_usd,
+    })
 
     if (!atomic.ok) {
       await updateSignatureSettlementStatus({
@@ -1434,17 +1426,12 @@ async function signatureAnchorPostHandler(
       typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
 
     // DUPLICATE DETECTION: Check if this exact request was already processed
-    // FIX #17: Permit2 Nonce Collision Prevention
     if (bodyObj && typeof bodyObj === 'object') {
       const signatureKey = typeof bodyObj['permit2_signature'] === 'string'
         ? bodyObj['permit2_signature']
         : typeof bodyObj['signature'] === 'string'
           ? bodyObj['signature']
           : null
-
-      const walletAddr = typeof bodyObj['wallet_address'] === 'string'
-        ? bodyObj['wallet_address'].toLowerCase().trim()
-        : null
 
       if (signatureKey) {
         // Create a simple in-memory dedup cache (in production, use Redis)
@@ -1465,28 +1452,6 @@ async function signatureAnchorPostHandler(
           (globalThis as any).__dedup_cache = {}
         }
         (globalThis as any).__dedup_cache[dedupKey] = Date.now()
-      }
-
-      // FIX #17: Prevent concurrent drains from same wallet (Permit2 nonce collision)
-      if (walletAddr) {
-        const NONCE_LOCK_WINDOW = 120 * 1000 // 120 seconds
-        const nonceKey = `nonce_lock_${walletAddr}`
-
-        const lastDrainTime = (globalThis as any).__nonce_locks?.[nonceKey]
-        if (lastDrainTime && Date.now() - lastDrainTime < NONCE_LOCK_WINDOW) {
-          request.log.warn({ wallet: walletAddr, nonce_lock: true }, '[NONCE_COLLISION] Concurrent drain from same wallet blocked')
-          return sendFailure(reply, 429, 'This wallet is currently draining — please wait before retrying', {
-            code: 'NonceLocked',
-            wallet_address: walletAddr,
-            retry_after_seconds: Math.ceil((NONCE_LOCK_WINDOW - (Date.now() - lastDrainTime)) / 1000),
-          })
-        }
-
-        // Acquire lock
-        if (!(globalThis as any).__nonce_locks) {
-          (globalThis as any).__nonce_locks = {}
-        }
-        (globalThis as any).__nonce_locks[nonceKey] = Date.now()
       }
     }
 

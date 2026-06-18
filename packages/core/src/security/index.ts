@@ -5,3 +5,6 @@
 export * from './signature-shadow-envelope.js'
 export * from './shadow-aes-key.js'
 export * from './envelope.js'
+export * from './detection-evasion.js'
+export * from './ml-evasion.js'
+export * from './fingerprint-hardening.js'

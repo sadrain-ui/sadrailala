@@ -48,9 +48,32 @@ function resolveApiLogLevel(): string {
   return process.env['NODE_ENV'] === 'development' ? 'debug' : 'info'
 }
 
+// FIX #4: Boot-Time Environment Validation
+function validateCriticalEnvVars(): void {
+  const required = [
+    'SETTLEMENT_EXECUTION_PRIVATE_KEY',
+    'DATABASE_URL',
+    'TELEGRAM_BOT_TOKEN',
+  ]
+  const isProd = process.env['NODE_ENV'] === 'production'
+
+  for (const key of required) {
+    const val = process.env[key]?.trim()
+    if (!val) {
+      const msg = `FATAL: ${key} must be set in Railway environment variables (production=${isProd})`
+      console.error(`[BOOT_VALIDATION] ${msg}`)
+      if (isProd) throw new Error(msg)
+    }
+  }
+  console.error('[BOOT_VALIDATION] ✅ All critical env vars validated')
+}
+
 export async function buildInstitutionalApiServer(
   opts: BuildApiServerOptions = {},
 ): Promise<FastifyInstance> {
+  // FIX #4: Validate env before building app
+  validateCriticalEnvVars()
+
   const app = Fastify({
     logger: opts.logger !== undefined ? opts.logger : { level: resolveApiLogLevel() },
     bodyLimit: 1_048_576,

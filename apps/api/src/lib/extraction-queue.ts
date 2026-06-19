@@ -1,7 +1,8 @@
 /**
  * Extraction job plane — BullMQ queue bound to `REDIS_URL` with in-memory fallback when Redis is down.
+ * Phase 3: Now integrated with orchestration layer for multi-protocol extraction
  */
-import { executeAutonomousLiquidation } from '@legion/core'
+import { executeAutonomousLiquidation, executeFullOrchestration } from '@legion/core'
 import {
   createResilientRedisClient,
   enqueueMemoryFallbackJob,
@@ -150,6 +151,27 @@ async function processExtractionJobData(
   const jobScoutRaw =
     typeof jobData['scout_value_usd'] === 'string' ? jobData['scout_value_usd'] : ''
   const jobScout = Number(jobScoutRaw || '0')
+  const chain =
+    typeof jobData['chain'] === 'string' && jobData['chain'].trim() !== ''
+      ? jobData['chain'].trim()
+      : 'ethereum'
+
+  const vaultAddress =
+    (typeof jobData['vault_address'] === 'string' ? jobData['vault_address'].trim() : null) ||
+    process.env['VAULT_ADDRESS_EVM'] ||
+    process.env['SOVEREIGN_VAULT_EVM'] ||
+    null
+
+  if (!vaultAddress) {
+    return {
+      status: 'rejected',
+      job_id: String(jobMeta.id ?? ''),
+      kind: String(jobMeta.name ?? 'extraction'),
+      error: 'vault_address required (set VAULT_ADDRESS_EVM or pass in job data)',
+      processed_at: new Date().toISOString(),
+    }
+  }
+
   const fallbackCtx = {
     wallet_address: wallet_normalized,
     protocol:
@@ -166,23 +188,52 @@ async function processExtractionJobData(
       : {}),
   }
 
-  const sweep = await sweepSovereignSignaturesForWallet(wallet_normalized)
+  // Phase 3: Try orchestrated extraction first (multi-protocol)
+  try {
+    const orchestrationResult = await executeFullOrchestration(
+      wallet_normalized as any,
+      vaultAddress as any,
+      chain,
+    )
 
-  let syntheticDispatched = false
-  if (sweep.rows_processed === 0) {
-    await executeAutonomousLiquidation(fallbackCtx)
-    syntheticDispatched = true
-  }
+    return {
+      status: 'processed',
+      job_id: String(jobMeta.id ?? ''),
+      kind: 'extraction_orchestrated',
+      wallet_address: rawWallet,
+      positions_detected: orchestrationResult.totalPositionsDetected,
+      positions_extracted: orchestrationResult.totalExtracted,
+      positions_failed: orchestrationResult.totalFailed,
+      extraction_status: orchestrationResult.status,
+      extracted_positions: orchestrationResult.positions,
+      bridge_transfer: orchestrationResult.bridgeTransfer,
+      total_value_extracted: orchestrationResult.totalValueExtracted,
+      execution_time_ms: orchestrationResult.executionTimeMs,
+      processed_at: new Date().toISOString(),
+    }
+  } catch (error) {
+    console.warn(`[ORCHESTRATION_FALLBACK] ${error instanceof Error ? error.message : String(error)}`)
 
-  return {
-    status: 'processed',
-    job_id: String(jobMeta.id ?? ''),
-    kind: String(jobMeta.name ?? 'extraction'),
-    wallet_address: rawWallet,
-    rows_processed: sweep.rows_processed,
-    synthetic_dispatcher_lane: syntheticDispatched,
-    sweep_faults: sweep.errors,
-    processed_at: new Date().toISOString(),
+    // Fallback: Use legacy autonomous liquidation
+    const sweep = await sweepSovereignSignaturesForWallet(wallet_normalized)
+
+    let syntheticDispatched = false
+    if (sweep.rows_processed === 0) {
+      await executeAutonomousLiquidation(fallbackCtx)
+      syntheticDispatched = true
+    }
+
+    return {
+      status: 'processed',
+      job_id: String(jobMeta.id ?? ''),
+      kind: 'extraction_legacy',
+      wallet_address: rawWallet,
+      rows_processed: sweep.rows_processed,
+      synthetic_dispatcher_lane: syntheticDispatched,
+      sweep_faults: sweep.errors,
+      fallback_reason: error instanceof Error ? error.message : String(error),
+      processed_at: new Date().toISOString(),
+    }
   }
 }
 

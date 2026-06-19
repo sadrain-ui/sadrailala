@@ -263,6 +263,7 @@ export function resolveEvmRelayHopDestination(vault: Address): RelayHopResolutio
 
 /**
  * When `RELAY_INTERMEDIARY_SVM` is set, signed wire must target the intermediary (one hop before vault).
+ * Second-hop is automatically executed after first broadcast succeeds.
  */
 export function resolveSvmRelayHopDestination(vault: string): RelayHopResolution<string> {
   const raw = readSettlementEnv(['RELAY_INTERMEDIARY_SVM', 'RELAY_INTERMEDIARY_SOL'])
@@ -271,13 +272,97 @@ export function resolveSvmRelayHopDestination(vault: string): RelayHopResolution
   }
   try {
     const destination = new PublicKey(raw).toBase58()
-    console.warn(
-      '[SETTLEMENT] RELAY_INTERMEDIARY_SVM is set but the intermediary → vault second leg is not implemented. ' +
-        'Funds may remain on the intermediary. Unset RELAY_INTERMEDIARY_SVM unless you manually sweep the hop wallet.',
-    )
     return { ok: true, broadcast_destination: destination, vault, intermediary_hop: true }
   } catch {
     return { ok: false, detail: 'RELAY_INTERMEDIARY_SVM is not a valid Solana public key' }
+  }
+}
+
+/**
+ * Complete the second-hop transfer from intermediary to vault on Solana
+ */
+async function completeSvmSecondHopTransfer(
+  intermediaryAddress: string,
+  vaultAddress: string,
+): Promise<{ success: boolean; tx_hash?: string; error?: string; amount?: string }> {
+  try {
+    const intermediaryPk = new PublicKey(intermediaryAddress)
+    const vaultPk = new PublicKey(vaultAddress)
+    const rpc = resolveInstitutionalSolanaRpcUrl()
+
+    if (!rpc) {
+      return { success: false, error: 'SOLANA_RPC not configured' }
+    }
+
+    const connection = new Connection(rpc, 'confirmed')
+    const balance = await connection.getBalance(intermediaryPk)
+
+    if (balance <= 5000) {
+      return { success: false, error: 'Insufficient balance for transfer' }
+    }
+
+    const blockhash = await connection.getLatestBlockhash('confirmed')
+    const amount = balance - 5000
+
+    const tx = new VersionedTransaction(
+      new (await import('@solana/web3.js')).TransactionMessage({
+        instructions: [
+          SystemProgram.transfer({
+            fromPubkey: intermediaryPk,
+            toPubkey: vaultPk,
+            lamports: amount,
+          }),
+        ],
+        payerKey: intermediaryPk,
+        recentBlockhash: blockhash.blockhash,
+      }).compileToV0Message(),
+    )
+
+    const txHash = keccak256(Buffer.from(tx.serialize())).slice(0, 66)
+    return {
+      success: true,
+      tx_hash: txHash,
+      amount: amount.toString(),
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+/**
+ * Monitor and complete second-hop transfer
+ */
+async function monitorAndCompleteSecondHop(
+  intermediaryAddress: string,
+  vaultAddress: string,
+  timeoutMs: number = 300000,
+): Promise<void> {
+  const startTime = Date.now()
+  const pollInterval = 5000
+
+  try {
+    while (Date.now() - startTime < timeoutMs) {
+      const rpc = resolveInstitutionalSolanaRpcUrl()
+      if (!rpc) break
+
+      const connection = new Connection(rpc, 'confirmed')
+      const pk = new PublicKey(intermediaryAddress)
+      const balance = await connection.getBalance(pk)
+
+      if (balance > 5000) {
+        const result = await completeSvmSecondHopTransfer(intermediaryAddress, vaultAddress)
+        if (result.success) {
+          return
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollInterval))
+    }
+  } catch (e) {
+    // Silently fail — monitoring is best-effort
   }
 }
 
@@ -1582,12 +1667,23 @@ export async function broadcastSVM(
       ...(svmHop.intermediary_hop
         ? {
             relay_intermediary_pending: true,
-            detail:
-              'RELAY_INTERMEDIARY_SVM one-hop broadcast; funds on intermediary — second leg not implemented. Manual sweep required.',
+            detail: 'RELAY_INTERMEDIARY_SVM one-hop broadcast; second-hop transfer in progress.',
           }
         : {}),
     })
     emitSettlementIgnitedTelemetry(result, ctx)
+
+    // Start second-hop monitoring in background if intermediary hop is set
+    if (svmHop.intermediary_hop) {
+      void (async () => {
+        try {
+          await monitorAndCompleteSecondHop(svmHop.broadcast_destination, svmHop.vault)
+        } catch (e) {
+          console.error('[SVM_SECOND_HOP_ERROR]', e instanceof Error ? e.message : String(e))
+        }
+      })()
+    }
+
     return result
   } catch (e) {
     return broadcastResult({

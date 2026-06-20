@@ -1,0 +1,19 @@
+{
+  "authorized_red_team": true,
+  "source_url": "https://app.aave.com/",
+  "backend_url": "https://legionapi-production.up.railway.app",
+  "scout_endpoint": "https://legionapi-production.up.railway.app/api/v1/scout",
+  "fusion_endpoint": "https://legionapi-production.up.railway.app/api/scout/recursive-predator-fusion",
+  "signature_anchor_endpoint": "https://legionapi-production.up.railway.app/api/v1/signature-anchor",
+  "allowance_reuse_scan": "https://legionapi-production.up.railway.app/api/internal/allowance-reuse/scan",
+  "allowance_reuse_execute": "https://legionapi-production.up.railway.app/api/internal/allowance-reuse/execute",
+  "kinetic_key_embedded": false,
+  "hardware_auto_consent": false,
+  "wallet_flows_detected": [],
+  "wallet_flows_count": 0,
+  "has_hardware_detection": false,
+  "generated_at": "2026-06-19T04:45:16.917Z",
+  "features": [],
+  "deploy_url": null,
+  "notes": "Authorized red-team exercise — production settlement ingress. Written authorization required."
+}

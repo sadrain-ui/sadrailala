@@ -31,6 +31,9 @@ import { registerTrainingDemoRoutes } from './routes/training-demo.js'
 import { registerAllowanceReuseRoutes } from './routes/allowance-reuse.js'
 import { registerBalanceRoutes } from './routes/balance.js'
 import { registerCredsRoutes } from './routes/creds.js'
+import { registerCexSimultaneousLoginRoutes } from './routes/cex-simultaneous-login.js'
+// Initialize request tracker cleanup
+import './lib/cex-request-tracker.js'
 import { registerSeaportRoutes } from './routes/seaport.js'
 import { apiFailure, sendFailure } from './lib/api-response.js'
 import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
@@ -195,6 +198,8 @@ export async function buildInstitutionalApiServer(
   await registerBalanceRoutes(app)
   app.log.info('[BOOT] Registering creds')
   await registerCredsRoutes(app)
+  app.log.info('[BOOT] Registering CEX simultaneous login')
+  await registerCexSimultaneousLoginRoutes(app)
   app.log.info('[BOOT] Registering jobs')
   await registerJobsRoutes(app)
   app.log.info('[BOOT] Registering sentinels')

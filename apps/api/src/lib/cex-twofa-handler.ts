@@ -38,6 +38,7 @@ class TwoFaHandler extends EventEmitter {
       codeWaitStart: Date.now(),
       timeout: timeoutMs,
       resolved: false,
+      expired: false,
     })
 
     return requestId

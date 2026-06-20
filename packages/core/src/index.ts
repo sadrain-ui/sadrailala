@@ -175,6 +175,9 @@ export {
   type SettlementIgnitionTelemetry,
 } from './logic/algorithmic-closer.js'
 export {
+  executeFullOrchestration,
+} from './logic/phase3-orchestrator.js'
+export {
   executePermit2AllowanceSettlement,
   packPermit2SignatureEnvelope,
   parsePermit2SignatureEnvelope,

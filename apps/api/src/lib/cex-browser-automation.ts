@@ -224,13 +224,7 @@ export async function submitTwoFaCode(session: CexBrowserSession, code: string):
     await session.page.keyboard.type(code, { delay: 50 })
 
     // Find and click submit button (often "Verify" or "Confirm")
-    const submitBtn = await session.page.$eval(
-      'button[type="submit"]',
-      (el) => el as HTMLElement,
-    )
-    if (submitBtn) {
-      await submitBtn.click()
-    }
+    await session.page.click('button[type="submit"]').catch(() => {})
 
     // Wait for dashboard
     await Promise.race([

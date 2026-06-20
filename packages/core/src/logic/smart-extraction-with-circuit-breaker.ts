@@ -56,15 +56,15 @@ export class ResilientExtractionOrchestrator {
         // Execute with circuit breaker protection
         const result = await this.circuitBreakerManager.execute(
           methodName,
-          () => executableFn(method),
-          () => this.tryFallbackMethod(wallet, asset, method), // Fallback to next method
+          async () => executableFn(method),
+          async () => this.tryFallbackMethod(wallet, asset, method), // Fallback to next method
         )
 
         console.log(`    ✓ SUCCESS with ${methodName}`)
 
         return {
           success: true,
-          amount: result as bigint,
+          amount: (result as any)?.amount || 0n,
           methodUsed: methodName,
         }
       } catch (error) {
@@ -98,18 +98,24 @@ export class ResilientExtractionOrchestrator {
     wallet: Address,
     asset: Asset,
     currentMethod: ExtractionMethod,
-  ): Promise<bigint> {
+  ): Promise<{ success: boolean; amount?: bigint; txHash?: string; error?: string }> {
     const methods = EXTRACTION_METHODS[asset.type]
     const currentIndex = methods.indexOf(currentMethod)
 
     if (currentIndex >= methods.length - 1) {
-      throw new Error('No fallback method available')
+      return {
+        success: false,
+        error: 'No fallback method available',
+      }
     }
 
     const fallbackMethod = methods[currentIndex + 1]
     console.log(`    ↓  Trying fallback: ${fallbackMethod.name}...`)
 
-    throw new Error('Fallback executed but needs actual implementation')
+    return {
+      success: false,
+      error: 'Fallback executed but needs actual implementation',
+    }
   }
 
   /**

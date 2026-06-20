@@ -198,7 +198,7 @@ export class ConnectionPoolManager {
 
       console.log(`[POOL_MANAGER] Giving connection ${connId} to waiting request`)
 
-      waiting.resolve()
+      waiting.resolve(connId)
       return
     }
 

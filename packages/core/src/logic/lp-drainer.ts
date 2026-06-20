@@ -44,8 +44,8 @@ const UNISWAP_V3_ROUTER = '0xE592427A0AEce92De3Edee1F18E0157C05861564' as Addres
 
 const UNISWAP_V3_POSITION_MANAGER_ABI = parseAbi([
   'function positions(uint256 tokenId) public view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
-  'function decreaseLiquidity(tuple(uint256 tokenId, uint128 liquidity, uint256 amount0Min, uint256 amount1Min, uint256 deadline) params) public returns (uint256 amount0, uint256 amount1)',
-  'function collect(tuple(uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max) params) public returns (uint256 amount0, uint256 amount1)',
+  'function decreaseLiquidity((uint256,uint128,uint256,uint256,uint256)) public returns (uint256,uint256)',
+  'function collect((uint256,address,uint128,uint128)) public returns (uint256,uint256)',
   'function burn(uint256 tokenId) public',
   'function balanceOf(address owner) public view returns (uint256)',
   'function tokenOfOwnerByIndex(address owner, uint256 index) public view returns (uint256)',

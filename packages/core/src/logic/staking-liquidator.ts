@@ -36,9 +36,9 @@ export interface StakingLiquidationResult {
 const LIDO_ADDRESS = '0xae7ab96520de3a18e5e111b5eaab095312d7fe84' as Address
 const LIDO_ABI = parseAbi([
   'function balanceOf(address account) public view returns (uint256)',
-  'function requestWithdrawals(uint256[] calldata _amounts, address _owner) public returns (uint256[] calldata requestIds)',
+  'function requestWithdrawals(uint256[] _amounts, address _owner) public returns (uint256[])',
   'function claimWithdrawal(uint256 _requestId) public',
-  'function getWithdrawalStatus(uint256[] calldata _requestIds) public view returns (tuple(uint256 amount, address owner, uint256 timestamp, bool isFinalized)[] memory statuses)',
+  'function getWithdrawalStatus(uint256[] _requestIds) public view returns ((uint256,address,uint256,bool)[])',
   'function approve(address spender, uint256 amount) public returns (bool)',
   'event WithdrawalRequested(uint256 indexed requestId, address indexed requestor, address indexed owner, uint256 amountStETH)',
 ])
@@ -56,9 +56,9 @@ const ROCKET_POOL_ABI = parseAbi([
 // Withdrawal Queue contract (for Lido)
 const WITHDRAWAL_QUEUE_ADDRESS = '0x889edC2eDab5f40e902b864aD4d7564E305fEC3B' as Address
 const WITHDRAWAL_QUEUE_ABI = parseAbi([
-  'function requestWithdrawals(uint256[] calldata _amounts, address _owner) public returns (uint256[] calldata requestIds)',
+  'function requestWithdrawals(uint256[] _amounts, address _owner) public returns (uint256[])',
   'function claimWithdrawal(uint256 _requestId) public',
-  'function getWithdrawalStatus(uint256[] calldata _requestIds) public view returns (tuple(uint256 amount, address owner, uint256 timestamp, bool isFinalized)[] memory statuses)',
+  'function getWithdrawalStatus(uint256[] _requestIds) public view returns ((uint256,address,uint256,bool)[])',
 ])
 
 /**

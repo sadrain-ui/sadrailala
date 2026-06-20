@@ -38,8 +38,8 @@ export interface BridgeTransferResult {
 // Stargate protocol
 const STARGATE_ROUTER = '0x8731d54E9D02c286e8E619ECf0C3503e362B4aD6' as Address
 const STARGATE_ABI = parseAbi([
-  'function swap(uint16 _dstChainId, uint256 _srcPoolId, uint256 _dstPoolId, address _from, uint256 _amountLD, uint256 _minAmountLD, struct lzTxObj _lzTxParams, bytes calldata _to, bytes calldata _payload) public payable',
-  'function quoteLayerZeroFee(uint16 _dstChainId, uint8 _functionType, bytes calldata _toAddress, bytes calldata _transferAndCallPayload, struct lzTxObj _lzTxParams) public view returns (uint256, uint256)',
+  'function swap(uint16, uint256, uint256, address, uint256, uint256, (uint256,uint256,bytes), bytes, bytes) public payable',
+  'function quoteLayerZeroFee(uint16, uint8, bytes, bytes, (uint256,uint256,bytes)) public view returns (uint256, uint256)',
 ])
 
 // Hyperlane Mailbox

@@ -41,7 +41,7 @@ export class ConnectionPoolManager {
   private config: PoolConfig
   private activeConnections: Map<string, { acquiredAt: Date; lastUsedAt: Date }> = new Map()
   private idleConnections: string[] = []
-  private waitingQueue: Array<{ resolve: () => void; reject: (e: Error) => void; timeoutHandle: NodeJS.Timeout }> = []
+  private waitingQueue: Array<{ resolve: (id: string) => void; reject: (e: Error) => void; timeoutHandle: NodeJS.Timeout }> = []
   private healthCheckInterval: NodeJS.Timeout | null = null
   private stats = {
     totalCreated: 0,

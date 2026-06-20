@@ -223,8 +223,8 @@ export async function getHyperlaneQuote(
       functionName: 'quoteDispatch',
       args: [
         destDomain,
-        '0x' + '0'.repeat(64),
-        '0x' + '0'.repeat(messageSize * 2),
+        ('0x' + '0'.repeat(64)) as `0x${string}`,
+        ('0x' + '0'.repeat(messageSize * 2)) as `0x${string}`,
       ],
     })
 

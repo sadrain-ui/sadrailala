@@ -285,14 +285,14 @@ export class AccessControl {
   /**
    * Add address to allowlist
    */
-  allowlist(address: Address): void {
+  addToAllowlist(address: Address): void {
     this.allowlist.add(address.toLowerCase())
   }
 
   /**
    * Add address to blocklist
    */
-  blocklist(address: Address): void {
+  addToBlocklist(address: Address): void {
     this.blocklist.add(address.toLowerCase())
   }
 

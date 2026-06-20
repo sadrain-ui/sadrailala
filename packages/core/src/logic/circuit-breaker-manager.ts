@@ -201,7 +201,7 @@ export class CircuitBreakerManager {
 
     return {
       name: methodName,
-      state: breaker.getState(),
+      state: (breaker.getState() as string).toUpperCase() as 'CLOSED' | 'OPEN' | 'HALF_OPEN',
       failures: (breaker as any).failures || 0,
       successes: (breaker as any).successes || 0,
       totalRequests: stats.totalRequests,

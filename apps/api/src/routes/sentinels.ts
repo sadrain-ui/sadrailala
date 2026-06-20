@@ -135,7 +135,7 @@ function resolveSentinelProbe(
 export async function registerSentinelsRoute(app: FastifyInstance): Promise<void> {
   const authPre = createAuthUnificationPreHandler(app)
 
-  app.get('/api/sentinels/status', { preHandler: authPre }, async (_request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/v1/sentinels', { preHandler: authPre }, async (_request: FastifyRequest, reply: FastifyReply) => {
     const t0 = performance.now()
     const infrastructure = await runSentinelInfrastructureProbes()
 

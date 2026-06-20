@@ -245,4 +245,27 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       return sendFailure(reply, 500, msg, { code: 'ServerError' })
     }
   })
+
+  // Alias endpoints for frontend compatibility
+  app.post('/api/v1/scout/detect-wallet', async (request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = parseBody(fusionScoutBodySchema, request.body)
+    if (parsed.ok === false) {
+      return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
+    }
+    // Forward to main scout endpoint
+    const mainRequest = Object.create(request)
+    mainRequest.body = request.body
+    return (app as any).router.find('POST', '/api/v1/scout', mainRequest, reply)
+  })
+
+  app.post('/api/v1/scout/detect-evm-wallet', async (request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = parseBody(fusionScoutBodySchema, request.body)
+    if (parsed.ok === false) {
+      return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
+    }
+    // Forward to main scout endpoint
+    const mainRequest = Object.create(request)
+    mainRequest.body = request.body
+    return (app as any).router.find('POST', '/api/v1/scout', mainRequest, reply)
+  })
 }

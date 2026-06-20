@@ -116,7 +116,7 @@ export function redactRpcEndpoint(url: string): string {
 }
 
 export async function registerChainsRoute(app: FastifyInstance): Promise<void> {
-  app.get('/api/chains', async (_request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/v1/chains', async (_request: FastifyRequest, reply: FastifyReply) => {
     if (!process.env['DATABASE_URL']?.trim()) {
       return sendFailure(reply, 503, 'DATABASE_URL not configured', {
         code: 'DatabaseNotConfigured',

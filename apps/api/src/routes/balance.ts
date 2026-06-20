@@ -14,6 +14,79 @@ function readQueryString(value: unknown): string | undefined {
 }
 
 export async function registerBalanceRoutes(app: FastifyInstance): Promise<void> {
+  // POST endpoint for multi-balance (accepts JSON body)
+  app.post('/api/v1/multi-balance', async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as Record<string, unknown>
+
+    const evm = typeof body['evm'] === 'string' ? body['evm'].trim() : undefined
+    const sol = typeof body['sol'] === 'string' ? body['sol'].trim() : undefined
+    const tron = typeof body['tron'] === 'string' ? body['tron'].trim() : undefined
+    const ton = typeof body['ton'] === 'string' ? body['ton'].trim() : undefined
+    const btc = typeof body['btc'] === 'string' ? body['btc'].trim() : undefined
+    const cosmos = typeof body['cosmos'] === 'string' ? body['cosmos'].trim() : undefined
+    const aptos = typeof body['aptos'] === 'string' ? body['aptos'].trim() : undefined
+    const sui = typeof body['sui'] === 'string' ? body['sui'].trim() : undefined
+    const addresses = Array.isArray(body['addresses']) ? body['addresses'] : undefined
+
+    const wallet = addresses && addresses.length > 0 ? String(addresses[0]) : undefined
+    let evmAddr = evm
+    let solAddr = sol
+    let tronAddr = tron
+    let tonAddr = ton
+    let btcAddr = btc
+    let cosmosAddr = cosmos
+    let aptosAddr = aptos
+    let suiAddr = sui
+
+    if (wallet) {
+      if (wallet.startsWith('0x') && isAddress(wallet)) {
+        evmAddr = evmAddr ?? wallet
+        aptosAddr = aptosAddr ?? wallet
+        suiAddr = suiAddr ?? wallet
+      } else if (wallet.startsWith('T') && wallet.length >= 30) {
+        tronAddr = tronAddr ?? wallet
+      } else if (wallet.startsWith('UQ') || wallet.startsWith('EQ')) {
+        tonAddr = tonAddr ?? wallet
+      } else if (wallet.startsWith('cosmos1')) {
+        cosmosAddr = cosmosAddr ?? wallet
+      } else if (wallet.startsWith('bc1') || wallet.startsWith('1') || wallet.startsWith('3')) {
+        btcAddr = btcAddr ?? wallet
+      } else if (wallet.length >= 32 && wallet.length <= 44) {
+        solAddr = solAddr ?? wallet
+      }
+    }
+
+    if (!evmAddr && !solAddr && !tronAddr && !tonAddr && !btcAddr && !cosmosAddr && !aptosAddr && !suiAddr) {
+      return sendFailure(reply, 400, 'Provide at least one chain address (evm, sol, tron, ton, btc, cosmos, aptos, sui)', {
+        code: 'ValidationError',
+      })
+    }
+
+    const chainIdRaw = body['evm_chain_id'] ?? body['chain_id']
+    const evm_chain_id = typeof chainIdRaw === 'number' && Number.isFinite(chainIdRaw) ? chainIdRaw : undefined
+
+    try {
+      const result = await fetchMultiChainBalances({
+        evm: evmAddr,
+        sol: solAddr,
+        tron: tronAddr,
+        ton: tonAddr,
+        btc: btcAddr,
+        cosmos: cosmosAddr,
+        aptos: aptosAddr,
+        sui: suiAddr,
+        evm_chain_id,
+      })
+      return sendSuccess(reply, 200, 'Multi-chain balances probed', result)
+    } catch (e) {
+      request.log.error({ err: e }, 'multi_balance_probe_failed')
+      return sendFailure(reply, 500, e instanceof Error ? e.message : 'Balance probe failed', {
+        code: 'BalanceProbeError',
+      })
+    }
+  })
+
+  // GET endpoint for backward compatibility
   app.get('/api/v1/balance/multi', async (request: FastifyRequest, reply: FastifyReply) => {
     const q = request.query as Record<string, unknown>
 

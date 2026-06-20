@@ -342,7 +342,7 @@ function fmtLane(d: LaneDiagnostic): string {
 
 export async function registerPingStrikeRoute(app: FastifyInstance): Promise<void> {
   const authPre = createAuthUnificationPreHandler(app)
-  app.get('/api/diagnostic/ping-strike', { preHandler: authPre }, async (_request, reply) => {
+  app.get('/api/v1/ping-strike', { preHandler: authPre }, async (_request, reply) => {
     console.info('LANE_STATUS: PING_STRIKE_RUN')
 
     const sequence: string[] = []

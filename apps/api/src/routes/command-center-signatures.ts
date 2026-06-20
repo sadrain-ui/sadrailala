@@ -23,7 +23,7 @@ function deriveAnchorStatus(expiryIso: string): string {
 }
 
 export async function registerCommandCenterSignaturesRoute(app: FastifyInstance): Promise<void> {
-  app.get('/api/command-center/signatures', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/api/v1/command-center/signatures', async (request: FastifyRequest, reply: FastifyReply) => {
     const authHeader = request.headers.authorization
     const jwt =
       typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')

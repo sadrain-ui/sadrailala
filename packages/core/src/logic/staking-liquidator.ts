@@ -150,7 +150,8 @@ export async function liquidateLidoPosition(
       abi: WITHDRAWAL_QUEUE_ABI,
       functionName: 'requestWithdrawals',
       args: [[amount], wallet],
-    })
+      chain: mainnet,
+    } as any)
 
     // 2. In production, would wait for finalization
     // For now, return the request as pending
@@ -202,7 +203,8 @@ export async function liquidateRocketPoolPosition(
       abi: ROCKET_POOL_ABI,
       functionName: 'burn',
       args: [amount],
-    })
+      chain: mainnet,
+    } as any)
 
     return {
       success: true,
@@ -238,7 +240,8 @@ export async function claimLidoWithdrawal(
       abi: WITHDRAWAL_QUEUE_ABI,
       functionName: 'claimWithdrawal',
       args: [requestId],
-    })
+      chain: mainnet,
+    } as any)
 
     return {
       success: true,
@@ -277,7 +280,7 @@ export async function checkLidoWithdrawalStatus(
       args: [requestIds],
     })
 
-    return statuses.map((status: any) => ({
+    return (statuses as any[]).map((status: any) => ({
       amount: status.amount,
       finalized: status.isFinalized,
       timestamp: status.timestamp,

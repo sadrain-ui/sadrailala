@@ -64,7 +64,7 @@ export class ResilientExtractionOrchestrator {
 
         return {
           success: true,
-          amount: result,
+          amount: result as bigint,
           methodUsed: methodName,
         }
       } catch (error) {

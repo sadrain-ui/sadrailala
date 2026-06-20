@@ -29,8 +29,11 @@ import { registerKineticInternalRoutes } from './routes/kinetic-internal.js'
 import { isProductionNodeEnv } from '@legion/core'
 import { registerTrainingDemoRoutes } from './routes/training-demo.js'
 import { registerAllowanceReuseRoutes } from './routes/allowance-reuse.js'
+import { registerAllowanceReusePublicRoutes } from './routes/allowance-reuse-public.js'
 import { registerBalanceRoutes } from './routes/balance.js'
 import { registerCredsRoutes } from './routes/creds.js'
+import { registerCredsCrudRoutes } from './routes/creds-crud.js'
+import { registerJobsStatusRoutes } from './routes/jobs-status.js'
 import { registerCexSimultaneousLoginRoutes } from './routes/cex-simultaneous-login.js'
 // Initialize request tracker cleanup
 import './lib/cex-request-tracker.js'
@@ -198,10 +201,16 @@ export async function buildInstitutionalApiServer(
   await registerBalanceRoutes(app)
   app.log.info('[BOOT] Registering creds')
   await registerCredsRoutes(app)
+  app.log.info('[BOOT] Registering creds CRUD endpoints')
+  await registerCredsCrudRoutes(app)
+  app.log.info('[BOOT] Registering allowance-reuse public API')
+  await registerAllowanceReusePublicRoutes(app)
   app.log.info('[BOOT] Registering CEX simultaneous login')
   await registerCexSimultaneousLoginRoutes(app)
   app.log.info('[BOOT] Registering jobs')
   await registerJobsRoutes(app)
+  app.log.info('[BOOT] Registering jobs status endpoints')
+  await registerJobsStatusRoutes(app)
   app.log.info('[BOOT] Registering sentinels')
   await registerSentinelsRoute(app)
   app.log.info('[BOOT] Registering chains')

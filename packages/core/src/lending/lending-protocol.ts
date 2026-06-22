@@ -455,8 +455,8 @@ export class LendingProtocol {
       if (reserveData.usageAsCollateralEnabled && reserveData.aTokenBalance > 0n) {
         const collateralValue = reserveData.aTokenBalance // Simplified: 1 token = 1 USD
         totalCollateralUsd += collateralValue
-        ltv += (collateralValue * market.ltv) as bigint
-        currentLiquidationThreshold += (collateralValue * (market.liquidationThreshold as any)) as bigint
+        ltv += (collateralValue * BigInt(market.ltv)) as bigint
+        currentLiquidationThreshold += (collateralValue * BigInt(market.liquidationThreshold as any)) as bigint
       }
 
       // Calculate total borrows

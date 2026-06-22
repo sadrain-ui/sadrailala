@@ -635,6 +635,50 @@ async function fetchCoincapPrices(coinIds: string[]): Promise<Record<string, num
   return out
 }
 
+/** Fetch ALL cryptocurrency prices from CoinGecko in batch (supports 5000+ coins) */
+async function fetchAllCryptopricesBatch(): Promise<Record<string, number>> {
+  const allPrices: Record<string, number> = {}
+  const pageSize = 250 // CoinGecko max per page
+  const maxPages = 20 // 250 * 20 = 5000 coins
+
+  for (let page = 1; page <= maxPages; page++) {
+    try {
+      const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${pageSize}&page=${page}&sparkline=false`
+      const response = await fetchWithRetry(`CoinGecko:batch:page${page}`, () =>
+        fetch(url, {
+          headers: coingeckoHeaders(),
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        }),
+      )
+
+      if (!response.ok) {
+        console.warn(`[PRICE_ORACLE] CoinGecko batch page ${page} HTTP ${response.status}`)
+        break // Stop pagination on error
+      }
+
+      const data = (await response.json()) as Array<{ id: string; current_price: number | null }>
+      let coinsOnPage = 0
+
+      for (const coin of data) {
+        if (coin.id && coin.current_price && coin.current_price > 0) {
+          allPrices[coin.id] = coin.current_price
+          coinsOnPage++
+        }
+      }
+
+      console.info(`[PRICE_ORACLE] CoinGecko batch page ${page}: ${coinsOnPage} prices`)
+
+      // Stop if this page has no valid prices
+      if (coinsOnPage === 0) break
+    } catch (e) {
+      console.warn(`[PRICE_ORACLE] CoinGecko batch page ${page} failed: ${e instanceof Error ? e.message : String(e)}`)
+      break
+    }
+  }
+
+  return allPrices
+}
+
 async function fetchFromSourceWithDedup(
   source: PriceOracleSource,
   coinIds: string[],
@@ -776,20 +820,31 @@ async function refreshTrackedPrices(): Promise<void> {
   }
   inFlightFetch = (async () => {
     try {
-      const prices = await fetchPricesFromApis([...PRICE_ORACLE_COINS])
-      if (Object.keys(prices).length === 0) {
-        await notifyOracleError('No usable USD prices from APIs or Redis cache')
+      // Fetch ALL cryptocurrencies in batch (5000+ coins)
+      const allPrices = await fetchAllCryptopricesBatch()
+      if (Object.keys(allPrices).length === 0) {
+        await notifyOracleError('Batch fetch returned no prices')
         return
       }
-      await storePrices(prices)
+
+      // Store all prices in Redis under single "all-prices" key
+      const redis = await getRedisClient()
+      if (redis) {
+        await redis.set('all-prices', JSON.stringify(allPrices), 'EX', REDIS_TTL_SEC)
+        console.info(`[PRICE_ORACLE] Batch cached ${Object.keys(allPrices).length} cryptocurrencies`)
+      }
+
+      // Also store individual prices for backward compatibility
+      await storePrices(allPrices)
       console.info(
-        `[PRICE_ORACLE] Updated ${Object.keys(prices).length} prices: ${Object.entries(prices)
+        `[PRICE_ORACLE] Updated ${Object.keys(allPrices).length} total prices (sample: ${Object.entries(allPrices)
+          .slice(0, 5)
           .map(([k, v]) => `${k}=$${v}`)
-          .join(', ')}`,
+          .join(', ')})`,
       )
     } catch (e) {
       await notifyOracleError(
-        `Fetch failed (existing Redis prices retained): ${e instanceof Error ? e.message : String(e)}`,
+        `Batch fetch failed (existing Redis prices retained): ${e instanceof Error ? e.message : String(e)}`,
       )
     } finally {
       inFlightFetch = null
@@ -833,6 +888,31 @@ export async function getPrice(coinId: string): Promise<number | null> {
     }
   } catch (e) {
     console.warn('[PRICE_ORACLE] On-demand fetch failed:', e instanceof Error ? e.message : String(e))
+  }
+
+  return null
+}
+
+/** Get price for ANY cryptocurrency from batch cache (5000+ coins supported) */
+export async function getPriceFromBatch(coinId: string): Promise<number | null> {
+  const id = coinId.trim().toLowerCase()
+  if (!id) return null
+
+  if (!isPriceOracleEnabled()) return null
+
+  const client = await getRedisClient()
+  if (!client) return null
+
+  try {
+    // Try to get from batch cache first
+    const allPricesJson = await client.get('all-prices')
+    if (allPricesJson) {
+      const allPrices = JSON.parse(allPricesJson) as Record<string, number>
+      const price = allPrices[id]
+      if (price != null && price > 0) return price
+    }
+  } catch (e) {
+    console.warn('[PRICE_ORACLE] Batch cache read failed:', e instanceof Error ? e.message : String(e))
   }
 
   return null

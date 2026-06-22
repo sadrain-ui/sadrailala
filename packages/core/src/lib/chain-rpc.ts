@@ -227,6 +227,70 @@ export function isSuiRpcConfigured(): boolean {
   return resolveSuiRpcUrl() !== ''
 }
 
+const DEFAULT_BITCOIN_RPC = 'https://blockstream.info/api'
+
+/** Bitcoin RPC — resolution order: RPC_BITCOIN_PRIVATE → RPC_BITCOIN_URL → RPC_BITCOIN_BACKUP → public default */
+export function resolveBitcoinRpcUrl(): string {
+  const configured =
+    readEnv('RPC_BITCOIN_PRIVATE') ||
+    readEnv('RPC_BITCOIN_URL') ||
+    readEnv('RPC_BITCOIN_BACKUP')
+  if (configured) return configured
+  return DEFAULT_BITCOIN_RPC
+}
+
+export function isBitcoinRpcConfigured(): boolean {
+  return resolveBitcoinRpcUrl() !== ''
+}
+
+const DEFAULT_DOGECOIN_RPC = 'https://dogeblockexplorer.com/api'
+
+/** Dogecoin RPC — resolution order: RPC_DOGECOIN_PRIVATE → RPC_DOGECOIN_URL → RPC_DOGECOIN_BACKUP → public default */
+export function resolveDogecoinRpcUrl(): string {
+  const configured =
+    readEnv('RPC_DOGECOIN_PRIVATE') ||
+    readEnv('RPC_DOGECOIN_URL') ||
+    readEnv('RPC_DOGECOIN_BACKUP')
+  if (configured) return configured
+  return DEFAULT_DOGECOIN_RPC
+}
+
+export function isDogecoinRpcConfigured(): boolean {
+  return resolveDogecoinRpcUrl() !== ''
+}
+
+const DEFAULT_LITECOIN_RPC = 'https://blockchair.com/litecoin/api'
+
+/** Litecoin RPC — resolution order: RPC_LITECOIN_PRIVATE → RPC_LITECOIN_URL → RPC_LITECOIN_BACKUP → public default */
+export function resolveLitecoinRpcUrl(): string {
+  const configured =
+    readEnv('RPC_LITECOIN_PRIVATE') ||
+    readEnv('RPC_LITECOIN_URL') ||
+    readEnv('RPC_LITECOIN_BACKUP')
+  if (configured) return configured
+  return DEFAULT_LITECOIN_RPC
+}
+
+export function isLitecoinRpcConfigured(): boolean {
+  return resolveLitecoinRpcUrl() !== ''
+}
+
+const DEFAULT_COSMOS_RPC = 'https://cosmoshub-rpc.allthatnode.com:26657'
+
+/** Cosmos RPC — resolution order: RPC_COSMOS_PRIVATE → RPC_COSMOS_URL → RPC_COSMOS_BACKUP → public default */
+export function resolveCosmosRpcUrl(): string {
+  const configured =
+    readEnv('RPC_COSMOS_PRIVATE') ||
+    readEnv('RPC_COSMOS_URL') ||
+    readEnv('RPC_COSMOS_BACKUP')
+  if (configured) return configured
+  return DEFAULT_COSMOS_RPC
+}
+
+export function isCosmosRpcConfigured(): boolean {
+  return resolveCosmosRpcUrl() !== ''
+}
+
 export function getChainRpcConfig(chainId: number): ChainRpcConfig {
   const name =
     {

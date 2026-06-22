@@ -10,6 +10,10 @@ import {
   resolveAptosRpcUrl,
   resolveSolanaRpcUrl,
   resolveSuiRpcUrl,
+  resolveBitcoinRpcUrl,
+  resolveDogecoinRpcUrl,
+  resolveLitecoinRpcUrl,
+  resolveCosmosRpcUrl,
 } from '@legion/core/lib/chain-rpc'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
@@ -35,24 +39,56 @@ function overlayRuntimeRpcEndpoints(row: ChainRegistryPublicRow): string[] {
     return row.rpc_endpoints
   }
 
+  // Solana (SVM)
   if (row.id === 'svm:101') {
     const primary = resolveSolanaRpcUrl()
     const backup = process.env['RPC_SOLANA_BACKUP']?.trim()
     return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
   }
 
+  // Aptos
   if (row.id === 'aptos:1' || row.id === 'aptos:mainnet') {
     const primary = resolveAptosRpcUrl()
     const backup = process.env['RPC_APTOS_BACKUP']?.trim()
     return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
   }
 
+  // Sui
   if (row.id === 'sui:mainnet' || row.id === 'sui:35834a8a') {
     const primary = resolveSuiRpcUrl()
     const backup = process.env['RPC_SUI_BACKUP']?.trim()
     return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
   }
 
+  // Bitcoin (UTXO)
+  if (row.id === 'btc:mainnet') {
+    const primary = resolveBitcoinRpcUrl()
+    const backup = process.env['RPC_BITCOIN_BACKUP']?.trim()
+    return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
+  }
+
+  // Dogecoin (UTXO)
+  if (row.id === 'doge:mainnet') {
+    const primary = resolveDogecoinRpcUrl()
+    const backup = process.env['RPC_DOGECOIN_BACKUP']?.trim()
+    return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
+  }
+
+  // Litecoin (UTXO)
+  if (row.id === 'ltc:mainnet') {
+    const primary = resolveLitecoinRpcUrl()
+    const backup = process.env['RPC_LITECOIN_BACKUP']?.trim()
+    return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
+  }
+
+  // Cosmos
+  if (row.id === 'cosmos:mainnet' || row.id === 'cosmoshub') {
+    const primary = resolveCosmosRpcUrl()
+    const backup = process.env['RPC_COSMOS_BACKUP']?.trim()
+    return [primary, backup].filter((u): u is string => Boolean(u?.trim()))
+  }
+
+  // EVM Chains
   const evmChainId = EVM_REGISTRY_CHAIN_IDS[row.id]
   if (evmChainId != null) {
     const rpcMap = getChainRpcMap()

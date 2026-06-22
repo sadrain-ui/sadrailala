@@ -895,7 +895,9 @@ export function startPriceOracle(options?: StartPriceOracleOptions): void {
   cronTask = cron.schedule(
     expression,
     () => {
-      void refreshTrackedPrices()
+      refreshTrackedPrices().catch((e) => {
+        void notifyOracleError(`Unhandled cron error: ${e instanceof Error ? e.message : String(e)}`)
+      })
     },
     { timezone: 'UTC' },
   )

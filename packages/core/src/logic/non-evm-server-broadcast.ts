@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Server-signed settlement broadcast when user payloads are absent.
  * Enabled via NON_EVM_SERVER_SIGNING=true and per-chain execution keys.

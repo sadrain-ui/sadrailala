@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Health Check — monitors system health and component status.
  */

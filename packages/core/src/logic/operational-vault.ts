@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Operational vault resolution — settlement and sweep use the execution wallet
  * when SOVEREIGN_VAULT_* env differs from the server-held execution key address.

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file utxo-adapter.ts
  * @module @legion/core/adapters

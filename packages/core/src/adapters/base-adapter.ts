@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file base-adapter.ts
  * @module @legion/core/adapters

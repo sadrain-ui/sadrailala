@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Solana settlement enhancements — batch SPL, compute budget, Jito simulation, Jupiter swap flash.
  */

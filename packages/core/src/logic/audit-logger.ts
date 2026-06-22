@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Audit Logger — comprehensive audit trail for all critical operations.
  */

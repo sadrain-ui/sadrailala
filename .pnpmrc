@@ -1,0 +1,8 @@
+overrides.fast-jwt=>=6.2.4
+overrides.protobufjs=>=7.5.5
+overrides.undici=>=6.27.0
+overrides.systeminformation=>=5.31.0
+overrides.wagmi=2.12.0
+overrides.viem=2.53.1
+overrides."@wagmi/core"=2.13.0
+overrides."@wagmi/connectors"=5.1.0

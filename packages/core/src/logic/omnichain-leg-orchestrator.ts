@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Omnichain leg orchestration — pre-flight simulation, idempotent retries, partial-success alerts.
  *

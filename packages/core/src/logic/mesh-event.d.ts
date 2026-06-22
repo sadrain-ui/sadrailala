@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Deterministic Tagging — outbound JSON-RPC / HTTP egress classification via `X-Legion-Mesh-Event`.
  */

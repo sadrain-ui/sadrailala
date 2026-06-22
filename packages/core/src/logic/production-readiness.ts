@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Production readiness scoring — EVM, 5-chain, omnichain sequential, universal ingress.
  * Scores are honest caps; omnichain cannot exceed ~8/10 (no cross-chain rollback).

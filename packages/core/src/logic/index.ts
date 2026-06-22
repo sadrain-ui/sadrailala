@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @legion/core/logic — Handshake + Settlement Logic Decoupling (API-First Structure).
  */

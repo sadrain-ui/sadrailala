@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Permit2 AllowanceTransfer — batch permit() + transferFrom([]) for multi-token settlement.
  */

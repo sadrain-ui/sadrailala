@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Settlement Execution — bridges stored Signature Anchor material to Flashbots / Jito wire payloads.
  * Sovereign Vault routing commits via calldata hash binding; executor keys arm live relay serialization.

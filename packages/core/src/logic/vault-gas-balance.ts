@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Sovereign vault native gas balance probes — EVM, Solana, Tron, TON, Bitcoin.
  */

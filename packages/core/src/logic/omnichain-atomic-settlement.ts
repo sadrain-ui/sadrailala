@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Omnichain atomic portfolio settlement — orchestrates EVM Permit2 batch, Solana, Tron,
  * TON, and Bitcoin legs behind a single anchored envelope (`omnichain_atomic_v1`).

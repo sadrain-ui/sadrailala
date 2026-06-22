@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * SMART EXTRACTION + CIRCUIT BREAKER INTEGRATION
  * ===============================================

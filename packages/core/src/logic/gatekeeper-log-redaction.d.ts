@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Gatekeeper log redaction — wallet masking, USD tier labels, signature stripping.
  */

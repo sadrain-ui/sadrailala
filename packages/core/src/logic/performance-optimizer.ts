@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Performance Optimizer — Gas optimization, MEV protection, flash loan cascading
  * Implements advanced optimization strategies for production

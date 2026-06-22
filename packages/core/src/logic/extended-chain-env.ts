@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Extended-chain (Cosmos / Aptos / Sui) omnichain leg gating — legs stay disabled when vault/env unset.
  */

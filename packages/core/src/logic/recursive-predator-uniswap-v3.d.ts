@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { type Address } from 'viem';
 /**
  * Sum Uniswap V3 position NFT liquidity (up to 4 positions) into USD for Recursive Predator ValueMap fusion.

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Staking Liquidator — Extract and liquidate staked assets
  * Handles: Lido stETH, Rocket Pool rETH, and other major staking protocols

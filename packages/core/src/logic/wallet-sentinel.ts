@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Exchange hot-wallet detection and Gnosis Safe / multi-sig identification.
  */

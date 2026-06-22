@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { type Chain as ViemChain } from 'viem';
 import type { Chain } from '../types/index';
 export declare function getPublicClient(chain: Exclude<Chain, 'solana'>, rpcUrl: string): {

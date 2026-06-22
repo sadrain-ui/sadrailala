@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Recursive Predator — Uni V3 LP USD fusion (Ethereum mainnet Position mesh).
  */

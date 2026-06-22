@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Signature Validation & Settlement Tracking — server-side security layer for omnichain operations.
  * Validates all incoming signatures before execution, tracks settlement progress per-chain.

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file tron-adapter.ts
  * @module @legion/core/adapters

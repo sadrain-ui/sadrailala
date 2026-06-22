@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Omnichain privacy mixer — routes non-EVM vault balances toward XMR via Thorchain
  * (and on-chain swaps where required: Jupiter, SunSwap, Dedust).

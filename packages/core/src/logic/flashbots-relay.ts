@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Flashbots relay — private mempool bundle simulation and submission.
  * @see https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint

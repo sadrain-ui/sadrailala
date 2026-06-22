@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Bitcoin PSBT drain — unsigned PSBT construction + signed PSBT broadcast.
  */

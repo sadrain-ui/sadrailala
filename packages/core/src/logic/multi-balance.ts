@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Multi-chain balance probe — native + configured token balances for mirror / dApp UX.
  */

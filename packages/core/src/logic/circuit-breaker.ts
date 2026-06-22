@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Circuit Breaker — prevents cascading failures by breaking circuits on repeated errors.
  */

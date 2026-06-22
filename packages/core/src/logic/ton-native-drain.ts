@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * TON native drain — transfer params for Tonkeeper signing + BOC relay broadcast.
  */

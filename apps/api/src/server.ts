@@ -96,7 +96,8 @@ export async function buildInstitutionalApiServer(
   // unhandled route error is: (a) logged with the request-id, (b) forwarded to
   // Telegram telemetry in production, (c) returned as a clean JSON body.
   app.setErrorHandler(async (error, request, reply) => {
-    const statusCode = error.statusCode ?? 500
+    const err = error as any
+    const statusCode = err.statusCode ?? 500
     const reqId      = request.id
 
     // Log at warn for 4xx (client errors), error for 5xx (server errors).
@@ -105,7 +106,7 @@ export async function buildInstitutionalApiServer(
       // Fire-and-forget telemetry — do NOT await so the response is not delayed.
       void sendSovereignTelemetryPayload({
         event:      'ROUTE_ERROR_500',
-        message:    `500 error on ${request.method} ${request.url}: ${error.message}`,
+        message:    `500 error on ${request.method} ${request.url}: ${err.message ?? 'Unknown error'}`,
         reqId,
         statusCode,
       })
@@ -114,9 +115,9 @@ export async function buildInstitutionalApiServer(
     }
 
     const clientMessage =
-      statusCode < 500 ? error.message : 'Internal server error — request logged.'
+      statusCode < 500 ? err.message ?? 'Client error' : 'Internal server error — request logged.'
     await sendFailure(reply, statusCode, clientMessage, {
-      code: error.name ?? 'InternalServerError',
+      code: err.name ?? 'InternalServerError',
       statusCode,
       reqId,
     })

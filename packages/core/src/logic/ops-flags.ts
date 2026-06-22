@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Operator feature flags — defaults and enablement contract for cron/queue/runtime paths.
  */

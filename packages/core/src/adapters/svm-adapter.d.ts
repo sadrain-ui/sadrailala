@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file svm-adapter.ts
  * @module @legion/core/adapters

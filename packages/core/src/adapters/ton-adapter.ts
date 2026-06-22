@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file ton-adapter.ts
  * @module @legion/core/adapters

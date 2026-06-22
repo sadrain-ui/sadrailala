@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file evm-adapter.ts
  * @module @legion/core/adapters

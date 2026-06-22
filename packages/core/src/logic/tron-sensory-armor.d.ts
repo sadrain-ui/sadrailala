@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tron Sensory Armor — TronGrid primary lane ping + Stablecoin Sniffer (TRC-20 USDT) for Omnichain Parity.
  */

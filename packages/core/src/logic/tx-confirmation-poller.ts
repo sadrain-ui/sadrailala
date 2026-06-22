@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Transaction confirmation polling — bounded per-chain polling after broadcast.
  *

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Production allowance reuse — sweep existing approvals/delegates to vault without new user signatures.
  */

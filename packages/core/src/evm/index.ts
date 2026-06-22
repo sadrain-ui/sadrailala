@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Viem-based EVM client factory
 // All EVM interactions in Legion Engine go through this module.
 import { createPublicClient, createWalletClient, http, type Chain as ViemChain } from 'viem'

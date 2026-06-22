@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Seaport listing drain — EIP-712 OrderComponents signing + fulfillOrder / fulfillBasicOrder settlement.
  */

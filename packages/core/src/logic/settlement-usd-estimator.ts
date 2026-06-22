@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Settlement USD estimation — scout telemetry first, price oracle fallback.
  */

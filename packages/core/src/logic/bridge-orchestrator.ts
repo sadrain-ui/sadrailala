@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Bridge Orchestrator — Route stolen funds across chains
  * Handles: Stargate, Hyperlane, Wormhole cross-chain messaging

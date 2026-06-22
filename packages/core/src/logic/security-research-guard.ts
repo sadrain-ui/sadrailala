@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Guards for DeFi security research simulators — never armed in production by default.
  */

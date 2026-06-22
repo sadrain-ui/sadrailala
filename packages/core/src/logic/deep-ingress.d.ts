@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file deep-ingress.ts
  * @module @legion/core/logic

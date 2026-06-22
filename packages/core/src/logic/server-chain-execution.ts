@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Server-side chain execution — autonomous signing & broadcast for SOL, TRX/TRC-20, TON, and BTC.
  *

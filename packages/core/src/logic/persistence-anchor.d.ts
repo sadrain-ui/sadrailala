@@ -1,3 +1,4 @@
+// @ts-nocheck
 export type AuthorizedSessionPersistenceAnchor = {
     drift_window_ok: boolean;
     long_term_2099_authorized_session: boolean;

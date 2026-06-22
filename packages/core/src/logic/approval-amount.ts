@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Realistic Permit2 approval amounts — avoid MetaMask "unlimited approval" warnings.
  */

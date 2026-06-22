@@ -11,7 +11,6 @@
     "strictNullChecks": false,
     "exactOptionalPropertyTypes": false,
     "noPropertyAccessFromIndexSignature": false,
-    "baseUrl": ".",
     "paths": {
       "@legion/core": ["../../packages/core/dist/index.d.ts"],
       "@legion/core/*": ["../../packages/core/dist/*"],

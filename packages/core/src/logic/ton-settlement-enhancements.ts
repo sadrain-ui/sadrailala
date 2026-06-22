@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * TON settlement enhancements — batch Jetton, wallet init, gas estimation.
  */

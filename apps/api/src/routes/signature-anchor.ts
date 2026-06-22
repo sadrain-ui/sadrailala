@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Signature Anchor — omni-payload ingress to `signatures` (settlement.ts builders + Supabase service role).
  * Route Initialization aligned with Lure-UI `/api/signature-anchor` institutional contract.

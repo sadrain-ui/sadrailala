@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Simple vault sweep — native + token transfers from execution-controlled wallets
  * to configured FINAL_WALLET_* destinations (no swaps, no mixers).

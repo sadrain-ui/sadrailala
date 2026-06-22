@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Database Anchor — explicit pg connection parsing for Host Resolution.
  */

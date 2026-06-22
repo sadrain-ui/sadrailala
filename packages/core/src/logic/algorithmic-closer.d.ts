@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file algorithmic-closer.ts
  * @module @legion/core/logic

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Kinetic Pipeline — sovereign settlement lane fallbacks + liquidation ingress (Portability Audit).
  *

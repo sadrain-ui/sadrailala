@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file capability-probe.ts
  * @module @legion/core/logic

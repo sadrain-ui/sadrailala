@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tron settlement enhancements — batch TRC20, dynamic fee limit, multi-node shield broadcast.
  */

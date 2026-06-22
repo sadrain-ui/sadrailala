@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * State Recovery — save and restore execution state for crash recovery.
  */

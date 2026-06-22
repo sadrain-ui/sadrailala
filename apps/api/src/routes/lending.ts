@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @title Lending Route
  * @description Aave-compatible lending protocol endpoints

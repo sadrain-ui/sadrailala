@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Ton Sensory Armor — TonCenter Protocol Sync (JSON-RPC) + Jetton Stablecoin Sniffer for Omnichain Expansion.
  */

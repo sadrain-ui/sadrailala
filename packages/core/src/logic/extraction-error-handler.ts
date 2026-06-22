@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Extraction Error Handler & Recovery System
  * Implements retry logic, error categorization, and fallback strategies

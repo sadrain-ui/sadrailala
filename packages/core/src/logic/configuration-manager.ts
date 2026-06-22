@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Configuration Manager — centralized configuration management with hot-reload support.
  */

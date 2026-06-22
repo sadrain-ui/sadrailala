@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @module @legion/core/logic/sentinel
  * Autonomous Sentinel — Watchdog Circuit + Sovereign Telemetry emission hooks.

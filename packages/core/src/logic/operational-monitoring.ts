@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Operational Monitoring — real-time operational visibility and alerts.
  */

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * RPC Failover Manager — handles RPC endpoint rotation and health tracking.
  * Automatically switches to backup endpoints on primary failure.

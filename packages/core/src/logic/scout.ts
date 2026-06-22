@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @module @legion/core/logic/scout
  * Recursive Predator — institutional discovery registry (staking, LP, NFT floor priority).

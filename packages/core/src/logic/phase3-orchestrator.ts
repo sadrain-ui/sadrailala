@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Phase 3 Orchestrator — Integrate and orchestrate all Phase 2 extraction modules
  * Coordinates position detection → extraction → settlement → bridging

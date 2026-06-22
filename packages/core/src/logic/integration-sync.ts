@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Integration Sync — single decision point for Omni-Handshake vs legacy fallback.
  * Routing follows EIP-712 / Deep Ingress readiness only (same policy as

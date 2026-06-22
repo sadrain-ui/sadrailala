@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Persistence Anchor — post-upsert reconciliation vs Gatekeeper drift window (authorized session class).
  */

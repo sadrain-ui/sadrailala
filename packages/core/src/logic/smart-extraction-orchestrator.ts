@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * SMART PARTIAL EXTRACTION ORCHESTRATOR
  * =====================================

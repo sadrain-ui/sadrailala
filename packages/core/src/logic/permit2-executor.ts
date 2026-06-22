@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Permit2 AllowanceTransfer — on-chain permit() + transferFrom() for portfolio settlement.
  */

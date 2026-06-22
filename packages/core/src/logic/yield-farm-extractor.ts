@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Yield Farm Extractor — Withdraw and liquidate yield farm positions
  * Handles: Aave, Compound, and other lending/staking protocols

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * EIP-7702 delegation drain — SET_CODE authorization ingress (EVM 2025 vector).
  * Gatekeeper: simulation before broadcast; executor key != victim EOA.

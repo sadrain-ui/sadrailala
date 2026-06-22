@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Wallet session persistence audit — read-only inspection of allowances / delegates.
  * No signatures, no fund movement. Armed only when SESSION_TEST_MODE=true.

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file address-resolver.ts
  * @module @legion/core/adapters

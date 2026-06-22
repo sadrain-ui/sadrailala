@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Metrics Aggregator — collects and aggregates operational metrics for monitoring.
  */

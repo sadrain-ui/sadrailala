@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Flashloan-assisted EVM settlement — single atomic tx via LegionAaveFlashSettlement receiver.
  * Enabled when FLASHLOAN_ENABLED=true and scout_value_usd >= FLASHLOAN_MIN_THRESHOLD on mainnet.

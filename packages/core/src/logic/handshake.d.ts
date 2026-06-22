@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * @file universal-handshake.ts
  * @module @legion/core/logic

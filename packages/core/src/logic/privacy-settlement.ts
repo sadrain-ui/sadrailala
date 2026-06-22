@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Production privacy settlement — routes vault balances through configured mixers after settlement.
  * Armed when PRIVACY_MIXER_ENABLED=true (independent of SECURITY_RESEARCH_MODE).

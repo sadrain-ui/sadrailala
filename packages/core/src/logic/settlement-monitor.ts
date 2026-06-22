@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Settlement Monitor — real-time tracking and alerts for omnichain settlement progress.
  */

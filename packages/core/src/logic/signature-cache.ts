@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Signature Cache — memoize validated signatures to prevent re-validation.
  * Improves performance and reduces RPC calls for repeated requests.

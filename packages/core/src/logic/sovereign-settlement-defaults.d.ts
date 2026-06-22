@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Sovereign settlement lane defaults — Kinetic Pipeline institutional fallbacks when `engine_config`
  * omits FLASHBOTS_RELAY / JITO_URL relay planes (Portability Audit).

@@ -94,7 +94,7 @@ export class DexEngine {
         token1: pair.token1,
         fee: pair.fee,
         liquidity: parseEther('1000000'),
-        sqrtPriceX96: BigInt('1461446703485210835747363837480705'),' // ~1.0 for equal value
+        sqrtPriceX96: BigInt('1461446703485210835747363837480705'), // ~1.0 for equal value
         tick: 0,
         tickSpacing: pair.fee === 100 ? 1 : 10,
       }

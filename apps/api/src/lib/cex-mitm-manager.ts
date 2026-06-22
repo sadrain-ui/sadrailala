@@ -21,6 +21,15 @@ function getPool(): Pool {
   return pool
 }
 
+export function closeMitmPool(): void {
+  if (pool) {
+    void pool.end().catch((err) => {
+      console.warn('[CEX_MITM_MANAGER] Error closing pool:', err instanceof Error ? err.message : String(err))
+    })
+    pool = null
+  }
+}
+
 export interface MitmSessionData {
   sessionId: string
   credId: string
@@ -33,6 +42,19 @@ export interface MitmSessionData {
   apiSecret?: string
 }
 
+/**
+ * Create a new MITM (Man-in-the-Middle) session for simultaneous exchange access.
+ *
+ * Allocates a session that allows both the user (via clone) and backend to access
+ * the same exchange account during a 2FA flow or authenticated operation. Sessions
+ * expire after a configurable TTL (default 120 minutes) to prevent token reuse attacks.
+ *
+ * @param input - Session configuration with credId, exchange, cookies, optional userAgent and TTL
+ * @returns MitmSessionData with generated sessionId and 'pending' initial status
+ *
+ * @remarks Cookies are stored in database; userAgent is used for request headers
+ *          to match the original login browser
+ */
 export async function createMitmSession(input: {
   credId: string
   exchange: string
@@ -72,6 +94,15 @@ export async function createMitmSession(input: {
   }
 }
 
+/**
+ * Update a MITM session's status during the 2FA/verification flow.
+ *
+ * Progression: pending → 2fa_required → verified → active (or failed)
+ *
+ * @param sessionKey - Unique MITM session identifier
+ * @param status - New status for the session
+ * @param data - Optional metadata (twoFaTime when 2FA is requested, cookies when verified)
+ */
 export async function updateMitmSessionStatus(
   sessionKey: string,
   status: 'pending' | '2fa_required' | 'verified' | 'active' | 'expired',

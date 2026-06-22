@@ -147,6 +147,9 @@ export async function registerStatsRoute(app: FastifyInstance): Promise<void> {
       if (!id) {
         return sendFailure(reply, 400, 'Campaign id required', { code: 'ValidationError' })
       }
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^\d+$/.test(id)) {
+        return sendFailure(reply, 400, 'Campaign id must be a valid UUID or numeric ID', { code: 'ValidationError' })
+      }
 
       try {
         const existing = await getCampaignRecord(id)

@@ -700,6 +700,25 @@ if (typeof process !== 'undefined') {
   }
 }
 
+/** Caching and request deduplication utilities */
+export {
+  createRequestCache,
+  createBatchRequestCache,
+  type CacheEntry,
+  type RequestCache,
+  type BatchRequestCache,
+} from './lib/request-cache.js'
+
+export {
+  createTokenBucketLimiter,
+  createSlidingWindowLimiter,
+  createMultiTierLimiter,
+  type RateLimitConfig,
+  type RateLimiter,
+  type MultiTierConfig,
+  type MultiTierLimiter,
+} from './lib/rate-limiter.js'
+
 if (
   typeof process !== 'undefined' &&
   process.env['NODE_ENV'] !== 'production' &&

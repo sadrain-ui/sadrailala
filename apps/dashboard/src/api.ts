@@ -4,7 +4,7 @@ import type {
   CreateCampaignInput,
   DashboardConfig,
   DashboardStats,
-} from './types'
+} from './types.js'
 
 const CONFIG_KEY = 'legion-dashboard-config'
 
@@ -81,7 +81,7 @@ export async function rotateCampaign(
   config: DashboardConfig,
   id: string,
 ): Promise<{ campaign: Campaign }> {
-  return request<{ rotation: unknown; campaign: Campaign }>(
+  return request<{ campaign: Campaign }>(
     config,
     `/api/v1/campaigns/${encodeURIComponent(id)}/rotate`,
     { method: 'POST', body: '{}' },

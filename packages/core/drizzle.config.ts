@@ -2,7 +2,7 @@ import { defineConfig } from 'drizzle-kit'
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 
-import { resolveDatabaseAnchorConnectionString } from './src/logic/database-anchor'
+import { resolveDatabaseAnchorConnectionString } from './src/logic/database-anchor.js'
 
 function hydrateEnvFromRootDotEnv(): void {
   const workspaceRoot = findWorkspaceRoot(process.cwd())

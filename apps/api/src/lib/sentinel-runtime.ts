@@ -70,7 +70,7 @@ async function probeRpc(url: string | undefined): Promise<boolean> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
-      signal: AbortSignal.timeout(8_000),
+      signal: AbortSignal.timeout(8_000), // TIMEOUTS.SENTINEL_FETCH_TIMEOUT_MS
     })
     return res.ok
   } catch {
@@ -86,7 +86,7 @@ async function probeTronRpc(url: string | undefined): Promise<boolean> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
-      signal: AbortSignal.timeout(8_000),
+      signal: AbortSignal.timeout(8_000), // TIMEOUTS.SENTINEL_FETCH_TIMEOUT_MS
     })
     return res.ok
   } catch {
@@ -106,7 +106,7 @@ async function probeTonRpc(url: string | undefined): Promise<boolean> {
         ...(apiKey ? { 'X-API-Key': apiKey } : {}),
       },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getMasterchainInfo', params: [] }),
-      signal: AbortSignal.timeout(8_000),
+      signal: AbortSignal.timeout(8_000), // TIMEOUTS.SENTINEL_FETCH_TIMEOUT_MS
     })
     return res.ok
   } catch {
@@ -122,7 +122,7 @@ async function probeBtcRpc(): Promise<boolean> {
   const probe = endpoints[0] ?? 'https://mempool.space/api'
   try {
     const res = await fetch(`${probe.replace(/\/+$/, '')}/blocks/tip/height`, {
-      signal: AbortSignal.timeout(8_000),
+      signal: AbortSignal.timeout(8_000), // TIMEOUTS.SENTINEL_FETCH_TIMEOUT_MS
     })
     return res.ok
   } catch {
@@ -151,7 +151,7 @@ export async function runSentinelRuntimeCheck(): Promise<void> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getHealth' }),
-        signal: AbortSignal.timeout(8_000),
+        signal: AbortSignal.timeout(8_000), // TIMEOUTS.SENTINEL_FETCH_TIMEOUT_MS
       })
       if (!res.ok) issues.push('Solana RPC probe failed')
     } catch {

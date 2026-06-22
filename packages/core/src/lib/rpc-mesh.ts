@@ -5,11 +5,32 @@
  * Failed endpoints (timeout, 5xx, invalid JSON-RPC) enter a 5-minute cooldown.
  * Dead endpoints are re-probed every 30 minutes for recovery.
  *
+ * Features:
+ * - Automatic endpoint rotation on failure
+ * - Health tracking with success/failure counts
+ * - Recovery probing for dead endpoints
+ * - Rate limiting and adaptive retry strategies
+ * - Request deduplication to prevent thundering herd
+ * - Comprehensive error classification and metrics
+ *
  * Env:
  *   RPC_CIRCUIT_BREAKER=true   — default enabled when unset
  *   RPC_*_BACKUP2              — optional second backup per EVM chain / Solana / Aptos / Sui
+ *   RPC_RATE_LIMIT_PER_SECOND  — rate limit per chain (default: 100)
+ *   RPC_REQUEST_TIMEOUT_MS     — individual request timeout (default: 10000)
+ *   RPC_ENABLE_DEDUP           — enable request deduplication (default: true)
  */
 import { request } from 'undici'
+
+import {
+  classifyRpcError,
+  getAdaptiveRetryStrategy,
+  getCircuitBreaker,
+  getDeduplicationCache,
+  getMetricsCollector,
+  getRateLimiter,
+  type RpcErrorInfo,
+} from './rpc-resilience.js'
 
 export type RpcEndpointTier = 'primary' | 'backup1' | 'backup2' | 'public'
 
@@ -293,6 +314,7 @@ function isRequestFailure(statusCode: number, body: unknown, chainKey: RpcMeshCh
 }
 
 async function probeEndpoint(chainKey: RpcMeshChainKey, url: string): Promise<boolean> {
+  const startTime = Date.now()
   try {
     if (chainKey === 'aptos') {
       const { statusCode } = await request(`${url.replace(/\/$/, '')}/`, {
@@ -300,7 +322,16 @@ async function probeEndpoint(chainKey: RpcMeshChainKey, url: string): Promise<bo
         headersTimeout: REQUEST_TIMEOUT_MS,
         bodyTimeout: REQUEST_TIMEOUT_MS,
       })
-      return statusCode >= 200 && statusCode < 500
+      const latency = Date.now() - startTime
+      const metrics = getMetricsCollector()
+      const isHealthy = statusCode >= 200 && statusCode < 500
+      if (!isHealthy) {
+        const errorInfo = classifyRpcError(new Error(`HTTP ${statusCode}`), statusCode)
+        metrics.recordRequest(chainKey, latency, errorInfo)
+      } else {
+        metrics.recordRequest(chainKey, latency)
+      }
+      return isHealthy
     }
 
     const method =
@@ -316,14 +347,30 @@ async function probeEndpoint(chainKey: RpcMeshChainKey, url: string): Promise<bo
       bodyTimeout: REQUEST_TIMEOUT_MS,
     })
 
+    const latency = Date.now() - startTime
+    const metrics = getMetricsCollector()
+
     if (statusCode >= 500 || statusCode !== 200) {
       await body.dump()
+      const errorInfo = classifyRpcError(new Error(`HTTP ${statusCode}`), statusCode)
+      metrics.recordRequest(chainKey, latency, errorInfo)
       return false
     }
 
     const json = await body.json()
-    return isRequestFailure(statusCode, json, chainKey) == null
-  } catch {
+    const hasError = isRequestFailure(statusCode, json, chainKey) != null
+    if (hasError) {
+      const errorInfo = classifyRpcError(new Error('Invalid RPC response'), statusCode)
+      metrics.recordRequest(chainKey, latency, errorInfo)
+    } else {
+      metrics.recordRequest(chainKey, latency)
+    }
+    return !hasError
+  } catch (e) {
+    const latency = Date.now() - startTime
+    const errorInfo = classifyRpcError(e)
+    const metrics = getMetricsCollector()
+    metrics.recordRequest(chainKey, latency, errorInfo)
     return false
   }
 }
@@ -466,69 +513,127 @@ export class RpcMesh {
   /**
    * Execute an RPC HTTP request with automatic endpoint failover.
    * Marks failures dead (5 min cooldown) and rotates to the next healthy endpoint.
+   * Integrates rate limiting, metrics, and error classification.
    */
   async executeWithFailover<T>(
     chainKey: RpcMeshChainKey,
     fn: (url: string) => Promise<T>,
     validate?: (result: T) => RpcMeshRequestError | null,
   ): Promise<T> {
+    // Check circuit breaker
+    const circuitBreaker = getCircuitBreaker(chainKey)
+    if (!circuitBreaker.canExecute()) {
+      getMetricsCollector().recordCircuitBreakerTrip(chainKey)
+      throw new Error(`RPC circuit breaker OPEN for ${chainKey}`)
+    }
+
     const urls = this.getHealthyEndpoints(chainKey)
     if (urls.length === 0) {
       throw new Error(`No RPC endpoints configured for ${chainKey}`)
     }
 
     let lastError = 'all endpoints failed'
+    let lastErrorInfo: RpcErrorInfo | null = null
 
     for (const url of urls) {
+      const startTime = Date.now()
+
       try {
-        const result = await fn(url)
-        const validationError = validate?.(result) ?? null
-        if (validationError) {
-          this.recordFailure(chainKey, url, validationError.message)
-          lastError = validationError.message
+        // Acquire rate limit token before making request
+        const rateLimiter = getRateLimiter(chainKey)
+        const acquired = await rateLimiter.acquire(1, 5000)
+        if (!acquired) {
+          const delayError = classifyRpcError(new Error('Rate limit acquire timeout'))
+          getMetricsCollector().recordRequest(chainKey, Date.now() - startTime, delayError)
           continue
         }
+
+        const result = await fn(url)
+        const latency = Date.now() - startTime
+        const validationError = validate?.(result) ?? null
+
+        if (validationError) {
+          const errorInfo = classifyRpcError(new Error(validationError.message))
+          this.recordFailure(chainKey, url, validationError.message)
+          getMetricsCollector().recordRequest(chainKey, latency, errorInfo)
+          lastError = validationError.message
+          lastErrorInfo = errorInfo
+          continue
+        }
+
         this.recordSuccess(chainKey, url)
+        circuitBreaker.recordSuccess()
+        getMetricsCollector().recordRequest(chainKey, latency)
         return result
       } catch (e) {
+        const latency = Date.now() - startTime
+        const errorInfo = classifyRpcError(e)
         const message = e instanceof Error ? e.message : String(e)
-        const reason = /timeout|timed out/i.test(message) ? `timeout: ${message}` : message
-        this.recordFailure(chainKey, url, reason)
-        lastError = reason
+
+        this.recordFailure(chainKey, url, message)
+        circuitBreaker.recordFailure()
+        getMetricsCollector().recordRequest(chainKey, latency, errorInfo)
+        getMetricsCollector().recordRetry(chainKey)
+
+        lastError = message
+        lastErrorInfo = errorInfo
+
+        // Don't continue to next endpoint if error is not retryable
+        if (!errorInfo.retryable) {
+          break
+        }
       }
     }
 
-    throw new Error(`RPC mesh exhausted for ${chainKey}: ${lastError}`)
+    // Provide detailed error context
+    const errorContext = lastErrorInfo ? ` (${lastErrorInfo.category}: ${lastErrorInfo.message})` : ''
+    throw new Error(`RPC mesh exhausted for ${chainKey}: ${lastError}${errorContext}`)
   }
 
-  /** JSON-RPC POST with circuit-breaker failover. */
+  /** JSON-RPC POST with circuit-breaker failover, deduplication, and retry. */
   async jsonRpc(
     chainKey: RpcMeshChainKey,
     method: string,
     params: unknown[] = [],
   ): Promise<unknown> {
-    return this.executeWithFailover(
-      chainKey,
-      async (url) => {
-        const { body, statusCode } = await request(url, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-          headersTimeout: REQUEST_TIMEOUT_MS,
-          bodyTimeout: REQUEST_TIMEOUT_MS,
-        })
-        if (statusCode >= 500) {
-          await body.dump()
-          throw new Error(`HTTP ${statusCode}`)
-        }
-        if (statusCode !== 200) {
-          await body.dump()
-          throw new Error(`HTTP ${statusCode}`)
-        }
-        return body.json()
-      },
-      (json) => isRequestFailure(200, json, chainKey),
-    )
+    // Enable request deduplication to prevent duplicate calls
+    const dedup = getDeduplicationCache(5000)
+    return dedup.deduplicate(method, params, async () => {
+      // Use adaptive retry strategy
+      const retryStrategy = getAdaptiveRetryStrategy()
+      return retryStrategy.executeWithRetry(
+        async () => {
+          return this.executeWithFailover(
+            chainKey,
+            async (url) => {
+              const { body, statusCode } = await request(url, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+                headersTimeout: REQUEST_TIMEOUT_MS,
+                bodyTimeout: REQUEST_TIMEOUT_MS,
+              })
+              if (statusCode >= 500) {
+                await body.dump()
+                throw new Error(`HTTP ${statusCode}`)
+              }
+              if (statusCode !== 200) {
+                await body.dump()
+                throw new Error(`HTTP ${statusCode}`)
+              }
+              return body.json()
+            },
+            (json) => isRequestFailure(200, json, chainKey),
+          )
+        },
+        (errorInfo, attempt) => {
+          if (attempt === 0) return // Skip logging on first attempt
+          console.warn(
+            `[RPC_MESH] ${chainKey} ${method} retry attempt ${attempt}: ${errorInfo.category} - ${errorInfo.message}`,
+          )
+        },
+      )
+    })
   }
 
   getChainStatus(chainKey: RpcMeshChainKey): RpcMeshChainStatus {
@@ -604,6 +709,27 @@ export class RpcMesh {
       clearInterval(this.recoveryTimer)
       this.recoveryTimer = null
     }
+  }
+
+  /**
+   * Get performance metrics for all chains
+   */
+  getMetrics() {
+    return getMetricsCollector().getAllMetrics()
+  }
+
+  /**
+   * Get metrics for a specific chain
+   */
+  getChainMetrics(chainKey: RpcMeshChainKey) {
+    return getMetricsCollector().getMetrics(chainKey)
+  }
+
+  /**
+   * Reset metrics (for testing)
+   */
+  resetMetrics(chainKey?: RpcMeshChainKey) {
+    getMetricsCollector().reset(chainKey)
   }
 }
 

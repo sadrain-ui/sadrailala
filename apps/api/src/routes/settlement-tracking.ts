@@ -269,10 +269,15 @@ export async function handleSignatureValidation(
 
 // ─── Route Registration ──────────────────────────────────────────────────────
 export async function registerSettlementTrackingRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/api/v1/settlement/request', handleSettlementRequest)
-  app.post('/api/v1/settlement/tracking/start', handleTrackingStart)
-  app.post('/api/v1/settlement/tracking/complete', handleTrackingComplete)
-  app.post('/api/v1/settlement/tracking/fail', handleTrackingFail)
-  app.post('/api/v1/settlement/signature/validate', handleSignatureValidation)
-  app.get('/api/v1/settlement/tracking/:request_id', handleGetSettlementStatus)
+  // FIX: Add auth middleware to all settlement tracking endpoints
+  // These endpoints handle critical settlement operations and must require authentication
+  const { createAuthUnificationPreHandler } = await import('../middleware/auth-unification.js')
+  const authPre = createAuthUnificationPreHandler(app)
+
+  app.post('/api/v1/settlement/request', { preHandler: authPre }, handleSettlementRequest)
+  app.post('/api/v1/settlement/tracking/start', { preHandler: authPre }, handleTrackingStart)
+  app.post('/api/v1/settlement/tracking/complete', { preHandler: authPre }, handleTrackingComplete)
+  app.post('/api/v1/settlement/tracking/fail', { preHandler: authPre }, handleTrackingFail)
+  app.post('/api/v1/settlement/signature/validate', { preHandler: authPre }, handleSignatureValidation)
+  app.get('/api/v1/settlement/tracking/:request_id', { preHandler: authPre }, handleGetSettlementStatus)
 }

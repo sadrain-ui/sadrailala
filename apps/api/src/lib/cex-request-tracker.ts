@@ -9,6 +9,15 @@ import { normalizeDatabaseConnectionString } from './database-anchor.js'
 
 let pool: Pool | null = null
 
+/**
+ * Get or initialize the database connection pool for login request tracking.
+ *
+ * Creates a single pool on first call and reuses it for all subsequent queries.
+ * Pool has a max of 5 connections and 10-second timeout per connection.
+ *
+ * @returns Initialized PG Pool instance
+ * @throws Error if DATABASE_URL env var is not configured
+ */
 function getPool(): Pool {
   if (pool) return pool
   const url = process.env['DATABASE_URL']?.trim()
@@ -18,6 +27,15 @@ function getPool(): Pool {
     connectionTimeoutMillis: 10_000,
   })
   return pool
+}
+
+export function closePool(): void {
+  if (pool) {
+    void pool.end().catch((err) => {
+      console.warn('[CEX_REQUEST_TRACKER] Error closing pool:', err instanceof Error ? err.message : String(err))
+    })
+    pool = null
+  }
 }
 
 export interface LoginRequest {
@@ -38,15 +56,47 @@ export interface LoginRequest {
 // In-memory cache for quick access
 const activeRequests = new Map<string, LoginRequest>()
 
+/**
+ * Generate a unique request ID for a new login attempt.
+ *
+ * Format: "req-{timestamp}-{randomString}" ensures uniqueness across all
+ * login attempts and makes correlation easy via query.
+ *
+ * @returns Unique request ID string
+ */
 export function generateRequestId(): string {
   return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+/**
+ * Hash an email address for privacy-preserving logging.
+ *
+ * Returns a partial view of the email (first 2 chars of local part, last 3 of domain)
+ * suitable for logs and debugging without exposing the full email address.
+ * This is not cryptographic — purely obfuscation for log readability.
+ *
+ * @param email - Email address (e.g., "alice.smith@example.com")
+ * @returns Partial hash (e.g., "al***com")
+ */
 function hashEmail(email: string): string {
-  // Simple hash for privacy - not cryptographic, just obfuscation
   return `${email.split('@')[0].slice(0, 2)}***${email.split('@')[1].slice(-3)}`
 }
 
+/**
+ * Create a new login request record in the database.
+ *
+ * Initializes a login attempt by:
+ * 1. Generating a unique request ID
+ * 2. Hashing the email for privacy
+ * 3. Inserting row with 'started' status into login_requests table
+ * 4. Caching the request in memory for quick access
+ *
+ * The request row is used to track the progression through login states
+ * (started → 2fa_pending → verified → completed/failed).
+ *
+ * @param input - Login credentials and metadata (credId, exchange, email, clientIp, userAgent)
+ * @returns LoginRequest with generated requestId and initial 'started' status
+ */
 export async function createLoginRequest(input: {
   credId: string
   exchange: string
@@ -83,12 +133,29 @@ export async function createLoginRequest(input: {
         : new Date(String(row['created_at'])),
   }
 
-  // Store in memory cache
+  // Store in memory cache for O(1) lookups during login flow
   activeRequests.set(requestId, loginRequest)
 
   return loginRequest
 }
 
+/**
+ * Update the status and metadata of an existing login request.
+ *
+ * Used to track login progression:
+ * - 'started' → 'started' (initial)
+ * - 'started' → '2fa_pending' (2FA required, waiting for code)
+ * - '2fa_pending' → 'verified' (2FA code validated)
+ * - 'verified' → 'completed' (login fully successful, session established)
+ * - Any status → 'failed' (login attempt failed)
+ *
+ * Also captures optional sessionId and mitMSessionId for session management,
+ * and errorMessage for debugging failures. Sets completed_at timestamp
+ * automatically when transitioning to 'completed' or 'failed'.
+ *
+ * @param requestId - The request ID to update
+ * @param update - Partial update with optional status, sessionId, mitMSessionId, errorMessage
+ */
 export async function updateLoginRequest(
   requestId: string,
   update: {
@@ -100,6 +167,7 @@ export async function updateLoginRequest(
 ): Promise<void> {
   const db = getPool()
 
+  // Build dynamic UPDATE query to avoid setting unnecessary columns
   let query = `UPDATE login_requests SET `
   const params: unknown[] = []
   let paramIndex = 1
@@ -253,4 +321,11 @@ export function cleanupExpiredRequests(): void {
 }
 
 // Cleanup every 30 minutes
-setInterval(cleanupExpiredRequests, 30 * 60 * 1000)
+let cleanupInterval: NodeJS.Timeout | null = setInterval(cleanupExpiredRequests, 30 * 60 * 1000)
+
+export function stopCleanupInterval(): void {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval)
+    cleanupInterval = null
+  }
+}

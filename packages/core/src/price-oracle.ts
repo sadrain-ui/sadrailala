@@ -26,6 +26,7 @@ import {
 type PriceOracleRedisClient = RedisPingClient & {
   get(key: string): Promise<string | null>
   set(key: string, value: string, mode: 'EX', ttl: number): Promise<unknown>
+  mget(...keys: string[]): Promise<(string | null)[]>
   pipeline(): {
     set(key: string, value: string, mode: 'EX', ttl: number): void
     exec(): Promise<unknown>
@@ -90,8 +91,10 @@ const ALL_SOURCES = new Set<PriceOracleSource>([
 ])
 const REDIS_KEY_PREFIX = 'price:'
 const REDIS_TTL_SEC = 1800
+const REDIS_MIN_TTL_SEC = 300
 const FETCH_TIMEOUT_MS = 12_000
 const STARTUP_JITTER_MAX_MS = 60_000
+const REQUEST_DEDUP_WINDOW_MS = 5_000
 
 const BINANCE_SYMBOL_BY_COIN: Record<string, string> = {
   ethereum: 'ETHUSDT',
@@ -155,6 +158,10 @@ let cronTask: cron.ScheduledTask | null = null
 let redisClient: PriceOracleRedisClient | null = null
 let telegramNotifier: TelegramNotifier | null = null
 let inFlightFetch: Promise<void> | null = null
+
+// Request deduplication cache — prevent concurrent fetches for same coin
+const inFlightRequestsBySource = new Map<string, Promise<Record<string, number>>>()
+const inFlightTimestampsBySource = new Map<string, number>()
 
 function readEnv(key: string): string | undefined {
   if (typeof process === 'undefined') return undefined
@@ -298,29 +305,59 @@ async function storePrices(prices: Record<string, number>): Promise<void> {
   const client = await getRedisClient()
   if (!client) return
   const pipeline = client.pipeline()
+  let count = 0
+
   for (const [coinId, usd] of Object.entries(prices)) {
     if (Number.isFinite(usd) && usd > 0) {
-      pipeline.set(redisKey(coinId), String(usd), 'EX', REDIS_TTL_SEC)
+      // Ensure minimum TTL to avoid cache thrashing
+      const ttl = Math.max(REDIS_TTL_SEC, REDIS_MIN_TTL_SEC)
+      pipeline.set(redisKey(coinId), String(usd), 'EX', ttl)
+      count++
     }
   }
-  await pipeline.exec()
+
+  if (count > 0) {
+    try {
+      await pipeline.exec()
+    } catch (e) {
+      console.warn('[PRICE_ORACLE] Redis pipeline write failed:', e instanceof Error ? e.message : String(e))
+    }
+  }
 }
 
 async function readCachedPrices(coinIds: string[]): Promise<Record<string, number>> {
   const client = await getRedisClient()
   if (!client) return {}
   const out: Record<string, number> = {}
-  for (const coinId of coinIds) {
-    const id = coinId.trim().toLowerCase()
-    try {
-      const cached = await client.get(redisKey(id))
+
+  // Use MGET for batch reads (more efficient than N sequential GETs)
+  const ids = coinIds.map((id) => id.trim().toLowerCase()).filter(Boolean)
+  if (ids.length === 0) return {}
+
+  try {
+    const keys = ids.map(redisKey)
+    const values = await client.mget(...keys)
+
+    for (let i = 0; i < ids.length; i++) {
+      const cached = values[i]
       if (!cached) continue
       const n = Number.parseFloat(cached)
-      if (Number.isFinite(n) && n > 0) out[id] = n
-    } catch {
-      /* skip */
+      if (Number.isFinite(n) && n > 0) out[ids[i]] = n
+    }
+  } catch {
+    // Fallback: try sequential reads
+    for (const id of ids) {
+      try {
+        const cached = await client.get(redisKey(id))
+        if (!cached) continue
+        const n = Number.parseFloat(cached)
+        if (Number.isFinite(n) && n > 0) out[id] = n
+      } catch {
+        /* skip */
+      }
     }
   }
+
   return out
 }
 
@@ -598,6 +635,34 @@ async function fetchCoincapPrices(coinIds: string[]): Promise<Record<string, num
   return out
 }
 
+async function fetchFromSourceWithDedup(
+  source: PriceOracleSource,
+  coinIds: string[],
+): Promise<Record<string, number>> {
+  // Dedup key prevents concurrent fetches from same source
+  const dedupKey = `${source}:${coinIds.sort().join(',')}`
+  const now = Date.now()
+  const lastFetchTime = inFlightTimestampsBySource.get(dedupKey)
+
+  // If inflight request exists and was started recently, return existing promise
+  if (inFlightRequestsBySource.has(dedupKey) && lastFetchTime && now - lastFetchTime < REQUEST_DEDUP_WINDOW_MS) {
+    const inFlight = inFlightRequestsBySource.get(dedupKey)
+    if (inFlight) return inFlight
+  }
+
+  // Start new fetch
+  const promise = fetchFromSource(source, coinIds)
+  inFlightRequestsBySource.set(dedupKey, promise)
+  inFlightTimestampsBySource.set(dedupKey, now)
+
+  // Cleanup after completion
+  promise.finally(() => {
+    inFlightRequestsBySource.delete(dedupKey)
+  })
+
+  return promise
+}
+
 async function fetchFromSource(
   source: PriceOracleSource,
   coinIds: string[],
@@ -645,11 +710,24 @@ async function fetchPricesFromApis(coinIds: string[]): Promise<Record<string, nu
   const errors: string[] = []
   let prices: Record<string, number> = {}
 
+  // Parallel fetch from all sources with deduplication
+  const sourcePromises: Array<{ source: PriceOracleSource; promise: Promise<Record<string, number>> }> = []
+
   for (const source of sources) {
     const missing = ids.filter((id) => prices[id] == null)
     if (missing.length === 0) break
+
+    sourcePromises.push({
+      source,
+      promise: fetchFromSourceWithDedup(source, missing),
+    })
+  }
+
+  // Collect results in order, but allow failures
+  for (const { source, promise } of sourcePromises) {
     try {
-      const fetched = await fetchFromSource(source, missing)
+      const fetched = await promise
+      const missing = ids.filter((id) => prices[id] == null)
       if (Object.keys(fetched).length === 0) {
         errors.push(`${source}: empty result`)
         continue

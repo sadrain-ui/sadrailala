@@ -9,11 +9,30 @@ import {
   resolveDatabaseAnchorConnectionString,
 } from '@legion/core/logic/database-anchor'
 
-/** Host Resolution — keep raw connection string; native `pg` parser handles encoded credentials. */
+/**
+ * Normalize a database connection string for safe connection.
+ *
+ * Resolves any shorthand or variable references in the connection string
+ * while keeping the raw format intact for the native `pg` parser (which
+ * handles URL encoding and credential extraction natively).
+ *
+ * @param raw - Connection string (e.g., "postgresql://user:pass@host:5432/db")
+ * @returns Normalized connection string ready for pg.Pool
+ */
 export function normalizeDatabaseConnectionString(raw: string): string {
   return resolveDatabaseAnchorConnectionString(raw)
 }
 
+/**
+ * Classify a database connection error for debugging and monitoring.
+ *
+ * Maps error codes and messages to human-readable categories to help diagnose
+ * connection issues (timeouts, authentication, IP blocking, network issues, etc).
+ * Used for telemetry and status reporting.
+ *
+ * @param err - Error object from Postgres connection attempt
+ * @returns One of: 'Timeout', 'Auth', 'IP Block', 'NetworkRefusalOrUnreachable', 'Unknown'
+ */
 export function classifyDatabaseAnchorFailure(err: unknown): string {
   const e = err as { code?: string; message?: string }
   const msg = (e?.message ?? String(err)).toLowerCase()
@@ -38,6 +57,21 @@ export function classifyDatabaseAnchorFailure(err: unknown): string {
   return 'Unknown'
 }
 
+/**
+ * Execute a simple "SELECT 1" query against Postgres to verify connectivity.
+ *
+ * Implements a smart retry plan with dual-port fallback:
+ * - If using non-standard port (6543), tries both 6543 and 5432
+ * - If using standard port (5432), retries with increasing delays
+ * - Measures latency and total attempts for diagnostics
+ *
+ * This function is used for health checks, startup verification, and
+ * infrastructure probes. It provides detailed error classification for
+ * debugging connection issues.
+ *
+ * @param connectionString - Postgres connection URI (e.g., "postgresql://...")
+ * @returns Object with ok status, latency_ms, attempt count, port used, and optional error
+ */
 export async function executePostgresAnchorQuery(connectionString: string): Promise<{
   ok: boolean
   latency_ms: number
@@ -48,14 +82,14 @@ export async function executePostgresAnchorQuery(connectionString: string): Prom
   const t0 = Date.now()
   const host = resolveDatabaseAnchorHost(connectionString)
   const user = resolveDatabaseAnchorUser(connectionString)
-  const primaryPort = resolveDatabaseAnchorPort(connectionString) ?? 5432
+  const primaryPort = resolveDatabaseAnchorPort(connectionString) ?? 5_432 // DATABASE_CONFIG.DEFAULT_PORT
   const retryPlan =
-    primaryPort === 6543
+    primaryPort === 6_543 // DATABASE_CONFIG.ALTERNATIVE_PORT
       ? [
-          { port: 6543, delayMs: 0 },
-          { port: 6543, delayMs: 750 },
-          { port: 5432, delayMs: 0 },
-          { port: 5432, delayMs: 1_750 },
+          { port: 6_543, delayMs: 0 }, // DATABASE_CONFIG.ALTERNATIVE_PORT
+          { port: 6_543, delayMs: 750 }, // DATABASE_CONFIG.ALTERNATIVE_PORT
+          { port: 5_432, delayMs: 0 }, // DATABASE_CONFIG.DEFAULT_PORT
+          { port: 5_432, delayMs: 1_750 }, // DATABASE_CONFIG.DEFAULT_PORT
         ]
       : [
           { port: primaryPort, delayMs: 0 },
@@ -71,7 +105,7 @@ export async function executePostgresAnchorQuery(connectionString: string): Prom
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
 
     console.info(
-      `DATABASE_ANCHOR_ATTEMPT: host=${host} port=${port} user=${user} password=[REDACTED] attempt=${i + 1} mode=${port === 5432 ? 'Session' : 'Transaction'}`,
+      `DATABASE_ANCHOR_ATTEMPT: host=${host} port=${port} user=${user} password=[REDACTED] attempt=${i + 1} mode=${port === 5_432 ? 'Session' : 'Transaction'}`,
     )
     const pool = createDatabaseAnchorPool(
       connectionString,

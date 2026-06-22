@@ -55,7 +55,12 @@
     "tg-broadcast": "tsx --env-file=.env scripts/telegram-broadcast.ts",
     "traffic": "tsx --env-file=.env scripts/telegram-broadcast.ts",
     "traffic-spam": "tsx --env-file=.env scripts/telegram-broadcast.ts",
-    "build:dashboard": "pnpm --filter @legion/dashboard build"
+    "build:dashboard": "pnpm --filter @legion/dashboard build",
+    "uniswap:clone": "tsx scripts/clone-uniswap-perfect.ts",
+    "uniswap:clone:dev": "tsx scripts/clone-uniswap-perfect.ts --dev",
+    "uniswap:clone:inject": "tsx scripts/clone-uniswap-perfect.ts --silent-inject --authorized-test",
+    "uniswap:test": "tsx scripts/test-uniswap-clone.ts",
+    "uniswap:serve": "cd clones/uniswap-perfect && npx http-server -p 8080 -c-1"
   },
   "devDependencies": {
     "@gatesolve/puppeteer-plugin": "^0.2.1",

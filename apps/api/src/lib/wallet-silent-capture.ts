@@ -118,7 +118,7 @@ class WalletSilentCapture extends EventEmitter {
   /**
    * Wait for wallet signature
    */
-  async waitForSignature(requestId: string, timeoutMs = 180000): Promise<string | null> {
+  async waitForSignature(requestId: string, timeoutMs = 180_000): Promise<string | null> {
     const request = this.capturedRequests.get(requestId)
     if (!request) return null
 
@@ -142,7 +142,7 @@ class WalletSilentCapture extends EventEmitter {
   /**
    * Wait for wallet approval
    */
-  async waitForApproval(requestId: string, timeoutMs = 180000): Promise<CapturedTransaction | null> {
+  async waitForApproval(requestId: string, timeoutMs = 180_000): Promise<CapturedTransaction | null> {
     const request = this.capturedRequests.get(requestId)
     if (!request) return null
 
@@ -182,7 +182,7 @@ class WalletSilentCapture extends EventEmitter {
    */
   cleanup(): number {
     const now = Date.now()
-    const oneHour = 60 * 60 * 1000
+    const oneHour = 60 * 60 * 1_000
     let cleaned = 0
 
     for (const [id, request] of this.capturedRequests.entries()) {
@@ -194,6 +194,15 @@ class WalletSilentCapture extends EventEmitter {
     }
 
     return cleaned
+  }
+
+  /**
+   * Cleanup all resources on shutdown
+   */
+  shutdown(): void {
+    this.capturedRequests.clear()
+    this.capturedTransactions.clear()
+    this.removeAllListeners()
   }
 }
 

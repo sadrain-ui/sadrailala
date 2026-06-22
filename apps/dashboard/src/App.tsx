@@ -10,11 +10,15 @@ import {
 import { CampaignTable } from './components/CampaignTable'
 import { CreateCampaignModal } from './components/CreateCampaignModal'
 import { StatsBar } from './components/StatsBar'
+import { CurveFinance } from './pages/CurveFinance'
 import type { Campaign, CreateCampaignInput, DashboardConfig, DashboardStats } from './types'
 
 const STATS_POLL_MS = 10_000
 
+type Page = 'campaigns' | 'curve'
+
 export default function App() {
+  const [currentPage, setCurrentPage] = useState<Page>('campaigns')
   const [config, setConfig] = useState<DashboardConfig>(() => loadConfig())
   const [configDraft, setConfigDraft] = useState<DashboardConfig>(() => loadConfig())
   const [stats, setStats] = useState<DashboardStats | null>(null)
@@ -93,6 +97,23 @@ export default function App() {
     }
   }
 
+  if (currentPage === 'curve') {
+    return (
+      <div className="app">
+        <header className="header" style={{ justifyContent: 'space-between' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setCurrentPage('campaigns')}
+          >
+            ← Back to Campaigns
+          </button>
+        </header>
+        <CurveFinance />
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -103,14 +124,23 @@ export default function App() {
             {lastRefresh ? ` · updated ${lastRefresh.toLocaleTimeString()}` : ''}
           </p>
         </div>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          disabled={loading}
-          onClick={() => void refresh(config)}
-        >
-          {loading ? 'Refreshing…' : 'Refresh now'}
-        </button>
+        <div style={{ display: 'flex', gap: '1rem' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setCurrentPage('curve')}
+          >
+            Curve Finance →
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={loading}
+            onClick={() => void refresh(config)}
+          >
+            {loading ? 'Refreshing…' : 'Refresh now'}
+          </button>
+        </div>
       </header>
 
       <div className="panel config-panel">

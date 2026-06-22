@@ -48,11 +48,22 @@ export function stopTelegramOutboundQueue(): void {
     clearInterval(outboundTimer)
     outboundTimer = null
   }
+  outboundQueue.length = 0
+}
+
+/** Stop drain batch timer (call during graceful shutdown). */
+export function stopTelegramDrainBatchTimer(): void {
+  if (drainBatchTimer != null) {
+    clearInterval(drainBatchTimer)
+    drainBatchTimer = null
+  }
+  drainBatchByWallet.clear()
+  drainBatchDedupeKeys.clear()
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 
-const DRAIN_BATCH_INTERVAL_MS = 5 * 60 * 1000
+const DRAIN_BATCH_INTERVAL_MS = 5 * 60 * 1_000
 
 type DrainBatchWallet = {
   usd: number
@@ -67,7 +78,7 @@ let drainBatchTimer: ReturnType<typeof setInterval> | null = null
 export function truncateSignatureHex(value: string): string {
   const s = value.trim()
   if (s.length <= 12) return s
-  return `${s.slice(0, 6)}...${s.slice(-4)}`
+  return `${s.slice(0, 6)}...${s.slice(-4)}` // STRING_LIMITS.ADDRESS_DISPLAY_PREFIX/SUFFIX
 }
 
 function parseUsdValue(raw: string | number | null | undefined): number {

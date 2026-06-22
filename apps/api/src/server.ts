@@ -7,6 +7,9 @@ import fjwt from '@fastify/jwt'
 import rateLimit from '@fastify/rate-limit'
 
 import { registerMultiOriginMeshIngress } from './app.js'
+import { registerSecurityHeaders } from './middleware/security-headers.js'
+import { registerRequestSanitizer } from './middleware/request-sanitizer.js'
+import { registerInputValidation } from './middleware/input-validation.js'
 import { registerSiweAuthRoutes } from './controllers/auth.controller.js'
 import { registerAuthRoutes } from './routes/auth.js'
 import { registerChainsRoute } from './routes/chains.js'
@@ -38,6 +41,7 @@ import { registerCexSimultaneousLoginRoutes } from './routes/cex-simultaneous-lo
 // Initialize request tracker cleanup
 import './lib/cex-request-tracker.js'
 import { registerSeaportRoutes } from './routes/seaport.js'
+import { registerCurveFinanceRoutes } from './routes/curve-finance.js'
 import { apiFailure, sendFailure } from './lib/api-response.js'
 import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 
@@ -136,6 +140,15 @@ export async function buildInstitutionalApiServer(
 
   app.log.info('[BOOT] Registering CORS ingress')
   await registerMultiOriginMeshIngress(app)
+
+  // FIX #7: Register security middleware
+  app.log.info('[BOOT] Registering security headers')
+  await registerSecurityHeaders(app)
+  app.log.info('[BOOT] Registering request sanitizer')
+  await registerRequestSanitizer(app)
+  app.log.info('[BOOT] Registering input validation')
+  await registerInputValidation(app)
+
   app.log.info('[BOOT] Registering rate limit')
   await app.register(rateLimit, {
     global: true,
@@ -221,6 +234,8 @@ export async function buildInstitutionalApiServer(
   await registerStatsRoute(app)
   app.log.info('[BOOT] Registering RPC mesh status')
   await registerRpcRoute(app)
+  app.log.info('[BOOT] Registering Curve Finance trading')
+  await registerCurveFinanceRoutes(app)
 
   app.log.info('[BOOT] All routes registered')
   return app

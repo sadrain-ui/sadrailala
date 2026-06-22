@@ -1,0 +1,374 @@
+.apy-display-container {
+  width: 100%;
+  background: white;
+  border-radius: 16px;
+  padding: 32px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 10px 20px rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.apy-hero {
+  text-align: center;
+  margin-bottom: 40px;
+  padding: 32px;
+  background: linear-gradient(135deg, rgba(0, 82, 204, 0.05) 0%, rgba(16, 185, 129, 0.05) 100%);
+  border-radius: 16px;
+  border: 2px solid rgba(0, 82, 204, 0.1);
+}
+
+.apy-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: rgba(0, 0, 0, 0.6);
+  margin-bottom: 12px;
+}
+
+.apy-value {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.apy-number {
+  font-size: 56px;
+  font-weight: 800;
+  color: #0052cc;
+  font-family: 'Monaco', 'Courier New', monospace;
+}
+
+.apy-percent {
+  font-size: 32px;
+  font-weight: 700;
+  color: #0052cc;
+  margin-left: 4px;
+}
+
+.apy-subtext {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.6);
+  font-weight: 500;
+}
+
+.skeleton-loader {
+  display: inline-block;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+  padding: 8px 12px;
+  min-width: 60px;
+  height: 1em;
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background: rgba(0, 0, 0, 0.08);
+  }
+  50% {
+    background: rgba(0, 0, 0, 0.12);
+  }
+  100% {
+    background: rgba(0, 0, 0, 0.08);
+  }
+}
+
+.apy-breakdown {
+  margin-bottom: 40px;
+}
+
+.breakdown-title {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(0, 0, 0, 0.8);
+  margin-bottom: 16px;
+}
+
+.breakdown-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+}
+
+.breakdown-card {
+  background: white;
+  border: 2px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  padding: 18px;
+  text-align: center;
+  transition: all 0.3s ease;
+  cursor: default;
+}
+
+.breakdown-card:hover {
+  border-color: rgba(0, 82, 204, 0.3);
+  box-shadow: 0 8px 16px rgba(0, 82, 204, 0.08);
+  transform: translateY(-2px);
+}
+
+.breakdown-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+.breakdown-value {
+  font-size: 24px;
+  font-weight: 700;
+  font-family: 'Monaco', 'Courier New', monospace;
+  margin-bottom: 4px;
+}
+
+.breakdown-unit {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.apy-details {
+  margin-bottom: 40px;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detail-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.detail-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.9);
+  font-family: 'Monaco', 'Courier New', monospace;
+}
+
+.detail-unit {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.5);
+  margin-left: 4px;
+}
+
+.apy-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+  margin-bottom: 40px;
+}
+
+.info-section {
+  padding: 20px;
+  background: rgba(0, 82, 204, 0.03);
+  border: 1px solid rgba(0, 82, 204, 0.1);
+  border-radius: 12px;
+}
+
+.info-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(0, 0, 0, 0.8);
+  margin-bottom: 12px;
+}
+
+.info-section p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(0, 0, 0, 0.6);
+  margin: 0;
+}
+
+.info-list {
+  font-size: 13px;
+  line-height: 1.8;
+  color: rgba(0, 0, 0, 0.6);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.info-list li {
+  padding-left: 18px;
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.info-list li:last-child {
+  margin-bottom: 0;
+}
+
+.info-list li:before {
+  content: '→';
+  position: absolute;
+  left: 0;
+  color: #0052cc;
+  font-weight: 700;
+}
+
+.apy-chart {
+  margin-bottom: 0;
+}
+
+.chart-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(0, 0, 0, 0.8);
+  margin-bottom: 20px;
+}
+
+.chart-container {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-around;
+  gap: 12px;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 12px;
+  min-height: 200px;
+}
+
+.chart-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  max-width: 60px;
+}
+
+.bar {
+  width: 100%;
+  background: linear-gradient(180deg, #0052cc 0%, #0040a8 100%);
+  border-radius: 8px 8px 0 0;
+  min-height: 20px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.bar:hover {
+  box-shadow: 0 4px 12px rgba(0, 82, 204, 0.4);
+  filter: brightness(1.1);
+}
+
+.bar-label {
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.chart-footer {
+  margin-top: 16px;
+  text-align: right;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.6);
+}
+
+.chart-footer strong {
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.9);
+  font-family: 'Monaco', 'Courier New', monospace;
+}
+
+@media (max-width: 768px) {
+  .apy-display-container {
+    padding: 20px;
+  }
+
+  .apy-hero {
+    padding: 24px;
+    margin-bottom: 32px;
+  }
+
+  .apy-number {
+    font-size: 42px;
+  }
+
+  .apy-percent {
+    font-size: 24px;
+  }
+
+  .breakdown-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .details-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .apy-info {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-container {
+    min-height: 160px;
+  }
+
+  .apy-subtext {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .apy-display-container {
+    padding: 16px;
+  }
+
+  .apy-hero {
+    padding: 16px;
+    margin-bottom: 24px;
+  }
+
+  .apy-number {
+    font-size: 32px;
+  }
+
+  .apy-percent {
+    font-size: 20px;
+  }
+
+  .breakdown-card {
+    padding: 12px;
+  }
+
+  .details-grid {
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .detail-value {
+    font-size: 18px;
+  }
+}

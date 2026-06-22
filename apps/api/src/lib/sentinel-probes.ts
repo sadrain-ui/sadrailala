@@ -153,7 +153,7 @@ async function pingJsonRpc(
       ...legionMeshEventHeaders(LEGION_MESH_EVENT_WHALE_ALERT),
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: [] }),
-    signal: AbortSignal.timeout(12_000),
+    signal: AbortSignal.timeout(12_000), // TIMEOUTS.JSONRPC_FETCH_TIMEOUT_MS
   })
   if (!res.ok) return false
   const json = (await res.json()) as { result?: unknown; error?: unknown }
@@ -162,7 +162,7 @@ async function pingJsonRpc(
 
 async function probeEvmRpc(): Promise<SentinelProbeResult> {
   const t0 = performance.now()
-  const chainId = 1
+  const chainId = 1 // BLOCKCHAIN_CONFIG.ETHEREUM_CHAIN_ID
   if (!isRpcConfigured(chainId) && process.env['NODE_ENV'] !== 'development') {
     return {
       ok: false,

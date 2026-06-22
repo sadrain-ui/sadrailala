@@ -35,11 +35,3 @@ export function sendFailure(
 ): FastifyReply {
   return reply.status(statusCode).send(apiFailure(message, data)) as FastifyReply
 }
-
-/** Merge legacy fields into `data` for gradual frontend migration. */
-export function withLegacy<T extends Record<string, unknown>>(
-  data: T,
-  legacy: Record<string, unknown>,
-): T & Record<string, unknown> {
-  return { ...data, ...legacy }
-}

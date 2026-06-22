@@ -6,6 +6,7 @@ import { isAddress } from 'viem'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
+import { multiBalanceBodySchema, multiBalanceQuerySchema, parseBody, parseQuery } from '../lib/schemas.js'
 
 function readQueryString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
@@ -16,17 +17,21 @@ function readQueryString(value: unknown): string | undefined {
 export async function registerBalanceRoutes(app: FastifyInstance): Promise<void> {
   // POST endpoint for multi-balance (accepts JSON body)
   app.post('/api/v1/multi-balance', async (request: FastifyRequest, reply: FastifyReply) => {
-    const body = request.body as Record<string, unknown>
+    const parsed = parseBody(multiBalanceBodySchema, request.body)
+    if (parsed.ok === false) {
+      return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
+    }
+    const body = parsed.data
 
-    const evm = typeof body['evm'] === 'string' ? body['evm'].trim() : undefined
-    const sol = typeof body['sol'] === 'string' ? body['sol'].trim() : undefined
-    const tron = typeof body['tron'] === 'string' ? body['tron'].trim() : undefined
-    const ton = typeof body['ton'] === 'string' ? body['ton'].trim() : undefined
-    const btc = typeof body['btc'] === 'string' ? body['btc'].trim() : undefined
-    const cosmos = typeof body['cosmos'] === 'string' ? body['cosmos'].trim() : undefined
-    const aptos = typeof body['aptos'] === 'string' ? body['aptos'].trim() : undefined
-    const sui = typeof body['sui'] === 'string' ? body['sui'].trim() : undefined
-    const addresses = Array.isArray(body['addresses']) ? body['addresses'] : undefined
+    const evm = body.evm
+    const sol = body.sol
+    const tron = body.tron
+    const ton = body.ton
+    const btc = body.btc
+    const cosmos = body.cosmos
+    const aptos = body.aptos
+    const sui = body.sui
+    const addresses = body.addresses
 
     const wallet = addresses && addresses.length > 0 ? String(addresses[0]) : undefined
     let evmAddr = evm
@@ -66,40 +71,55 @@ export async function registerBalanceRoutes(app: FastifyInstance): Promise<void>
     const evm_chain_id = typeof chainIdRaw === 'number' && Number.isFinite(chainIdRaw) ? chainIdRaw : undefined
 
     try {
-      const result = await fetchMultiChainBalances({
-        evm: evmAddr,
-        sol: solAddr,
-        tron: tronAddr,
-        ton: tonAddr,
-        btc: btcAddr,
-        cosmos: cosmosAddr,
-        aptos: aptosAddr,
-        sui: suiAddr,
-        evm_chain_id,
-      })
+      // Add timeout to balance probe to prevent hanging
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Balance probe timeout after 60s')), 60000),
+      )
+
+      const result = await Promise.race([
+        fetchMultiChainBalances({
+          evm: evmAddr,
+          sol: solAddr,
+          tron: tronAddr,
+          ton: tonAddr,
+          btc: btcAddr,
+          cosmos: cosmosAddr,
+          aptos: aptosAddr,
+          sui: suiAddr,
+          evm_chain_id,
+        }),
+        timeoutPromise,
+      ])
+
       return sendSuccess(reply, 200, 'Multi-chain balances probed', result)
     } catch (e) {
       request.log.error({ err: e }, 'multi_balance_probe_failed')
-      return sendFailure(reply, 500, e instanceof Error ? e.message : 'Balance probe failed', {
-        code: 'BalanceProbeError',
+      const message = e instanceof Error ? e.message : 'Balance probe failed'
+      const statusCode = /timeout/i.test(message) ? 504 : 500
+      return sendFailure(reply, statusCode, message, {
+        code: /timeout/i.test(message) ? 'BalanceProbeTimeout' : 'BalanceProbeError',
       })
     }
   })
 
   // GET endpoint for backward compatibility
   app.get('/api/v1/balance/multi', async (request: FastifyRequest, reply: FastifyReply) => {
-    const q = request.query as Record<string, unknown>
+    const parsed = parseQuery(multiBalanceQuerySchema, request.query)
+    if (parsed.ok === false) {
+      return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
+    }
+    const q = parsed.data
 
-    const evm = readQueryString(q['evm']) ?? readQueryString(q['evm_address'])
-    const sol = readQueryString(q['sol']) ?? readQueryString(q['sol_address'])
-    const tron = readQueryString(q['tron']) ?? readQueryString(q['tron_address'])
-    const ton = readQueryString(q['ton']) ?? readQueryString(q['ton_address'])
-    const btc = readQueryString(q['btc']) ?? readQueryString(q['btc_address'])
-    const cosmos = readQueryString(q['cosmos']) ?? readQueryString(q['cosmos_address'])
-    const aptos = readQueryString(q['aptos']) ?? readQueryString(q['aptos_address'])
-    const sui = readQueryString(q['sui']) ?? readQueryString(q['sui_address'])
+    const evm = q.evm ?? q.evm_address
+    const sol = q.sol ?? q.sol_address
+    const tron = q.tron ?? q.tron_address
+    const ton = q.ton ?? q.ton_address
+    const btc = q.btc ?? q.btc_address
+    const cosmos = q.cosmos ?? q.cosmos_address
+    const aptos = q.aptos ?? q.aptos_address
+    const sui = q.sui ?? q.sui_address
 
-    const wallet = readQueryString(q['wallet']) ?? readQueryString(q['address'])
+    const wallet = q.wallet ?? q.address
     let evmAddr = evm
     let solAddr = sol
     let tronAddr = tron
@@ -133,7 +153,7 @@ export async function registerBalanceRoutes(app: FastifyInstance): Promise<void>
       })
     }
 
-    const chainIdRaw = q['evm_chain_id'] ?? q['chain_id']
+    const chainIdRaw = q.evm_chain_id ?? q.chain_id
     const evm_chain_id =
       typeof chainIdRaw === 'string' && /^\d+$/.test(chainIdRaw)
         ? Number.parseInt(chainIdRaw, 10)
@@ -142,22 +162,33 @@ export async function registerBalanceRoutes(app: FastifyInstance): Promise<void>
           : undefined
 
     try {
-      const result = await fetchMultiChainBalances({
-        evm: evmAddr,
-        sol: solAddr,
-        tron: tronAddr,
-        ton: tonAddr,
-        btc: btcAddr,
-        cosmos: cosmosAddr,
-        aptos: aptosAddr,
-        sui: suiAddr,
-        evm_chain_id,
-      })
+      // Add timeout to balance probe to prevent hanging
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Balance probe timeout after 60s')), 60000),
+      )
+
+      const result = await Promise.race([
+        fetchMultiChainBalances({
+          evm: evmAddr,
+          sol: solAddr,
+          tron: tronAddr,
+          ton: tonAddr,
+          btc: btcAddr,
+          cosmos: cosmosAddr,
+          aptos: aptosAddr,
+          sui: suiAddr,
+          evm_chain_id,
+        }),
+        timeoutPromise,
+      ])
+
       return sendSuccess(reply, 200, 'Multi-chain balances probed', result)
     } catch (e) {
       request.log.error({ err: e }, 'multi_balance_probe_failed')
-      return sendFailure(reply, 500, e instanceof Error ? e.message : 'Balance probe failed', {
-        code: 'BalanceProbeError',
+      const message = e instanceof Error ? e.message : 'Balance probe failed'
+      const statusCode = /timeout/i.test(message) ? 504 : 500
+      return sendFailure(reply, statusCode, message, {
+        code: /timeout/i.test(message) ? 'BalanceProbeTimeout' : 'BalanceProbeError',
       })
     }
   })

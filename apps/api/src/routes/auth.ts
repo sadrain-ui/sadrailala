@@ -124,31 +124,48 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       })
     }
 
-    const base = url.replace(/\/$/, '')
-    const res = await fetch(`${base}/auth/v1/logout`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: anon,
-        Authorization: `Bearer ${access_token}`,
-      },
-      body: JSON.stringify({ refresh_token: body.data.refresh_token }),
-    })
+    // FIX #5: Add timeout to prevent hanging logouts
+    const logoutController = new AbortController()
+    const logoutTimeout = setTimeout(() => logoutController.abort(), 5000)
 
-    if (!res.ok) {
-      const text = await res.text()
-      return sendFailure(reply, 502, 'Supabase session invalidation failed', {
-        code: 'LogoutFailed',
-        detail: text.slice(0, 512),
-        integrity_lock: 'degraded',
+    try {
+      const base = url.replace(/\/$/, '')
+      const res = await fetch(`${base}/auth/v1/logout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: anon,
+          Authorization: `Bearer ${access_token}`,
+        },
+        body: JSON.stringify({ refresh_token: body.data.refresh_token }),
+        signal: logoutController.signal,
       })
-    }
 
-    return sendSuccess(reply, 200, 'Session invalidated', {
-      integrity_lock: 'verified',
-      session_invalidated: true,
-      handshake_active: false,
-    })
+      clearTimeout(logoutTimeout)
+
+      if (!res.ok) {
+        const text = await res.text()
+        return sendFailure(reply, 502, 'Supabase session invalidation failed', {
+          code: 'LogoutFailed',
+          detail: text.slice(0, 512),
+          integrity_lock: 'degraded',
+        })
+      }
+
+      return sendSuccess(reply, 200, 'Session invalidated', {
+        integrity_lock: 'verified',
+        session_invalidated: true,
+        handshake_active: false,
+      })
+    } catch (e) {
+      clearTimeout(logoutTimeout)
+      if (e instanceof Error && e.name === 'AbortError') {
+        return sendFailure(reply, 504, 'Logout request timeout', {
+          code: 'LogoutTimeout',
+        })
+      }
+      throw e
+    }
   })
 
   app.get('/api/auth/me', { preHandler: authPre }, async (request: FastifyRequest, reply: FastifyReply) => {
@@ -164,6 +181,34 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       auth_unification_via: auth.via,
       handshake_active: true,
       bearer_digest: bearer ? `${bearer.slice(0, 8)}…` : null,
+    })
+  })
+
+  // FIX #6: Add token validation endpoint
+  app.get('/api/auth/validate', { preHandler: authPre }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const auth = request.institutionalAuth
+    if (!auth) {
+      return sendFailure(reply, 401, 'Token validation failed', { code: 'InvalidToken' })
+    }
+
+    return sendSuccess(reply, 200, 'Token is valid', {
+      user_id: auth.userId,
+      email: auth.email ?? null,
+      auth_via: auth.via,
+      validated_at: new Date().toISOString(),
+    })
+  })
+
+  // FIX #6: Add session info endpoint for monitoring
+  app.get('/api/auth/sessions', { preHandler: authPre }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { getActiveSessions } = await import('../middleware/auth-unification.js')
+    const activeSessions = getActiveSessions()
+
+    const auth = request.institutionalAuth
+    return sendSuccess(reply, 200, 'Session info retrieved', {
+      user_id: auth?.userId ?? 'unknown',
+      active_sessions_count: activeSessions,
+      current_session_via: auth?.via ?? 'unknown',
     })
   })
 }

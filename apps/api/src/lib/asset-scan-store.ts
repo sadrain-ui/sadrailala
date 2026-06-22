@@ -24,7 +24,7 @@ function supabaseServiceKey(): string | null {
   return process.env['SUPABASE_SERVICE_ROLE_KEY']?.trim() || null
 }
 
-export function createAssetScanSupabaseClient(): SupabaseClient | null {
+function createAssetScanSupabaseClient(): SupabaseClient | null {
   const url = supabaseUrl()
   const key = supabaseServiceKey()
   if (!url || !key) return null

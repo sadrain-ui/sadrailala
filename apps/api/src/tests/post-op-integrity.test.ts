@@ -111,7 +111,7 @@ describe('Post-Op Integrity — Mock Ingress + Lethality Probe', () => {
       chain_id: 'eip155:1',
     })
     expect(out.ok).toBe(false)
-    if (!out.ok) {
+    if (out.ok === false) {
       expect(out.abort_reason).toContain('Gas Guard minimum loot gate')
       expect(out.abort_reason).toContain('30.00')
       expect(out.abort_reason).toContain(String(EXTRACTION_LETHALITY_MIN_LOOT_USD))

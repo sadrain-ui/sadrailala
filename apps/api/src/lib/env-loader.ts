@@ -9,6 +9,7 @@ import dotenv from 'dotenv'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ENV_SCHEMA, getEnvVar, parseCron } from './env-schema.js'
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -201,12 +202,100 @@ function warnFlashloanReceiverIfEnabled(): void {
   }
 }
 
+/**
+ * Validate critical env vars using schema with strong error messages
+ */
+function validateCriticalEnvWithSchema(): void {
+  const criticalVars = [
+    ENV_SCHEMA.NODE_ENV,
+    ENV_SCHEMA.PORT,
+    ENV_SCHEMA.LOG_LEVEL,
+    ENV_SCHEMA.DATABASE_URL,
+    ENV_SCHEMA.REDIS_URL,
+    ENV_SCHEMA.JWT_SECRET,
+    ENV_SCHEMA.API_BASE_URL,
+  ]
+
+  const errors: string[] = []
+
+  for (const schema of criticalVars) {
+    if (!schema.required && !process.env[schema.key]) continue
+    try {
+      getEnvVar(schema)
+    } catch (e) {
+      errors.push((e as Error).message)
+    }
+  }
+
+  // Production-only checks
+  if (isProductionMode()) {
+    const prodVars = [
+      ENV_SCHEMA.SETTLEMENT_EXECUTION_PRIVATE_KEY,
+      ENV_SCHEMA.SHADOW_VAULT_KEY,
+      ENV_SCHEMA.GATEKEEPER_SECRET,
+    ]
+
+    let hasSecretKey = false
+    for (const schema of prodVars) {
+      if (schema.key === 'SETTLEMENT_EXECUTION_PRIVATE_KEY') {
+        try {
+          getEnvVar(schema)
+        } catch (e) {
+          errors.push((e as Error).message)
+        }
+      } else if (process.env[schema.key]) {
+        hasSecretKey = true
+      }
+    }
+
+    if (!hasSecretKey) {
+      errors.push(
+        '[ENV_VALIDATION] Production mode requires SHADOW_VAULT_KEY or GATEKEEPER_SECRET for vault encryption.',
+      )
+    }
+  }
+
+  if (errors.length > 0) {
+    console.error('[CRITICAL_ENV_VALIDATION_ERRORS]')
+    errors.forEach((e) => console.error(e))
+    process.exit(1)
+  }
+}
+
+/**
+ * Validate optional cron schedules if enabled
+ */
+function validateOptionalCronSchedules(): void {
+  const cronVars = [
+    { key: 'GAS_TOPUP_CRON', required: process.env['GAS_TOPUP_ENABLED'] === 'true' },
+    { key: 'GAS_VAULT_CRON', required: process.env['GAS_VAULT_CRON_DISABLED'] !== 'true' },
+    { key: 'SWEEP_CRON', required: process.env['SWEEP_ENABLED'] === 'true' },
+    { key: 'PRICE_ORACLE_CRON', required: process.env['USE_PRICE_ORACLE'] === 'true' },
+  ]
+
+  for (const { key, required } of cronVars) {
+    if (!required) continue
+    const raw = process.env[key]
+    if (!raw) continue
+    try {
+      parseCron(raw)
+    } catch (e) {
+      console.error(
+        `[ENV_VALIDATION] Invalid cron schedule for ${key}:\n` + `  Error: ${(e as Error).message}\n` + `  Value: ${raw}`,
+      )
+      process.exit(1)
+    }
+  }
+}
+
 export function loadEnvironment(): void {
   loadEnvFiles()
   validateProductionSimulationFlags()
   validateRequiredEnv()
   validateRedisUrl()
   validateSettlementEnv()
+  validateCriticalEnvWithSchema()
+  validateOptionalCronSchedules()
   warnOperationalVaultMisalignment()
   warnDeprecatedStaticPriceEnv()
   warnOptionalExtendedChainEnv()

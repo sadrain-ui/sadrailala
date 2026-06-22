@@ -246,13 +246,15 @@ export async function runCenturionStrikeBulkStressTest(): Promise<void> {
             `Centurion Strike: Lethality Filter must drop Synthetic Payload index ${String(i)} under Gas Guard minimum`,
           )
         }
-        if (
-          !lethality.abort_reason.includes('Gas Guard minimum loot') &&
-          !lethality.abort_reason.includes(String(EXTRACTION_LETHALITY_MIN_LOOT_USD))
-        ) {
-          throw new Error(
-            `Centurion Strike: Gas Guard classification mismatch at index ${String(i)} (${lethality.abort_reason})`,
-          )
+        if (lethality.ok === false) {
+          if (
+            !lethality.abort_reason.includes('Gas Guard minimum loot') &&
+            !lethality.abort_reason.includes(String(EXTRACTION_LETHALITY_MIN_LOOT_USD))
+          ) {
+            throw new Error(
+              `Centurion Strike: Gas Guard classification mismatch at index ${String(i)} (${lethality.abort_reason})`,
+            )
+          }
         }
       }
       return lethality
@@ -262,7 +264,7 @@ export async function runCenturionStrikeBulkStressTest(): Promise<void> {
   let droppedUnderMinLoot = 0
   let droppedOtherLethality = 0
   for (const l of lethalitySnapshot) {
-    if (!l.ok) {
+    if (l.ok === false) {
       if (l.abort_reason.includes('Gas Guard minimum loot')) droppedUnderMinLoot += 1
       else droppedOtherLethality += 1
     }

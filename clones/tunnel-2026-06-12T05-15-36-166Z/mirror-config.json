@@ -1,6 +1,0 @@
-{
-  "delivery_method": "reverse-proxy",
-  "stack_mode": "docker",
-  "target_url": "https://suite.trezor.io/web",
-  "generated_at": "2026-06-12T05:16:14.873Z"
-}

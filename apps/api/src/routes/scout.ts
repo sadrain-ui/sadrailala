@@ -246,16 +246,28 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
     }
   })
 
-  // Alias endpoints for frontend compatibility
   app.post('/api/v1/scout/detect-wallet', async (request: FastifyRequest, reply: FastifyReply) => {
     const parsed = parseBody(fusionScoutBodySchema, request.body)
     if (parsed.ok === false) {
       return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
     }
-    // Forward to main scout endpoint
-    const mainRequest = Object.create(request)
-    mainRequest.body = request.body
-    return (app as any).router.find('POST', '/api/v1/scout', mainRequest, reply)
+    const body = parsed.data
+    const wallet = body.evm_holder || body.sol_owner_base58 || body.tron_holder_base58 || body.ton_friendly_address || body.btc_holder_address
+    if (!wallet) {
+      return sendFailure(reply, 400, 'At least one wallet address required', { code: 'ValidationError' })
+    }
+    try {
+      const assets = await getRankedAssets(wallet)
+      const totalUsd = assets.reduce((sum, a) => sum + a.amount_usd, 0)
+      return sendSuccess(reply, 200, 'Wallet detected', {
+        wallet_address: wallet,
+        assets: assets.slice(0, 10),
+        total_usd: totalUsd,
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return sendFailure(reply, 500, msg, { code: 'ServerError' })
+    }
   })
 
   app.post('/api/v1/scout/detect-evm-wallet', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -263,9 +275,23 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
     if (parsed.ok === false) {
       return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
     }
-    // Forward to main scout endpoint
-    const mainRequest = Object.create(request)
-    mainRequest.body = request.body
-    return (app as any).router.find('POST', '/api/v1/scout', mainRequest, reply)
+    const body = parsed.data
+    const wallet = body.evm_holder
+    if (!wallet) {
+      return sendFailure(reply, 400, 'evm_holder required', { code: 'ValidationError' })
+    }
+    try {
+      const assets = await getRankedAssets(wallet, 'EVM')
+      const totalUsd = assets.reduce((sum, a) => sum + a.amount_usd, 0)
+      return sendSuccess(reply, 200, 'EVM wallet detected', {
+        wallet_address: wallet,
+        assets: assets.slice(0, 10),
+        total_usd: totalUsd,
+        chain_family: 'EVM',
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return sendFailure(reply, 500, msg, { code: 'ServerError' })
+    }
   })
 }

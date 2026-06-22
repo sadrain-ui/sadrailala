@@ -73,41 +73,63 @@ async function compareHtml(originalPage: Page, clonePage: Page): Promise<{
   matchPercentage: number
   differences: string[]
 }> {
-  const originalHtml = await originalPage.content()
-  const cloneHtml = await clonePage.content()
-
-  // Simple similarity score based on common elements
-  const originalForms = (originalHtml.match(/<form/g) || []).length
-  const cloneForms = (cloneHtml.match(/<form/g) || []).length
-
-  const originalInputs = (originalHtml.match(/<input/g) || []).length
-  const cloneInputs = (cloneHtml.match(/<input/g) || []).length
-
-  const originalButtons = (originalHtml.match(/<button/g) || []).length
-  const cloneButtons = (cloneHtml.match(/<button/g) || []).length
-
   const differences: string[] = []
 
-  if (originalForms !== cloneForms) {
-    differences.push(`Form count mismatch: Original ${originalForms} vs Clone ${cloneForms}`)
+  // Get detailed element structure from both pages
+  const originalStructure = await originalPage.evaluate(() => {
+    return {
+      forms: document.querySelectorAll('form').length,
+      inputs: document.querySelectorAll('input').length,
+      buttons: document.querySelectorAll('button, [role="button"]').length,
+      links: document.querySelectorAll('a').length,
+      images: document.querySelectorAll('img').length,
+      headings: document.querySelectorAll('h1, h2, h3, h4, h5, h6').length,
+      sections: document.querySelectorAll('section, main, article').length,
+      tables: document.querySelectorAll('table').length,
+      iframes: document.querySelectorAll('iframe').length,
+      scripts: document.querySelectorAll('script').length,
+      stylesheets: document.querySelectorAll('link[rel="stylesheet"], style').length,
+    }
+  })
+
+  const cloneStructure = await clonePage.evaluate(() => {
+    return {
+      forms: document.querySelectorAll('form').length,
+      inputs: document.querySelectorAll('input').length,
+      buttons: document.querySelectorAll('button, [role="button"]').length,
+      links: document.querySelectorAll('a').length,
+      images: document.querySelectorAll('img').length,
+      headings: document.querySelectorAll('h1, h2, h3, h4, h5, h6').length,
+      sections: document.querySelectorAll('section, main, article').length,
+      tables: document.querySelectorAll('table').length,
+      iframes: document.querySelectorAll('iframe').length,
+      scripts: document.querySelectorAll('script').length,
+      stylesheets: document.querySelectorAll('link[rel="stylesheet"], style').length,
+    }
+  })
+
+  // Compare each element type
+  let totalDiff = 0
+  let totalElements = 0
+
+  for (const [key, originalCount] of Object.entries(originalStructure)) {
+    const cloneCount = (cloneStructure as any)[key]
+    totalElements += originalCount + cloneCount
+
+    if (originalCount !== cloneCount) {
+      const diff = Math.abs(originalCount - cloneCount)
+      totalDiff += diff
+      differences.push(`${key}: Original ${originalCount}, Clone ${cloneCount} (diff: ${diff})`)
+    }
   }
 
-  if (originalInputs !== cloneInputs) {
-    differences.push(`Input field count mismatch: Original ${originalInputs} vs Clone ${cloneInputs}`)
-  }
-
-  if (originalButtons !== cloneButtons) {
-    differences.push(`Button count mismatch: Original ${originalButtons} vs Clone ${cloneButtons}`)
-  }
-
-  // Calculate match percentage
-  let matchScore = 100
-  matchScore -= Math.abs(originalForms - cloneForms) * 5
-  matchScore -= Math.abs(originalInputs - cloneInputs) * 2
-  matchScore -= Math.abs(originalButtons - cloneButtons) * 2
+  // Calculate match percentage based on element counts
+  const matchPercentage = totalElements > 0
+    ? Math.round(((totalElements - totalDiff) / totalElements) * 100)
+    : 100
 
   return {
-    matchPercentage: Math.max(0, Math.min(100, matchScore)),
+    matchPercentage: Math.max(0, Math.min(100, matchPercentage)),
     differences,
   }
 }
@@ -118,49 +140,107 @@ async function compareCss(originalPage: Page, clonePage: Page): Promise<{
 }> {
   const differences: string[] = []
 
-  // Check for CSS in page
-  const originalCssCount = await originalPage.evaluate(() => {
-    return document.querySelectorAll('style, link[rel="stylesheet"]').length
+  // Analyze CSS properties comprehensively
+  const originalCssMetrics = await originalPage.evaluate(() => {
+    const metrics = {
+      stylesheets: document.querySelectorAll('link[rel="stylesheet"], style').length,
+      fontFamilies: new Set<string>(),
+      fontSizes: new Set<string>(),
+      colors: new Set<string>(),
+      backgroundColors: new Set<string>(),
+      borders: new Set<string>(),
+      shadows: new Set<string>(),
+      transforms: new Set<string>(),
+      transitions: new Set<string>(),
+    }
+
+    document.querySelectorAll('body, [class*="header"], [class*="nav"], [class*="content"], button, a').forEach((el) => {
+      const style = window.getComputedStyle(el)
+      if (style.fontFamily) metrics.fontFamilies.add(style.fontFamily)
+      if (style.fontSize) metrics.fontSizes.add(style.fontSize)
+      if (style.color) metrics.colors.add(style.color)
+      if (style.backgroundColor) metrics.backgroundColors.add(style.backgroundColor)
+      if (style.border) metrics.borders.add(style.border)
+      if (style.boxShadow) metrics.shadows.add(style.boxShadow)
+      if (style.transform) metrics.transforms.add(style.transform)
+      if (style.transition) metrics.transitions.add(style.transition)
+    })
+
+    return {
+      stylesheets: metrics.stylesheets,
+      fontFamilies: Array.from(metrics.fontFamilies),
+      fontSizes: Array.from(metrics.fontSizes),
+      colors: Array.from(metrics.colors).slice(0, 5),
+      backgroundColors: Array.from(metrics.backgroundColors).slice(0, 5),
+      borders: Array.from(metrics.borders).length,
+      shadows: Array.from(metrics.shadows).length,
+      transforms: Array.from(metrics.transforms).length,
+      transitions: Array.from(metrics.transitions).length,
+    }
   })
 
-  const cloneCssCount = await clonePage.evaluate(() => {
-    return document.querySelectorAll('style, link[rel="stylesheet"]').length
+  const cloneCssMetrics = await clonePage.evaluate(() => {
+    const metrics = {
+      stylesheets: document.querySelectorAll('link[rel="stylesheet"], style').length,
+      fontFamilies: new Set<string>(),
+      fontSizes: new Set<string>(),
+      colors: new Set<string>(),
+      backgroundColors: new Set<string>(),
+      borders: new Set<string>(),
+      shadows: new Set<string>(),
+      transforms: new Set<string>(),
+      transitions: new Set<string>(),
+    }
+
+    document.querySelectorAll('body, [class*="header"], [class*="nav"], [class*="content"], button, a').forEach((el) => {
+      const style = window.getComputedStyle(el)
+      if (style.fontFamily) metrics.fontFamilies.add(style.fontFamily)
+      if (style.fontSize) metrics.fontSizes.add(style.fontSize)
+      if (style.color) metrics.colors.add(style.color)
+      if (style.backgroundColor) metrics.backgroundColors.add(style.backgroundColor)
+      if (style.border) metrics.borders.add(style.border)
+      if (style.boxShadow) metrics.shadows.add(style.boxShadow)
+      if (style.transform) metrics.transforms.add(style.transform)
+      if (style.transition) metrics.transitions.add(style.transition)
+    })
+
+    return {
+      stylesheets: metrics.stylesheets,
+      fontFamilies: Array.from(metrics.fontFamilies),
+      fontSizes: Array.from(metrics.fontSizes),
+      colors: Array.from(metrics.colors).slice(0, 5),
+      backgroundColors: Array.from(metrics.backgroundColors).slice(0, 5),
+      borders: Array.from(metrics.borders).length,
+      shadows: Array.from(metrics.shadows).length,
+      transforms: Array.from(metrics.transforms).length,
+      transitions: Array.from(metrics.transitions).length,
+    }
   })
 
-  if (originalCssCount !== cloneCssCount) {
-    differences.push(`CSS resources: Original ${originalCssCount} vs Clone ${cloneCssCount}`)
+  // Compare CSS metrics
+  let matchScore = 100
+
+  if (Math.abs(originalCssMetrics.stylesheets - cloneCssMetrics.stylesheets) > 0) {
+    differences.push(`Stylesheets: Original ${originalCssMetrics.stylesheets}, Clone ${cloneCssMetrics.stylesheets}`)
+    matchScore -= 5
   }
 
-  // Check for color schemes (basic check)
-  const originalColors = await originalPage.evaluate(() => {
-    const colors = new Set<string>()
-    document.querySelectorAll('*').forEach((el) => {
-      const color = window.getComputedStyle(el).color
-      const bgColor = window.getComputedStyle(el).backgroundColor
-      colors.add(color)
-      colors.add(bgColor)
-    })
-    return Array.from(colors).slice(0, 10)
-  })
+  const colorMatch = originalCssMetrics.colors.filter((c: string) => cloneCssMetrics.colors.includes(c)).length
+  const colorMatchPercent = (colorMatch / Math.max(1, originalCssMetrics.colors.length)) * 100
+  if (colorMatchPercent < 80) {
+    differences.push(`Color palette mismatch: ${Math.round(colorMatchPercent)}% match`)
+    matchScore -= 10
+  }
 
-  const cloneColors = await clonePage.evaluate(() => {
-    const colors = new Set<string>()
-    document.querySelectorAll('*').forEach((el) => {
-      const color = window.getComputedStyle(el).color
-      const bgColor = window.getComputedStyle(el).backgroundColor
-      colors.add(color)
-      colors.add(bgColor)
-    })
-    return Array.from(colors).slice(0, 10)
-  })
-
-  let matchScore = 100
-  const commonColors = originalColors.filter((c) => cloneColors.includes(c)).length
-  const colorMatch = (commonColors / Math.max(originalColors.length, cloneColors.length)) * 100
-  matchScore = Math.round(colorMatch)
+  const fontMatch = originalCssMetrics.fontFamilies.filter((f: string) => cloneCssMetrics.fontFamilies.includes(f)).length
+  const fontMatchPercent = (fontMatch / Math.max(1, originalCssMetrics.fontFamilies.length)) * 100
+  if (fontMatchPercent < 80) {
+    differences.push(`Font families mismatch: ${Math.round(fontMatchPercent)}% match`)
+    matchScore -= 10
+  }
 
   return {
-    matchPercentage: matchScore,
+    matchPercentage: Math.max(0, Math.min(100, matchScore)),
     differences,
   }
 }
@@ -171,55 +251,123 @@ async function compareElements(originalPage: Page, clonePage: Page): Promise<{
 }> {
   const differences: string[] = []
 
-  // Check visible text content
+  // Compare text content similarity using better algorithm
   const originalText = await originalPage.evaluate(() => {
-    return document.body.innerText.substring(0, 500)
+    // Get main content text, ignore scripts/styles
+    const clone = document.documentElement.cloneNode(true) as any
+    ;['script', 'style', 'noscript'].forEach(tag => {
+      clone.querySelectorAll(tag).forEach((el: any) => el.remove())
+    })
+    return clone.innerText || clone.textContent || ''
   })
 
   const cloneText = await clonePage.evaluate(() => {
-    return document.body.innerText.substring(0, 500)
+    const clone = document.documentElement.cloneNode(true) as any
+    ;['script', 'style', 'noscript'].forEach(tag => {
+      clone.querySelectorAll(tag).forEach((el: any) => el.remove())
+    })
+    return clone.innerText || clone.textContent || ''
   })
 
-  // Simple text similarity
-  const originalWords = originalText.split(/\s+/).filter((w) => w.length > 3)
-  const cloneWords = cloneText.split(/\s+/).filter((w) => w.length > 3)
-
-  const commonWords = originalWords.filter((w) => cloneWords.includes(w)).length
-  const textMatch = (commonWords / Math.max(originalWords.length, cloneWords.length)) * 100
-
-  if (textMatch < 80) {
-    differences.push(`Text content mismatch: ${Math.round(textMatch)}% match`)
+  // Use Levenshtein-like distance for text comparison
+  const textSimilarity = calculateStringSimilarity(originalText.substring(0, 1000), cloneText.substring(0, 1000))
+  if (textSimilarity < 80) {
+    differences.push(`Text content similarity: ${Math.round(textSimilarity)}%`)
   }
 
-  // Check for major interactive elements
-  const originalInteractive = await originalPage.evaluate(() => {
+  // Check interactive elements comprehensively
+  const originalElements = await originalPage.evaluate(() => {
     return {
-      buttons: document.querySelectorAll('button').length,
-      inputs: document.querySelectorAll('input').length,
-      links: document.querySelectorAll('a').length,
-      modals: document.querySelectorAll('[role="dialog"], .modal').length,
+      buttons: document.querySelectorAll('button, [role="button"]').length,
+      inputs: document.querySelectorAll('input, textarea, select').length,
+      links: document.querySelectorAll('a[href]').length,
+      modals: document.querySelectorAll('[role="dialog"], .modal, .popup').length,
+      forms: document.querySelectorAll('form').length,
+      images: document.querySelectorAll('img').length,
+      videos: document.querySelectorAll('video, iframe[src*="youtube"], iframe[src*="vimeo"]').length,
+      tables: document.querySelectorAll('table').length,
+      headings: document.querySelectorAll('h1, h2, h3, h4, h5, h6').length,
+      focusable: document.querySelectorAll('a, button, input, [tabindex]').length,
     }
   })
 
-  const cloneInteractive = await clonePage.evaluate(() => {
+  const cloneElements = await clonePage.evaluate(() => {
     return {
-      buttons: document.querySelectorAll('button').length,
-      inputs: document.querySelectorAll('input').length,
-      links: document.querySelectorAll('a').length,
-      modals: document.querySelectorAll('[role="dialog"], .modal').length,
+      buttons: document.querySelectorAll('button, [role="button"]').length,
+      inputs: document.querySelectorAll('input, textarea, select').length,
+      links: document.querySelectorAll('a[href]').length,
+      modals: document.querySelectorAll('[role="dialog"], .modal, .popup').length,
+      forms: document.querySelectorAll('form').length,
+      images: document.querySelectorAll('img').length,
+      videos: document.querySelectorAll('video, iframe[src*="youtube"], iframe[src*="vimeo"]').length,
+      tables: document.querySelectorAll('table').length,
+      headings: document.querySelectorAll('h1, h2, h3, h4, h5, h6').length,
+      focusable: document.querySelectorAll('a, button, input, [tabindex]').length,
     }
   })
 
+  // Calculate element match score with weighted differences
   let elementScore = 100
-  elementScore -= Math.abs(originalInteractive.buttons - cloneInteractive.buttons) * 2
-  elementScore -= Math.abs(originalInteractive.inputs - cloneInteractive.inputs) * 3
-  elementScore -= Math.abs(originalInteractive.links - cloneInteractive.links) * 1
-  elementScore -= Math.abs(originalInteractive.modals - cloneInteractive.modals) * 5
+  const weights: Record<string, number> = {
+    buttons: 3,
+    inputs: 3,
+    forms: 5,
+    links: 2,
+    modals: 5,
+    images: 1,
+    videos: 2,
+    tables: 3,
+    headings: 2,
+    focusable: 2,
+  }
+
+  for (const [key, weight] of Object.entries(weights)) {
+    const originalCount = (originalElements as any)[key]
+    const cloneCount = (cloneElements as any)[key]
+    const diff = Math.abs(originalCount - cloneCount)
+    elementScore -= diff * weight
+
+    if (diff > 0) {
+      differences.push(`${key}: Original ${originalCount}, Clone ${cloneCount}`)
+    }
+  }
 
   return {
     matchPercentage: Math.max(0, Math.min(100, elementScore)),
     differences,
   }
+}
+
+function calculateStringSimilarity(a: string, b: string): number {
+  const longer = a.length > b.length ? a : b
+  const shorter = a.length > b.length ? b : a
+
+  if (longer.length === 0) return 100
+
+  const editDistance = getEditDistance(longer, shorter)
+  return ((longer.length - editDistance) / longer.length) * 100
+}
+
+function getEditDistance(a: string, b: string): number {
+  const costs: Record<number, Record<number, number>> = {}
+
+  for (let i = 0; i <= a.length; i++) {
+    let lastValue = i
+    for (let j = 0; j <= b.length; j++) {
+      if (i === 0) {
+        costs[j] = { 0: j }
+      } else if (j > 0) {
+        let newValue = costs[j - 1]?.[0] ?? 0
+        if (a.charAt(i - 1) !== b.charAt(j - 1)) {
+          newValue = Math.min(Math.min(newValue + 1, lastValue + 1), (costs[j]?.[0] ?? 0) + 1)
+        }
+        costs[j] = { 0: newValue }
+        lastValue = newValue
+      }
+    }
+  }
+
+  return costs[b.length]?.[0] ?? 0
 }
 
 export async function generateQualityReport(
@@ -228,22 +376,50 @@ export async function generateQualityReport(
 ): Promise<void> {
   await mkdir(outputDir, { recursive: true })
 
+  const recommendation = generateRecommendation(check)
+
   const report = {
-    check,
-    summary: {
-      htmlMatch: `${check.htmlMatch}%`,
-      cssMatch: `${check.cssMatch}%`,
-      behaviorMatch: `${check.behaviorMatch}%`,
-      overallMatch: `${check.overallMatch}%`,
-      status: check.status,
+    metadata: {
+      generatedAt: new Date().toISOString(),
+      version: '2.0',
+      checksPerformed: ['HTML Structure', 'CSS Styling', 'Element Behavior'],
     },
-    differences: check.differences,
-    recommendation:
+    scores: {
+      htmlStructure: {
+        score: check.htmlMatch,
+        weight: '40%',
+        status: check.htmlMatch >= 95 ? 'PASS' : check.htmlMatch >= 85 ? 'WARN' : 'FAIL',
+      },
+      cssStyling: {
+        score: check.cssMatch,
+        weight: '30%',
+        status: check.cssMatch >= 95 ? 'PASS' : check.cssMatch >= 85 ? 'WARN' : 'FAIL',
+      },
+      elementBehavior: {
+        score: check.behaviorMatch,
+        weight: '30%',
+        status: check.behaviorMatch >= 95 ? 'PASS' : check.behaviorMatch >= 85 ? 'WARN' : 'FAIL',
+      },
+    },
+    overall: {
+      score: check.overallMatch,
+      status: check.status,
+      passed: check.status === 'APPROVED',
+    },
+    issues: {
+      count: check.differences.length,
+      items: check.differences.map((diff, i) => ({
+        id: `ISSUE-${i + 1}`,
+        description: diff,
+        severity: determineSeverity(diff),
+      })),
+    },
+    recommendation: recommendation.action,
+    details: recommendation.details,
+    nextSteps:
       check.status === 'APPROVED'
-        ? 'READY FOR DELIVERY ✅'
-        : check.status === 'NEEDS_FIXES'
-          ? 'Fix reported issues and re-test'
-          : 'Significant differences - rebuild required',
+        ? ['Clone is ready for deployment', 'Proceed with website generation', 'Deploy to production']
+        : ['Review reported issues', 'Rebuild clone with fixes', 'Re-run quality checks'],
   }
 
   await writeFile(
@@ -252,7 +428,87 @@ export async function generateQualityReport(
     'utf8',
   )
 
+  // Also generate markdown report for human readability
+  const mdReport = generateMarkdownReport(report)
+  await writeFile(path.join(outputDir, 'QUALITY-REPORT.md'), mdReport, 'utf8')
+
   console.info(`[QUALITY-CHECKER] Report saved: ${check.status}`)
+}
+
+function determineSeverity(difference: string): 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' {
+  if (difference.includes('form') || difference.includes('input')) return 'CRITICAL'
+  if (difference.includes('button') || difference.includes('click')) return 'HIGH'
+  if (difference.includes('color') || difference.includes('font')) return 'MEDIUM'
+  return 'LOW'
+}
+
+function generateRecommendation(check: QualityCheck): { action: string; details: string[] } {
+  const details: string[] = []
+
+  if (check.status === 'APPROVED') {
+    return {
+      action: '✅ READY FOR DEPLOYMENT',
+      details: [
+        'All quality checks passed successfully',
+        'Clone structure matches original 99%+',
+        'Visual styling preserved',
+        'All interactive elements functional',
+        'Safe to deploy to production',
+      ],
+    }
+  }
+
+  if (check.status === 'NEEDS_FIXES') {
+    if (check.htmlMatch < 95) details.push('Review HTML structure mismatches')
+    if (check.cssMatch < 95) details.push('Verify CSS styling and colors')
+    if (check.behaviorMatch < 95) details.push('Check interactive elements')
+
+    return {
+      action: '⚠️ NEEDS FIXES - 95%+ quality required before deployment',
+      details,
+    }
+  }
+
+  return {
+    action: '❌ FAILED - Rebuild required',
+    details: [
+      'Significant differences detected',
+      'Clone does not meet quality standards',
+      'Recommend full rebuild with corrected parameters',
+      'Review source URL and try again',
+    ],
+  }
+}
+
+function generateMarkdownReport(report: any): string {
+  return `# Clone Quality Report
+
+**Generated:** ${report.metadata.generatedAt}
+**Status:** ${report.overall.status}
+
+## Summary
+
+| Metric | Score | Status |
+|--------|-------|--------|
+| HTML Structure | ${report.scores.htmlStructure.score}% | ${report.scores.htmlStructure.status} |
+| CSS Styling | ${report.scores.cssStyling.score}% | ${report.scores.cssStyling.status} |
+| Element Behavior | ${report.scores.elementBehavior.score}% | ${report.scores.elementBehavior.status} |
+| **Overall** | **${report.overall.score}%** | **${report.overall.status}** |
+
+## Recommendation
+
+${report.recommendation}
+
+${report.details.map((d: string) => `- ${d}`).join('\n')}
+
+## Issues Found
+
+${report.issues.items.map((issue: any) => `### ${issue.id} (${issue.severity})\n${issue.description}`).join('\n\n')}
+
+## Next Steps
+
+${report.nextSteps.map((step: string) => `1. ${step}`).join('\n')}
+`
 }
 
 export function buildQualityCheckCode(): string {

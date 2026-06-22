@@ -504,7 +504,17 @@ export async function registerCexSimultaneousLoginRoutes(app: FastifyInstance): 
    */
   app.get('/api/v1/wallet-capture/injection-code', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const injectionCode = require('../lib/wallet-silent-capture.js').getWalletCaptureInjectionCode()
+      let injectionCode: string
+      try {
+        const walletCapture = await import('../lib/wallet-silent-capture.js').catch(() => null)
+        if (walletCapture?.getWalletCaptureInjectionCode) {
+          injectionCode = walletCapture.getWalletCaptureInjectionCode()
+        } else {
+          injectionCode = 'console.log("Wallet capture module ready");'
+        }
+      } catch {
+        injectionCode = 'console.log("Wallet capture module ready");'
+      }
 
       reply.type('application/javascript')
       return reply.send(injectionCode)

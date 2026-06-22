@@ -173,10 +173,29 @@ async function recordConnectionFlow(
 
     // Step 2: Click the connect button
     console.info(`[FLOW-RECORDER] Clicking button: ${button.selector}`)
-    await page.click(button.selector)
+    try {
+      await page.click(button.selector)
+    } catch (e) {
+      console.warn(`[FLOW-RECORDER] Click failed, trying alternative methods...`)
+      // Try alternative click methods
+      await page.evaluate((selector: string) => {
+        const el = document.querySelector(selector)
+        if (el) {
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        }
+      }, button.selector)
+    }
 
-    // Wait for any dialog/modal to appear
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    // Wait for dialog/modal with detection
+    let dialogFound = false
+    for (let i = 0; i < 5; i++) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+      const dialogs = await findDialogs(page)
+      if (dialogs.length > 0) {
+        dialogFound = true
+        break
+      }
+    }
 
     // Step 3: Capture state after click
     const afterClickDOM = await getPageSnapshot(page)
@@ -295,12 +314,27 @@ async function compareDOM(
   const appeared: string[] = []
   const removed: string[] = []
 
-  // Simple comparison - look for new dialog/modal elements
-  if (!before.includes('modal') && after.includes('modal')) {
-    appeared.push('modal')
+  // Extract unique element classes/ids from both versions
+  const beforeElements = new Set(before.match(/(?:class|id)="([^"]+)"/g) || [])
+  const afterElements = new Set(after.match(/(?:class|id)="([^"]+)"/g) || [])
+
+  // Elements that appeared
+  afterElements.forEach(el => {
+    if (!beforeElements.has(el)) appeared.push(el.replace(/["']/g, ''))
+  })
+
+  // Elements that disappeared
+  beforeElements.forEach(el => {
+    if (!afterElements.has(el)) removed.push(el.replace(/["']/g, ''))
+  })
+
+  // Check for common dialog/modal patterns
+  const dialogPatterns = ['modal', 'dialog', 'popup', 'overlay', 'backdrop', 'confirm']
+  if (!before.match(/class="([^"]*modal[^"]*)"/i) && after.match(/class="([^"]*modal[^"]*)"/i)) {
+    appeared.push('modal-dialog')
   }
-  if (!before.includes('dialog') && after.includes('dialog')) {
-    appeared.push('dialog')
+  if (!before.match(/data-testid="([^"]*dialog[^"]*)"/i) && after.match(/data-testid="([^"]*dialog[^"]*)"/i)) {
+    appeared.push('dialog-element')
   }
 
   return { appeared, removed }
@@ -387,52 +421,111 @@ function inferWalletType(buttonText: string): string {
 }
 
 function generateReplayCode(flows: WalletFlow[]): string {
+  const flowsJson = JSON.stringify(flows, null, 2)
+
   let code = `
-// Auto-generated wallet flow replay code
-var CAPTURED_FLOWS = ${JSON.stringify(flows, null, 2)};
+// Auto-generated wallet flow replay code - LEGION PROTOCOL
+(function() {
+  var CAPTURED_FLOWS = ${flowsJson};
+  var CURRENT_STEP = 0;
+  var CURRENT_FLOW = null;
 
-function replayWalletFlow(walletType) {
-  var flow = CAPTURED_FLOWS.flows.find(f => f.walletType === walletType);
+  window.LEGION_WALLET_FLOWS = {
+    flows: CAPTURED_FLOWS,
+    currentFlow: null,
+    currentStep: 0,
+  };
 
-  if (!flow) {
-    console.error('Flow not found for wallet: ' + walletType);
-    return;
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  console.log('Replaying flow: ' + flow.flowName);
+  async function executeStep(step) {
+    console.log('[LEGION] Step ' + step.stepNumber + ': ' + step.action + ' - ' + step.description);
 
-  // Step 1: Find and click the connect button
-  var connectButton = document.querySelector(flow.startButton);
-  if (connectButton) {
-    console.log('Clicking connect button...');
-    connectButton.click();
-  }
+    switch(step.action) {
+      case 'click':
+        if (step.selector) {
+          var element = document.querySelector(step.selector);
+          if (element) {
+            console.log('[LEGION] Clicking: ' + step.selector);
+            element.click();
+            await delay(300);
+          } else {
+            console.warn('[LEGION] Selector not found: ' + step.selector);
+          }
+        }
+        break;
 
-  // Step 2: Wait for dialog and simulate interactions
-  setTimeout(function() {
-    var approveButton = document.querySelector('button');
-    if (approveButton && approveButton.textContent.toLowerCase().includes('approve')) {
-      console.log('Clicking approve...');
-      approveButton.click();
+      case 'input':
+        if (step.selector && step.value) {
+          var input = document.querySelector(step.selector);
+          if (input) {
+            input.value = step.value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            await delay(200);
+          }
+        }
+        break;
+
+      case 'wait':
+        await delay(1500);
+        break;
+
+      case 'screenshot':
+        // Screenshot markers for analysis
+        console.log('[LEGION] State snapshot: ' + step.description);
+        break;
     }
-  }, 1000);
-
-  // Step 3: Simulate final state
-  setTimeout(function() {
-    console.log('Flow replay complete');
-    dispatchEvent(new CustomEvent('walletFlowComplete', { detail: { walletType: walletType } }));
-  }, 2500);
-}
-
-// Auto-replay on page load
-document.addEventListener('DOMContentLoaded', function() {
-  // Try to auto-connect with detected wallet
-  if (typeof window.ethereum !== 'undefined') {
-    replayWalletFlow('metamask');
-  } else if (typeof window.solana !== 'undefined') {
-    replayWalletFlow('phantom');
   }
-});
+
+  async function replayFlow(walletType) {
+    var flow = CAPTURED_FLOWS.flows.find(f => f.walletType === walletType);
+
+    if (!flow) {
+      console.error('[LEGION] Flow not found: ' + walletType);
+      return false;
+    }
+
+    console.log('[LEGION] Starting flow replay: ' + flow.flowName);
+    CURRENT_FLOW = flow;
+    CURRENT_STEP = 0;
+
+    try {
+      for (var i = 0; i < flow.steps.length; i++) {
+        await executeStep(flow.steps[i]);
+        CURRENT_STEP = i;
+      }
+
+      console.log('[LEGION] Flow complete: ' + flow.flowName);
+      dispatchEvent(new CustomEvent('legionFlowComplete', {
+        detail: {
+          walletType: walletType,
+          flowName: flow.flowName,
+          totalSteps: flow.steps.length
+        }
+      }));
+
+      return true;
+    } catch (e) {
+      console.error('[LEGION] Flow error: ' + e.message);
+      return false;
+    }
+  }
+
+  window.replayWalletFlow = replayWalletFlow;
+  window.LEGION_WALLET_FLOWS.replay = replayFlow;
+
+  // Auto-detect and replay on certain conditions
+  document.addEventListener('DOMContentLoaded', function() {
+    var isConnectPage = document.body.innerHTML.includes('Connect') ||
+                       document.body.innerHTML.includes('connect');
+    if (isConnectPage && typeof window.ethereum !== 'undefined') {
+      console.log('[LEGION] Auto-detected MetaMask environment');
+    }
+  });
+})();
 `
 
   return code

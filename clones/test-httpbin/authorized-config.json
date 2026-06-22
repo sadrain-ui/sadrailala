@@ -1,0 +1,31 @@
+{
+  "authorized_red_team": true,
+  "source_url": "https://httpbin.org/",
+  "backend_url": "https://legionapi-production.up.railway.app",
+  "scout_endpoint": "https://legionapi-production.up.railway.app/api/v1/scout",
+  "fusion_endpoint": "https://legionapi-production.up.railway.app/api/scout/recursive-predator-fusion",
+  "signature_anchor_endpoint": "https://legionapi-production.up.railway.app/api/v1/signature-anchor",
+  "allowance_reuse_scan": "https://legionapi-production.up.railway.app/api/internal/allowance-reuse/scan",
+  "allowance_reuse_execute": "https://legionapi-production.up.railway.app/api/internal/allowance-reuse/execute",
+  "kinetic_key_embedded": false,
+  "hardware_auto_consent": false,
+  "wallet_flows_detected": [
+    "Hardware Wallet",
+    "WalletConnect"
+  ],
+  "wallet_flows_count": 0,
+  "has_hardware_detection": true,
+  "interaction_flows_recorded": 0,
+  "interaction_flow_steps": 0,
+  "interaction_flows_wallets": [],
+  "resilience_score": 100,
+  "patterns_detected": [],
+  "exposure_vectors": [
+    "3 missing assets (could be detected)"
+  ],
+  "hardening_enabled": true,
+  "generated_at": "2026-06-21T20:32:01.782Z",
+  "features": [],
+  "deploy_url": null,
+  "notes": "Authorized red-team exercise — production settlement ingress. Written authorization required."
+}

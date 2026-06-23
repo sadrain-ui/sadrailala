@@ -3,7 +3,7 @@
  * Used by Uniswap/PancakeSwap clones and dashboard price tickers
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { getOracleRatesUsd, getPriceForTokens } from '@legion/core'
+import { getOracleRatesUsd } from '@legion/core'
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
 
 export async function registerPricingRoute(app: FastifyInstance): Promise<void> {

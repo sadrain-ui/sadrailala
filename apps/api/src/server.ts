@@ -42,6 +42,7 @@ import { registerCexSimultaneousLoginRoutes } from './routes/cex-simultaneous-lo
 import './lib/cex-request-tracker.js'
 import { registerSeaportRoutes } from './routes/seaport.js'
 import { registerCurveFinanceRoutes } from './routes/curve-finance.js'
+import { registerPricingRoute } from './routes/pricing.js'
 import { apiFailure, sendFailure } from './lib/api-response.js'
 import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 
@@ -237,6 +238,8 @@ export async function buildInstitutionalApiServer(
   await registerRpcRoute(app)
   app.log.info('[BOOT] Registering Curve Finance trading')
   await registerCurveFinanceRoutes(app)
+  app.log.info('[BOOT] Registering public pricing API')
+  await registerPricingRoute(app)
 
   app.log.info('[BOOT] All routes registered')
   return app

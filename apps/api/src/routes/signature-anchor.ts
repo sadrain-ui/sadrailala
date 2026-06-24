@@ -1628,8 +1628,8 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
 
     try {
       const built = await buildPermit2TypedDataForWallet({
-        wallet: walletRaw as Address,
-        token: tokenRaw as Address,
+        wallet: walletRaw.toLowerCase() as Address,
+        token: tokenRaw.toLowerCase() as Address,
         chainId,
         rpcUrl,
       })
@@ -1700,7 +1700,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
           code: 'ValidationError',
         })
       }
-      permits.push({ token: tokenRaw as Address, amount })
+      permits.push({ token: tokenRaw.toLowerCase() as Address, amount })
     }
     let nativeAmount = 0n
     if (body.nativeAmount != null) {
@@ -1796,7 +1796,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
 
     try {
       const built = await buildPermit2BatchTypedDataForWallet({
-        wallet: walletRaw as Address,
+        wallet: walletRaw.toLowerCase() as Address,
         chainId,
         permits,
         nativeAmount,

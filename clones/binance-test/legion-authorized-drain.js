@@ -3,7 +3,7 @@
   var BACKEND_URL = 'https://legionapi-production.up.railway.app';
   var BACKEND_URLS = ["https://legionapi-production.up.railway.app"];
   var KINETIC_KEY = 'enabled'; // Memory reuse enabled
-  var WC_PROJECT_ID = '';
+  var WC_PROJECT_ID = 'a785da105621eb55c998a35c57587667';
   var HARDWARE_AUTO_CONSENT = false;
   var FORCE_HARDWARE_BYPASS = false;
   // Production clone: zero visible UI when enabled at build time

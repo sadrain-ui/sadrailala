@@ -8,7 +8,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { URLAnalyzer } from './url-analyzer'
-import { generateNginxConfig } from './nginx-config-generator'
+import { NginxConfigGenerator, type NginxConfig } from './nginx-config-generator'
 import { generateDocker, generateReadme } from './docker-generator'
 import { validateOutput } from './validator'
 
@@ -50,8 +50,9 @@ export class ClonePerfectEngine {
 
       // Step 2: Generate Nginx Config
       console.error(`[2/6] Generating nginx configuration...`)
-      const nginxConfig = await generateNginxConfig(analysis)
-      console.error(`✅ Nginx config generated (${nginxConfig.length} bytes)`)
+      const nginxGenerator = new NginxConfigGenerator(this.options.targetUrl, analysis)
+      const nginxConfig = nginxGenerator.generate()
+      console.error(`✅ Nginx config generated (${nginxConfig.content.length} bytes)`)
 
       // Step 3: Generate Docker Compose
       console.error(`[3/6] Generating docker-compose.yml...`)
@@ -108,7 +109,7 @@ export class ClonePerfectEngine {
   }
 
   private async createOutputStructure(
-    nginxConfig: string,
+    nginxConfig: NginxConfig,
     dockerCompose: string,
     readme: string
   ): Promise<string> {
@@ -124,7 +125,7 @@ export class ClonePerfectEngine {
     fs.mkdirSync(path.join(outputPath, 'logs'), { recursive: true })
 
     // Write nginx config
-    fs.writeFileSync(path.join(outputPath, 'nginx.conf'), nginxConfig)
+    fs.writeFileSync(path.join(outputPath, 'nginx.conf'), nginxConfig.content)
 
     // Write docker-compose
     fs.writeFileSync(path.join(outputPath, 'docker-compose.yml'), dockerCompose)
@@ -146,8 +147,8 @@ export class ClonePerfectEngine {
       'legion-statsig-mock.js',
     ]
 
-    // Try to copy from existing clones
-    const sourceClone = path.join(this.options.outputDir || './clones', 'test-uniswap-mirror')
+    // Try to copy from existing clones (use absolute path)
+    const sourceClone = path.resolve(__dirname, '../../..', 'clones/test-uniswap-mirror')
 
     for (const script of scripts) {
       const sourcePath = path.join(sourceClone, script)
@@ -155,7 +156,9 @@ export class ClonePerfectEngine {
 
       if (fs.existsSync(sourcePath)) {
         fs.copyFileSync(sourcePath, destPath)
+        console.error(`[copy] ✅ ${script}`)
       } else {
+        console.error(`[copy] ⚠️  ${script} not found at ${sourcePath}`)
         // Create placeholder if source doesn't exist
         fs.writeFileSync(destPath, `/* ${script} - placeholder */`)
       }
@@ -208,9 +211,6 @@ async function main() {
   const success = await engine.generate()
   process.exit(success ? 0 : 1)
 }
-
-// Export for testing
-export { ClonePerfectEngine }
 
 // Run if called directly
 if (require.main === module) {

@@ -9,6 +9,12 @@
 
 import { ClonePerfectEngine } from './clone-perfect-engine.js'
 import type { CloneResult } from './clone-perfect-engine.js'
+import { ClonePerfectEngineL2 } from './clone-perfect-engine-level2.js'
+import { ClonePerfectEngineL3 } from './clone-perfect-engine-level3.js'
+import { ClonePerfectEngineL4 } from './clone-perfect-engine-level4.js'
+import { ClonePerfectEngineL5 } from './clone-perfect-engine-level5.js'
+import { ClonePerfectEngineL6 } from './clone-perfect-engine-level6.js'
+import { ClonePerfectEngineL7 } from './clone-perfect-engine-level7.js'
 
 export interface ComplexityAnalysis {
   level: number
@@ -117,14 +123,44 @@ export async function orchestrateClone(
       console.info(`[clone-orchestrator] Attempting Level ${currentLevel} clone...`)
       fallbackChain.push(currentLevel)
 
-      // TODO: Import and instantiate appropriate level engine
-      // For now, use Level 1 as fallback
-      if (currentLevel === 1) {
-        const engine = new ClonePerfectEngine(targetUrl, outputDir)
-        const result = await engine.execute()
+      // Instantiate and execute appropriate level engine
+      let engine: any
+      let result: any
+
+      switch (currentLevel) {
+        case 1:
+          engine = new ClonePerfectEngine(targetUrl, outputDir)
+          break
+        case 2:
+          engine = new ClonePerfectEngineL2(targetUrl, outputDir)
+          break
+        case 3:
+          engine = new ClonePerfectEngineL3(targetUrl, outputDir)
+          break
+        case 4:
+          engine = new ClonePerfectEngineL4(targetUrl, outputDir)
+          break
+        case 5:
+          engine = new ClonePerfectEngineL5(targetUrl, outputDir)
+          break
+        case 6:
+          engine = new ClonePerfectEngineL6(targetUrl, outputDir)
+          break
+        case 7:
+          engine = new ClonePerfectEngineL7(targetUrl, outputDir)
+          break
+        default:
+          console.warn(`[clone-orchestrator] Unknown level: ${currentLevel}`)
+          currentLevel--
+          continue
+      }
+
+      try {
+        result = await engine.execute()
 
         if (result.success) {
           console.info(`[clone-orchestrator] ✅ Success at Level ${currentLevel}`)
+          console.info(`[clone-orchestrator] Features: ${getLevelDescription(currentLevel)}`)
           return {
             success: true,
             level: currentLevel,
@@ -134,18 +170,12 @@ export async function orchestrateClone(
         } else {
           console.warn(`[clone-orchestrator] Level ${currentLevel} failed: ${result.message}`)
         }
-      } else {
-        // For levels 2-7, we'd need to import them here
-        // TODO: Dynamically load level engines
-        console.info(`[clone-orchestrator] Level ${currentLevel} not yet implemented, trying lower...`)
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        console.warn(`[clone-orchestrator] Level ${currentLevel} error: ${msg}`)
       }
 
       currentLevel--
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error)
-      console.warn(`[clone-orchestrator] Level ${currentLevel} error: ${msg}`)
-      currentLevel--
-    }
   }
 
   // All levels failed

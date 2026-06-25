@@ -1,0 +1,150 @@
+version: '3.8'
+
+# Phase 2 Docker Stack: Dynamic Proxy + Cookie Rotation + Cloudflare Bypass
+
+services:
+  # Main nginx reverse proxy (from Phase 1)
+  nginx-proxy:
+    image: nginx:latest
+    container_name: legion-nginx-proxy
+    ports:
+      - "${PROXY_PORT:-8080}:8080"
+    volumes:
+      # Generated nginx config (Phase 1)
+      - ${NGINX_CONFIG_PATH:-./generated/nginx.conf}:/etc/nginx/nginx.conf:ro
+      # Add Phase 2 cloudflare bypass rules
+      - ./cloudflare-bypass.nginx:/etc/nginx/conf.d/cloudflare-bypass.conf:ro
+    environment:
+      - TARGET_URL=${TARGET_URL:-https://app.uniswap.org}
+      - LISTEN_PORT=${PROXY_PORT:-8080}
+    networks:
+      - legion-network
+    depends_on:
+      cookie-refresher:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Cookie rotation service (Phase 2)
+  cookie-refresher:
+    build:
+      context: ./cookie-refresher
+      dockerfile: Dockerfile
+    container_name: legion-cookie-refresher
+    ports:
+      - "${COOKIE_SERVICE_PORT:-3000}:3000"
+    environment:
+      # 30-minute rotation interval
+      - ROTATION_INTERVAL=1800000
+      # Pool size: 10 rotating sessions
+      - SESSION_POOL_SIZE=10
+      # Enable CF bypass
+      - CLOUDFLARE_BYPASS=true
+      # User agent rotation
+      - USER_AGENT_ROTATION=true
+      - LOG_LEVEL=info
+      - NODE_ENV=production
+    networks:
+      - legion-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    volumes:
+      # Optional: persist session state
+      - legion-sessions:/app/sessions
+
+  # Optional: Redis for distributed session state
+  redis-sessions:
+    image: redis:7-alpine
+    container_name: legion-redis-sessions
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-legion-secret}
+    networks:
+      - legion-network
+    restart: unless-stopped
+    profiles:
+      - "with-redis"
+
+  # Optional: Monitoring (Prometheus metrics)
+  metrics-exporter:
+    build:
+      context: ./metrics
+      dockerfile: Dockerfile
+    container_name: legion-metrics
+    ports:
+      - "${METRICS_PORT:-9090}:9090"
+    environment:
+      - COOKIE_SERVICE_URL=http://cookie-refresher:3000
+      - NGINX_PROXY_URL=http://nginx-proxy:8080
+      - SCRAPE_INTERVAL=30
+    networks:
+      - legion-network
+    depends_on:
+      - nginx-proxy
+      - cookie-refresher
+    restart: unless-stopped
+    profiles:
+      - "with-metrics"
+
+networks:
+  legion-network:
+    driver: bridge
+
+volumes:
+  legion-sessions:
+    driver: local
+
+# ==================== CONFIGURATION ====================
+
+# Environment Variables (create .env file):
+#
+# PROXY_PORT=8080              # Listen port for nginx proxy
+# COOKIE_SERVICE_PORT=3000     # Listen port for cookie service
+# TARGET_URL=https://app.uniswap.org
+# NGINX_CONFIG_PATH=./generated/nginx.conf
+# REDIS_PASSWORD=legion-secret
+# REDIS_PORT=6379
+# METRICS_PORT=9090
+#
+# ROTATION_INTERVAL=1800000    # 30 minutes in milliseconds
+# SESSION_POOL_SIZE=10         # Number of rotating sessions
+
+# ==================== USAGE ====================
+
+# Start Phase 2 stack (nginx + cookie-refresher):
+#   docker-compose -f docker/phase2-docker-compose.yml up -d
+#
+# Start with Redis for distributed state:
+#   docker-compose -f docker/phase2-docker-compose.yml --profile with-redis up -d
+#
+# Start with monitoring:
+#   docker-compose -f docker/phase2-docker-compose.yml --profile with-metrics up -d
+#
+# View logs:
+#   docker-compose -f docker/phase2-docker-compose.yml logs -f cookie-refresher
+#   docker-compose -f docker/phase2-docker-compose.yml logs -f nginx-proxy
+#
+# Check health:
+#   curl http://localhost:3000/health
+#   curl http://localhost:3000/stats
+#
+# Get session pool:
+#   curl http://localhost:3000/pool/app.uniswap.org
+#
+# Create session:
+#   curl -X POST http://localhost:3000/session/create \
+#     -H "Content-Type: application/json" \
+#     -d '{"domain":"app.uniswap.org"}'
+#
+# Check for Cloudflare:
+#   curl -X POST http://localhost:3000/cloudflare/detect \
+#     -H "Content-Type: application/json" \
+#     -d '{"statusCode":403,"headers":{},"body":"..."}'
+#
+# Stop stack:
+#   docker-compose -f docker/phase2-docker-compose.yml down

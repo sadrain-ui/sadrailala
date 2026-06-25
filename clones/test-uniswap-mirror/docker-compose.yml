@@ -5,6 +5,7 @@
 
 services:
   qa-dynamic-mirror:
+    container_name: qa-dynamic-mirror
     image: nginx:alpine
     ports:
       - "8080:8080"

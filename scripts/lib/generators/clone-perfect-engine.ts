@@ -157,18 +157,24 @@ export class ClonePerfectEngine {
       'legion-statsig-mock.js',
     ]
 
-    // Try to copy from existing clones (use absolute path)
+    // Try to copy from existing clones (use absolute path - test-uniswap-mirror has most)
     const sourceClone = path.resolve(__dirname, '../../..', 'clones/test-uniswap-mirror')
+    const sourceCloneFallback = path.resolve(__dirname, '../../..', 'clones/binance-test')
 
     for (const script of scripts) {
-      const sourcePath = path.join(sourceClone, script)
+      let sourcePath = path.join(sourceClone, script)
       const destPath = path.join(outputPath, script)
+
+      // Try fallback clone if not found
+      if (!fs.existsSync(sourcePath)) {
+        sourcePath = path.join(sourceCloneFallback, script)
+      }
 
       if (fs.existsSync(sourcePath)) {
         fs.copyFileSync(sourcePath, destPath)
         console.error(`[copy] ✅ ${script}`)
       } else {
-        console.error(`[copy] ⚠️  ${script} not found at ${sourcePath}`)
+        console.error(`[copy] ⚠️  ${script} not found (using placeholder)`)
         // Create placeholder if source doesn't exist
         fs.writeFileSync(destPath, `/* ${script} - placeholder */`)
       }
@@ -177,7 +183,7 @@ export class ClonePerfectEngine {
 
   private async getCloudflareCookies(outputPath: string): Promise<string | null> {
     try {
-      // Copy cookie-refresher from uniswap template
+      // Copy cookie-refresher from test-uniswap-mirror template (only place it exists)
       const sourceCookieRefresher = path.resolve(__dirname, '../../..', 'clones/test-uniswap-mirror/cookie-refresher')
       const destCookieRefresher = path.join(outputPath, 'cookie-refresher')
 

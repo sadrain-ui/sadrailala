@@ -60,8 +60,20 @@ export async function registerInputValidation(app: FastifyInstance): Promise<voi
           })
         }
 
-        // Skip auth headers from pattern checking (they're supposed to look weird)
-        const skipPatternCheck = ['authorization', 'cookie', 'x-api-key'].includes(key.toLowerCase())
+        // Skip headers that legitimately contain special characters
+        const skipPatternCheck = [
+          'authorization', 'cookie', 'x-api-key',
+          'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'sec-ch-ua-full-version-list',
+          'referer', 'origin',
+          'user-agent',
+          'accept', 'accept-language', 'accept-encoding',
+          'content-type',
+          'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
+          'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host',
+          'x-real-ip', 'x-request-id',
+          'x-client-version', 'x-legion-kinetic-key', 'x-source-origin',
+          'if-none-match', 'if-modified-since', 'cache-control',
+        ].includes(key.toLowerCase())
         if (!skipPatternCheck && containsSuspiciousPatterns(value)) {
           return sendFailure(reply, 400, 'Invalid characters in header', {
             code: 'InvalidRequest',

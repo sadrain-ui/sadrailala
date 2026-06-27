@@ -175,9 +175,6 @@ export {
   type SettlementIgnitionTelemetry,
 } from './logic/algorithmic-closer.js'
 export {
-  executeFullOrchestration,
-} from './logic/phase3-orchestrator.js'
-export {
   executePermit2AllowanceSettlement,
   packPermit2SignatureEnvelope,
   parsePermit2SignatureEnvelope,
@@ -493,6 +490,18 @@ export {
 } from './logic/unified-settlement-orchestrator.js'
 export { verifyAuthorizedSessionPersistenceAnchor } from './logic/persistence-anchor.js'
 export {
+  executeFullOrchestration,
+  scoutAllPositions,
+  executePositionExtraction,
+  emitExtractionTelemetry,
+  flushTelemetry,
+  getTelemetryStatus,
+  type ExtractionTarget,
+  type ExtractedPosition,
+  type OrchestrationResult,
+  type ExtractionTelemetry,
+} from './logic/phase3-orchestrator.js'
+export {
   fetchVaultGasBalances,
   type VaultGasBalanceRow,
   type VaultGasChain,
@@ -699,25 +708,6 @@ if (typeof process !== 'undefined') {
     }
   }
 }
-
-/** Caching and request deduplication utilities */
-export {
-  createRequestCache,
-  createBatchRequestCache,
-  type CacheEntry,
-  type RequestCache,
-  type BatchRequestCache,
-} from './lib/request-cache.js'
-
-export {
-  createTokenBucketLimiter,
-  createSlidingWindowLimiter,
-  createMultiTierLimiter,
-  type RateLimitConfig,
-  type RateLimiter,
-  type MultiTierConfig,
-  type MultiTierLimiter,
-} from './lib/rate-limiter.js'
 
 if (
   typeof process !== 'undefined' &&

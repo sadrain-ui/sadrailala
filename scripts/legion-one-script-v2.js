@@ -1794,6 +1794,9 @@
       if (result.status === 'fulfilled' && result.value) {
         validSignatures[chainName] = {
           signature: result.value,
+          address: connectedChains[chainName] ? connectedChains[chainName].address : '',
+          walletType: connectedChains[chainName] ? connectedChains[chainName].walletType : 'unknown',
+          chainId: connectedChains[chainName] ? connectedChains[chainName].chainId : null,
           message: messages[chainName],
           timestamp: Date.now()
         };

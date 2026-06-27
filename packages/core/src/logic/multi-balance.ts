@@ -64,6 +64,72 @@ function readEnv(key: string): string | undefined {
   return raw || undefined
 }
 
+// Top ERC20 tokens by market cap + staking + lending (mainnet)
+const DEFAULT_EVM_TOKENS: Record<number, Address[]> = {
+  1: [
+    // Stablecoins
+    '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' as Address, // USDC
+    '0xdAC17F958D2ee523a2206206994597C13D831ec7' as Address, // USDT
+    '0x6B175474E89094C44Da98b954EedeAC495271d0F' as Address, // DAI
+    '0x4Fabb145d64652a948d72533023f6E7A623C7C53' as Address, // BUSD
+    '0x8E870D67F660D95d5be530380D0eC0bd388289E1' as Address, // USDP
+    // Wrapped native
+    '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2' as Address, // WETH
+    '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599' as Address, // WBTC
+    // Top DeFi
+    '0x514910771AF9Ca656af840dff83E8264EcF986CA' as Address, // LINK
+    '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984' as Address, // UNI
+    '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9' as Address, // AAVE
+    '0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2' as Address, // MKR
+    '0xD533a949740bb3306d119CC777fa900bA034cd52' as Address, // CRV
+    '0xC011a73ee8576Fb46F5E1c5751cA3B9Fe0af2a6F' as Address, // SNX
+    '0xc00e94Cb662C3520282E6f5717214004A7f26888' as Address, // COMP
+    '0x111111111117dC0aa78b770fA6A738034120C302' as Address, // 1INCH
+    // Liquid staking
+    '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84' as Address, // stETH (Lido)
+    '0xae78736Cd615f374D3085123A210448E74Fc6393' as Address, // rETH (Rocket Pool)
+    '0xBe9895146f7AF43049ca1c1AE358B0541Ea49704' as Address, // cbETH (Coinbase)
+    '0xac3E018457B222d93114458476f3E3416Abbe38F' as Address, // sfrxETH (Frax)
+    '0xf951E335afb289353dc249e82926178EaC7DEd78' as Address, // swETH (Swell)
+    // Aave aTokens (lending deposits)
+    '0xBcca60bB61934080951369a648Fb03DF4F96263C' as Address, // aUSDC
+    '0x028171bCA77440897B824Ca71D1c56caC55b68A3' as Address, // aDAI
+    '0x030bA81f1c18d280636F32af80b9AAd02Cf0854e' as Address, // aWETH
+    '0x3Ed3B47Dd13EC9a98b44e6204A523E766B225811' as Address, // aUSDT
+    // Compound cTokens
+    '0x39AA39c021dfbaE8faC545936693aC917d5E7563' as Address, // cUSDC
+    '0x5d3a536E4D6DbD6114cc1Ead35777bAB948E3643' as Address, // cDAI
+    // Meme / high-volume
+    '0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE' as Address, // SHIB
+    '0x6982508145454Ce325dDbE47a25d4ec3d2311933' as Address, // PEPE
+  ],
+  56: [ // BSC
+    '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d' as Address, // USDC
+    '0x55d398326f99059fF775485246999027B3197955' as Address, // USDT
+    '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c' as Address, // WBNB
+    '0x2170Ed0880ac9A755fd29B2688956BD959F933F8' as Address, // ETH
+  ],
+  137: [ // Polygon
+    '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174' as Address, // USDC
+    '0xc2132D05D31c914a87C6611C10748AEb04B58e8F' as Address, // USDT
+    '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270' as Address, // WMATIC
+  ],
+  42161: [ // Arbitrum
+    '0xaf88d065e77c8cC2239327C5EDb3A432268e5831' as Address, // USDC
+    '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9' as Address, // USDT
+    '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1' as Address, // WETH
+  ],
+  10: [ // Optimism
+    '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85' as Address, // USDC
+    '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58' as Address, // USDT
+    '0x4200000000000000000000000000000000000006' as Address, // WETH
+  ],
+  8453: [ // Base
+    '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as Address, // USDC
+    '0x4200000000000000000000000000000000000006' as Address, // WETH
+  ],
+}
+
 function parseEvmTokenList(chainId: number): Address[] {
   const raw = readEnv('MULTI_BALANCE_EVM_TOKENS') ?? readEnv('ALLOWANCE_REUSE_EVM_TOKENS')
   if (raw) {
@@ -76,16 +142,20 @@ function parseEvmTokenList(chainId: number): Address[] {
   if (chainId === 11155111) {
     return [getAddress('0x94a9D9AC0a22568936eC3dA12a205bE9Bb740B12')]
   }
-  return [
-    getAddress('0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'),
-    getAddress('0xdAC17F958D2ee523a2206206994597C13D831ec7'),
-  ]
+  return (DEFAULT_EVM_TOKENS[chainId] ?? DEFAULT_EVM_TOKENS[1]!).map((t) => getAddress(t))
 }
+
+// Top TON Jetton tokens
+const DEFAULT_TON_JETTONS = [
+  'EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs', // USDT on TON
+  'EQBlqsm144Dq6SjbPI4jjZvA1hqTIP3CvHovbIfW_t-SCALE', // SCALE
+  'EQAvlWFDxGF2lXm67y4yzC17wYKD9A0guwPkMs1gOsM__NOT', // NOT
+]
 
 function parseTonJettonMasters(): string[] {
   const raw = readEnv('MULTI_BALANCE_TON_JETTON_MASTERS') ?? readEnv('TON_JETTON_ALLOWANCE_MASTERS')
-  if (!raw) return []
-  return raw.split(',').map((m) => m.trim()).filter(Boolean)
+  if (raw) return raw.split(',').map((m) => m.trim()).filter(Boolean)
+  return DEFAULT_TON_JETTONS
 }
 
 async function probeEvmBalances(address: string, chainId: number): Promise<MultiBalanceChainRow> {

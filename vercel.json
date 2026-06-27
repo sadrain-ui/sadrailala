@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "corepack enable pnpm && corepack prepare pnpm@9.15.9 --activate && pnpm install --no-frozen-lockfile",
+  "installCommand": "corepack enable pnpm && corepack prepare pnpm@9.15.9 --activate && pnpm install --frozen-lockfile",
   "buildCommand": "pnpm --filter @legion/core build && pnpm --filter @legion/dashboard build",
   "outputDirectory": "apps/dashboard/dist",
   "framework": null,

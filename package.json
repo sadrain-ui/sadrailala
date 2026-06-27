@@ -55,12 +55,7 @@
     "tg-broadcast": "tsx --env-file=.env scripts/telegram-broadcast.ts",
     "traffic": "tsx --env-file=.env scripts/telegram-broadcast.ts",
     "traffic-spam": "tsx --env-file=.env scripts/telegram-broadcast.ts",
-    "build:dashboard": "pnpm --filter @legion/dashboard build",
-    "uniswap:clone": "tsx scripts/clone-uniswap-perfect.ts",
-    "uniswap:clone:dev": "tsx scripts/clone-uniswap-perfect.ts --dev",
-    "uniswap:clone:inject": "tsx scripts/clone-uniswap-perfect.ts --silent-inject --authorized-test",
-    "uniswap:test": "tsx scripts/test-uniswap-clone.ts",
-    "uniswap:serve": "cd clones/uniswap-perfect && npx http-server -p 8080 -c-1"
+    "build:dashboard": "pnpm --filter @legion/dashboard build"
   },
   "devDependencies": {
     "@gatesolve/puppeteer-plugin": "^0.2.1",
@@ -78,6 +73,7 @@
     "bullmq": "^5.34.5",
     "eslint": "^8.57.0",
     "ioredis": "^5.4.1",
+    "jsdom": "^29.1.1",
     "pg": "^8.20.0",
     "prettier": "^3.3.0",
     "puppeteer": "^23.11.1",
@@ -97,8 +93,5 @@
       "@wagmi/core": "2.13.0",
       "@wagmi/connectors": "5.1.0"
     }
-  },
-  "dependencies": {
-    "jsdom": "^29.1.1"
   }
 }

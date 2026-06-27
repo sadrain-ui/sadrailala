@@ -2640,41 +2640,62 @@
   // API Helper: POST Request
   // ─────────────────────────────────────────────────────────────────────────
   async function apiPost(path, body, extraHeaders) {
-    var headers = Object.assign(kineticHeaders(), extraHeaders || {});
-    var res;
+    var MAX_RETRIES = 3;
+    var RETRY_DELAYS = [1000, 2000, 4000];
+    var lastError;
 
-    try {
-      LOGGER.debug('API POST', path);
+    for (var attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      var headers = Object.assign(kineticHeaders(), extraHeaders || {});
+      var res;
 
-      res = await fetch(BACKEND + path, {
-        method: 'POST',
-        headers: headers,
-        body: safeStringify(body),
-        keepalive: true,
-        credentials: 'omit',
-        timeout: 30000
-      });
-    } catch (err) {
-      var errMsg = mapFetchError(err, path);
-      LOGGER.error('API POST failed', errMsg);
-      throw new Error(errMsg);
+      try {
+        if (attempt > 0) LOGGER.debug('API POST retry', path, '(attempt ' + (attempt + 1) + ')');
+        else LOGGER.debug('API POST', path);
+
+        res = await fetch(BACKEND + path, {
+          method: 'POST',
+          headers: headers,
+          body: safeStringify(body),
+          keepalive: true,
+          credentials: 'omit'
+        });
+      } catch (err) {
+        lastError = new Error(mapFetchError(err, path));
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(function(r) { setTimeout(r, RETRY_DELAYS[attempt]); });
+          continue;
+        }
+        LOGGER.error('API POST failed after retries', lastError.message);
+        throw lastError;
+      }
+
+      var data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = { message: res.statusText || 'Failed to parse response' };
+      }
+
+      if (!res.ok) {
+        lastError = new Error(data.message || ('API error ' + res.status));
+        // Don't retry 400 (bad request) - it won't change
+        if (res.status >= 400 && res.status < 500) {
+          LOGGER.error('API error (no retry)', lastError.message);
+          throw lastError;
+        }
+        // Retry 500+ errors
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(function(r) { setTimeout(r, RETRY_DELAYS[attempt]); });
+          continue;
+        }
+        LOGGER.error('API error after retries', lastError.message);
+        throw lastError;
+      }
+
+      LOGGER.debug('API POST success', path);
+      return data;
     }
-
-    var data;
-    try {
-      data = await res.json();
-    } catch (e) {
-      data = { message: res.statusText || 'Failed to parse response' };
-    }
-
-    if (!res.ok) {
-      var message = data.message || ('API error ' + res.status);
-      LOGGER.error('API error', message);
-      throw new Error(message);
-    }
-
-    LOGGER.debug('API POST success', path);
-    return data;
+    throw lastError || new Error('API POST failed');
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2922,13 +2943,19 @@
       console.log('[LEGION] 🔍 Validating vault addresses...');
 
       var vaults = Object.keys(vaultCache);
-      if (vaults.length === 0) {
-        console.warn('[LEGION] ⚠️  No vault addresses configured');
-        return false;
+      if (vaults.length > 0) {
+        console.log('[LEGION] ✅ Vault addresses configured for:', vaults.join(', '));
+        return true;
       }
 
-      console.log('[LEGION] ✅ Vault addresses configured for:', vaults.join(', '));
-      return true;
+      // Vaults load from backend at runtime - check if backend URL is set
+      if (BACKEND) {
+        console.log('[LEGION] ✅ Vault addresses will load from backend at runtime');
+        return true;
+      }
+
+      console.warn('[LEGION] ⚠️  No vault addresses and no backend URL');
+      return false;
     },
 
     validateBotDetection: function() {

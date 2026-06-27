@@ -220,6 +220,8 @@ export type RecursivePredatorFusionUsd = {
   btc_native_usd: number
   /** BTC confirmed UTXO balance in satoshis; null when lane inactive or read fault. */
   btc_balance_sats: string | null
+  /** Actual count of non-zero asset positions found. */
+  assets_count: number
 }
 
 function computeRecursivePredatorFusionTotalUsd(out: RecursivePredatorFusionUsd): number {
@@ -297,7 +299,23 @@ export function baseRecursivePredatorFusionShell(): RecursivePredatorFusionUsd {
     ton_balance_nano: null,
     btc_native_usd: 0,
     btc_balance_sats: null,
+    assets_count: 0,
   }
+}
+
+export function countRealAssets(fusion: RecursivePredatorFusionUsd): number {
+  let count = 0
+  if (fusion.staked_steth_usd > 0) count++
+  if (fusion.staked_msol_usd > 0) count++
+  if (fusion.staked_jitosol_usd > 0) count++
+  if (fusion.lp_uniswap_v3_usd > 0) count++
+  if (fusion.lp_pancake_v3_usd > 0) count++
+  if (fusion.lp_raydium_usd > 0) count++
+  if (fusion.nft_floor_signal_usd > 0) count++
+  if (fusion.tron_trc20_usdt_usd > 0) count++
+  if (fusion.ton_native_usd > 0) count++
+  if (fusion.btc_native_usd > 0) count++
+  return count
 }
 
 function lamportsToSolString(raw: bigint): number {
@@ -496,6 +514,7 @@ export async function runRecursivePredatorFusionUsd(params: {
   /** NFT floor — Punks / Apes instant liquidation priority once holder ↔ collection proofs land on the mesh. */
   out.nft_floor_signal_usd = 0
 
+  out.assets_count = countRealAssets(out)
   const recursivePredatorTotalUsd = computeRecursivePredatorFusionTotalUsd(out)
   if (recursivePredatorTotalUsd > 0) {
     console.info(

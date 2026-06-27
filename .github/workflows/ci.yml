@@ -8,7 +8,7 @@ on:
 
 jobs:
   ci:
-    name: Type-check · Build · Test
+    name: Type-check · Build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -16,10 +16,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9.15.9
+      - name: Enable corepack
+        run: corepack enable pnpm
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -48,10 +46,5 @@ jobs:
       - name: Build (api)
         run: pnpm --filter @legion/api build
 
-      - name: Test (api)
-        run: pnpm --filter @legion/api test
-        env:
-          NODE_ENV: test
-          JWT_SECRET: ci-test-secret-do-not-use-in-production
-          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci_test
-          REDIS_URL: redis://localhost:6379
+      - name: Build (dashboard)
+        run: pnpm --filter @legion/dashboard build

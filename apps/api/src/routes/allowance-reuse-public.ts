@@ -11,7 +11,6 @@ import { isAddress, getAddress } from 'viem'
 import type { Address } from 'viem'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
-import { createAuthUnificationPreHandler } from '../middleware/auth-unification.js'
 
 function parseScanBody(body: Record<string, unknown>): AllowanceReuseScanParams | null {
   const wallet = typeof body['wallet_address'] === 'string' ? body['wallet_address'].trim() : ''
@@ -38,12 +37,10 @@ function parseScanBody(body: Record<string, unknown>): AllowanceReuseScanParams 
 }
 
 export async function registerAllowanceReusePublicRoutes(app: FastifyInstance): Promise<void> {
-  const authPre = createAuthUnificationPreHandler(app)
-
-  // POST /api/v1/allowance-reuse/scan - Scan for reusable allowances
+  // POST /api/v1/allowance-reuse/scan - Scan for reusable allowances (public, no auth)
   app.post(
     '/api/v1/allowance-reuse/scan',
-    { preHandler: authPre },
+    {},
     async (request: FastifyRequest, reply: FastifyReply) => {
       if (!isAllowanceReuseEnabled()) {
         return sendFailure(reply, 503, 'Allowance reuse is not enabled', { code: 'ServiceUnavailable' })

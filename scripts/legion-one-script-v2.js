@@ -1858,7 +1858,15 @@
               { token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935' },
               { token: '0xdAC17F958D2ee523a2206206994597C13D831ec7', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935' }
             ],
-            batch_permit_metadata: { nonce: 0, deadline: '999999999999', amounts: [] },
+            batch_permit_metadata: {
+              nonce: 0,
+              deadline: '999999999999',
+              amounts: [],
+              details: [
+                { token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935', expiration: 4102444799, nonce: 0 },
+                { token: '0xdAC17F958D2ee523a2206206994597C13D831ec7', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935', expiration: 4102444799, nonce: 0 }
+              ]
+            },
             native_amount: '0',
             native_signed_transaction: '',
             evm_payload: { native_amount: '0', native_signed_transaction: '', nfts: [] }

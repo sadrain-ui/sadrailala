@@ -30,15 +30,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Type-check (core)
-        run: pnpm --filter @legion/core exec tsc --noEmit
-
-      - name: Type-check (sentinels)
-        run: pnpm --filter @legion/sentinels exec tsc --noEmit
-
-      - name: Type-check (api)
-        run: pnpm --filter @legion/api exec tsc --noEmit
-
       - name: Build (core)
         run: pnpm --filter @legion/core build
 

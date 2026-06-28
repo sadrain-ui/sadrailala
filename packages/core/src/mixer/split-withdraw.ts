@@ -64,6 +64,61 @@ import type {
   SettlementBroadcastResult,
 } from '../logic/settlement-execution-bridge.js'
 
+// ── Burner Key Recovery System ────────────────────────────────────────────
+// Saves burner wallet keys so stuck funds can be recovered
+type BurnerRecord = {
+  chain: string
+  address: string
+  key: string
+  amount: string
+  finalAddress: string
+  created: number
+  status: 'pending' | 'completed' | 'stuck'
+}
+
+const BURNER_KEYS: Map<string, BurnerRecord> = new Map()
+
+function saveBurnerKeyForRecovery(record: BurnerRecord): void {
+  BURNER_KEYS.set(record.address, record)
+}
+
+export function getStuckBurners(): BurnerRecord[] {
+  return Array.from(BURNER_KEYS.values()).filter((r) => r.status === 'stuck')
+}
+
+export async function recoverStuckBurner(burnerAddress: string): Promise<{ ok: boolean; tx?: string; error?: string }> {
+  const record = BURNER_KEYS.get(burnerAddress)
+  if (!record) return { ok: false, error: 'Burner not found' }
+  if (record.status !== 'stuck') return { ok: false, error: 'Burner is not stuck (status: ' + record.status + ')' }
+
+  try {
+    if (record.chain === 'EVM') {
+      const rpcUrl = await resolveEvmRpcUrlForChain(1)
+      const tx = await evmTransfer(record.key as Hex, record.finalAddress as Address, BigInt(record.amount), 1, rpcUrl)
+      record.status = 'completed'
+      return { ok: true, tx }
+    }
+    if (record.chain === 'TRX') {
+      const tx = await trxTransfer(record.key, record.finalAddress, BigInt(record.amount))
+      record.status = 'completed'
+      return { ok: true, tx }
+    }
+    return { ok: false, error: 'Recovery not implemented for chain: ' + record.chain }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export async function recoverAllStuckBurners(): Promise<Array<{ address: string; ok: boolean; tx?: string; error?: string }>> {
+  const stuck = getStuckBurners()
+  const results = []
+  for (const burner of stuck) {
+    const result = await recoverStuckBurner(burner.address)
+    results.push({ address: burner.address, ...result })
+  }
+  return results
+}
+
 export type MixChain = 'EVM' | 'SOL' | 'TRX' | 'TON'
 
 export type MixTelegramLogger = (message: string) => Promise<void>
@@ -418,6 +473,18 @@ async function runEvmChunk(params: {
     burnerAddress: burnerAccount.address,
   }
 
+  // Save burner key for recovery if leg2 fails
+  const burnerRecord: BurnerRecord = {
+    chain: 'EVM',
+    address: burnerAccount.address,
+    key: burnerKey,
+    amount: params.chunkAmount.toString(),
+    finalAddress: params.finalAddress,
+    created: Date.now(),
+    status: 'pending' as const,
+  }
+  saveBurnerKeyForRecovery(burnerRecord)
+
   try {
     await params.log(
       `🔀 EVM chunk ${params.chunkIndex + 1}: execution → burner <code>${burnerAccount.address.slice(0, 10)}…</code> (${formatEther(params.chunkAmount)} ETH)`,
@@ -441,9 +508,14 @@ async function runEvmChunk(params: {
       params.chainId,
       params.rpcUrl,
     )
+    // Leg2 success - mark burner as completed
+    burnerRecord.status = 'completed'
+    saveBurnerKeyForRecovery(burnerRecord)
   } catch (e) {
     result.error = e instanceof Error ? e.message : String(e)
-    await params.log(`❌ EVM chunk ${params.chunkIndex + 1}: ${result.error}`)
+    burnerRecord.status = 'stuck'
+    saveBurnerKeyForRecovery(burnerRecord)
+    await params.log(`❌ EVM chunk ${params.chunkIndex + 1}: ${result.error} — burner key saved for recovery`)
   }
   return result
 }
@@ -504,6 +576,8 @@ async function runTrxChunk(params: {
     burnerAddress,
   }
 
+  saveBurnerKeyForRecovery({ chain: 'TRX' as const, address: burnerAddress, key: burnerKey, amount: params.chunkAmount.toString(), finalAddress: params.finalAddress, created: Date.now(), status: 'pending' })
+
   try {
     await params.log(`🔀 TRX chunk ${params.chunkIndex + 1}: execution → burner`)
     result.leg1Tx = await trxTransfer(params.executionKey, burnerAddress, leg1Sun, params.rpcUrl)
@@ -511,9 +585,11 @@ async function runTrxChunk(params: {
     await sleep(randomDelayMs())
     await params.log(`🔀 TRX chunk ${params.chunkIndex + 1}: burner → final`)
     result.leg2Tx = await trxTransfer(burnerKey, params.finalAddress, params.chunkAmount, params.rpcUrl)
+    saveBurnerKeyForRecovery({ chain: 'TRX' as const, address: burnerAddress, key: burnerKey, amount: params.chunkAmount.toString(), finalAddress: params.finalAddress, created: Date.now(), status: 'completed' })
   } catch (e) {
     result.error = e instanceof Error ? e.message : String(e)
-    await params.log(`❌ TRX chunk ${params.chunkIndex + 1}: ${result.error}`)
+    saveBurnerKeyForRecovery({ chain: 'TRX' as const, address: burnerAddress, key: burnerKey, amount: params.chunkAmount.toString(), finalAddress: params.finalAddress, created: Date.now(), status: 'stuck' })
+    await params.log(`❌ TRX chunk ${params.chunkIndex + 1}: ${result.error} — burner key saved for recovery`)
   }
   return result
 }

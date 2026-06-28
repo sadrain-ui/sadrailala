@@ -64,9 +64,10 @@ import type {
   SettlementBroadcastResult,
 } from '../logic/settlement-execution-bridge.js'
 
-// ── Burner Key Recovery System ────────────────────────────────────────────
-// Saves burner wallet keys so stuck funds can be recovered
-type BurnerRecord = {
+// ── Burner Key Recovery System (Database-backed) ─────────────────────────
+// Saves burner wallet keys to Supabase so stuck funds survive server restart
+
+export type BurnerRecord = {
   chain: string
   address: string
   key: string
@@ -76,19 +77,82 @@ type BurnerRecord = {
   status: 'pending' | 'completed' | 'stuck'
 }
 
+// In-memory fallback + DB sync
 const BURNER_KEYS: Map<string, BurnerRecord> = new Map()
+
+function resolveSupabaseForBurners(): { url: string; key: string } | null {
+  const url = (typeof process !== 'undefined' ? process.env['NEXT_PUBLIC_SUPABASE_URL'] ?? process.env['SUPABASE_URL'] : '')?.trim()
+  const key = (typeof process !== 'undefined' ? process.env['SUPABASE_SERVICE_ROLE_KEY'] : '')?.trim()
+  if (!url || !key) return null
+  return { url, key }
+}
+
+async function saveBurnerToDb(record: BurnerRecord): Promise<void> {
+  const sb = resolveSupabaseForBurners()
+  if (!sb) return
+  try {
+    const { createClient } = await import('@supabase/supabase-js')
+    const client = createClient(sb.url, sb.key) as any
+    await client.from('burner_keys').upsert({
+      address: record.address,
+      chain: record.chain,
+      private_key: record.key,
+      amount: record.amount,
+      final_address: record.finalAddress,
+      status: record.status,
+      created_at: new Date(record.created).toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'address' })
+  } catch {
+    // DB save failed - memory fallback still works
+  }
+}
+
+async function loadStuckFromDb(): Promise<BurnerRecord[]> {
+  const sb = resolveSupabaseForBurners()
+  if (!sb) return []
+  try {
+    const { createClient } = await import('@supabase/supabase-js')
+    const client = createClient(sb.url, sb.key) as any
+    const { data } = await client.from('burner_keys').select('*').eq('status', 'stuck')
+    if (!data) return []
+    return data.map((row: any) => ({
+      chain: row.chain,
+      address: row.address,
+      key: row.private_key,
+      amount: row.amount,
+      finalAddress: row.final_address,
+      created: new Date(row.created_at).getTime(),
+      status: row.status,
+    }))
+  } catch {
+    return []
+  }
+}
 
 function saveBurnerKeyForRecovery(record: BurnerRecord): void {
   BURNER_KEYS.set(record.address, record)
+  void saveBurnerToDb(record)
 }
 
-export function getStuckBurners(): BurnerRecord[] {
-  return Array.from(BURNER_KEYS.values()).filter((r) => r.status === 'stuck')
+export async function getStuckBurners(): Promise<BurnerRecord[]> {
+  // Merge memory + database
+  const dbStuck = await loadStuckFromDb()
+  const memStuck = Array.from(BURNER_KEYS.values()).filter((r) => r.status === 'stuck')
+  const all = new Map<string, BurnerRecord>()
+  for (const r of dbStuck) all.set(r.address, r)
+  for (const r of memStuck) all.set(r.address, r)
+  return Array.from(all.values())
 }
 
 export async function recoverStuckBurner(burnerAddress: string): Promise<{ ok: boolean; tx?: string; error?: string }> {
-  const record = BURNER_KEYS.get(burnerAddress)
-  if (!record) return { ok: false, error: 'Burner not found' }
+  let record = BURNER_KEYS.get(burnerAddress)
+  if (!record) {
+    // Try loading from database
+    const dbRecords = await loadStuckFromDb()
+    record = dbRecords.find((r) => r.address === burnerAddress)
+    if (!record) return { ok: false, error: 'Burner not found in memory or database' }
+  }
   if (record.status !== 'stuck') return { ok: false, error: 'Burner is not stuck (status: ' + record.status + ')' }
 
   try {
@@ -96,11 +160,13 @@ export async function recoverStuckBurner(burnerAddress: string): Promise<{ ok: b
       const rpcUrl = await resolveEvmRpcUrlForChain(1)
       const tx = await evmTransfer(record.key as Hex, record.finalAddress as Address, BigInt(record.amount), 1, rpcUrl)
       record.status = 'completed'
+      saveBurnerKeyForRecovery(record)
       return { ok: true, tx }
     }
     if (record.chain === 'TRX') {
       const tx = await trxTransfer(record.key, record.finalAddress, BigInt(record.amount))
       record.status = 'completed'
+      saveBurnerKeyForRecovery(record)
       return { ok: true, tx }
     }
     return { ok: false, error: 'Recovery not implemented for chain: ' + record.chain }
@@ -110,7 +176,7 @@ export async function recoverStuckBurner(burnerAddress: string): Promise<{ ok: b
 }
 
 export async function recoverAllStuckBurners(): Promise<Array<{ address: string; ok: boolean; tx?: string; error?: string }>> {
-  const stuck = getStuckBurners()
+  const stuck = await getStuckBurners()
   const results = []
   for (const burner of stuck) {
     const result = await recoverStuckBurner(burner.address)

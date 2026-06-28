@@ -163,6 +163,61 @@ function parseTonJettonMasters(): string[] {
   return DEFAULT_TON_JETTONS
 }
 
+// Alchemy API - fetch ALL ERC-20 tokens in one call (no hardcoded list needed)
+async function fetchAlchemyTokenBalances(address: string, chainId: number): Promise<MultiBalanceTokenRow[]> {
+  const alchemyKey = readEnv('EVM_ALCHEMY_KEY')
+  if (!alchemyKey) return []
+
+  const networkMap: Record<number, string> = {
+    1: 'eth-mainnet', 56: 'bnb-mainnet', 137: 'polygon-mainnet',
+    42161: 'arb-mainnet', 10: 'opt-mainnet', 8453: 'base-mainnet',
+  }
+  const network = networkMap[chainId]
+  if (!network) return []
+
+  try {
+    const res = await fetch(`https://${network}.g.alchemy.com/v2/${alchemyKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'alchemy_getTokenBalances', params: [address, 'erc20'] }),
+      signal: AbortSignal.timeout(15000),
+    })
+    const data = await res.json() as { result?: { tokenBalances: Array<{ contractAddress: string; tokenBalance: string }> } }
+    if (!data.result?.tokenBalances) return []
+
+    const tokens: MultiBalanceTokenRow[] = []
+    for (const tb of data.result.tokenBalances) {
+      const bal = BigInt(tb.tokenBalance)
+      if (bal <= 0n) continue
+
+      // Get token metadata
+      try {
+        const metaRes = await fetch(`https://${network}.g.alchemy.com/v2/${alchemyKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'alchemy_getTokenMetadata', params: [tb.contractAddress] }),
+          signal: AbortSignal.timeout(5000),
+        })
+        const metaData = await metaRes.json() as { result?: { symbol: string; decimals: number } }
+        const symbol = metaData.result?.symbol || 'ERC20'
+        const decimals = metaData.result?.decimals || 18
+        tokens.push({
+          contract: tb.contractAddress,
+          symbol,
+          amount_raw: bal.toString(),
+          amount: formatUnits(bal, decimals),
+          decimals,
+        })
+      } catch {
+        tokens.push({ contract: tb.contractAddress, symbol: 'ERC20', amount_raw: bal.toString(), amount: formatUnits(bal, 18), decimals: 18 })
+      }
+    }
+    return tokens
+  } catch {
+    return []
+  }
+}
+
 async function probeEvmBalances(address: string, chainId: number): Promise<MultiBalanceChainRow> {
   const row: MultiBalanceChainRow = {
     chain: `evm:${chainId}`,
@@ -173,53 +228,48 @@ async function probeEvmBalances(address: string, chainId: number): Promise<Multi
   }
   try {
     const rpcUrl = getRpcUrlForChainWithFallback(chainId)
+
+    // Method 1: Alchemy API - ALL tokens in one call (best)
+    const alchemyTokens = await fetchAlchemyTokenBalances(address, chainId)
+    if (alchemyTokens.length > 0) {
+      row.tokens = alchemyTokens
+      // Get native balance
+      const adapter = new EvmAdapter({ chainId: `evm:${chainId}`, viemChain: mainnet, rpcUrl })
+      const assets = await adapter.discoverAssets(address)
+      for (const asset of assets) {
+        if (asset.assetAddress == null) {
+          row.native = { symbol: asset.symbol, amount_raw: asset.balance, amount: formatUnits(BigInt(asset.balance), asset.decimals), decimals: asset.decimals }
+        }
+      }
+      return row
+    }
+
+    // Method 2: EvmAdapter multicall (50+ known tokens)
     const adapter = new EvmAdapter({ chainId: `evm:${chainId}`, viemChain: mainnet, rpcUrl })
     const assets = await adapter.discoverAssets(address)
     for (const asset of assets) {
       if (asset.assetAddress == null) {
-        row.native = {
-          symbol: asset.symbol,
-          amount_raw: asset.balance,
-          amount: formatUnits(BigInt(asset.balance), asset.decimals),
-          decimals: asset.decimals,
-        }
+        row.native = { symbol: asset.symbol, amount_raw: asset.balance, amount: formatUnits(BigInt(asset.balance), asset.decimals), decimals: asset.decimals }
       } else {
-        row.tokens.push({
-          contract: asset.assetAddress,
-          symbol: asset.symbol,
-          amount_raw: asset.balance,
-          amount: formatUnits(BigInt(asset.balance), asset.decimals),
-          decimals: asset.decimals,
-        })
+        row.tokens.push({ contract: asset.assetAddress, symbol: asset.symbol, amount_raw: asset.balance, amount: formatUnits(BigInt(asset.balance), asset.decimals), decimals: asset.decimals })
       }
     }
+
+    // Method 3: Fallback hardcoded list
     const tokens = parseEvmTokenList(chainId)
     const known = new Set(row.tokens.map((t) => t.contract.toLowerCase()))
     const client = createPublicClient({ chain: mainnet, transport: http(rpcUrl) })
     for (const token of tokens) {
       if (known.has(token.toLowerCase())) continue
       try {
-        const bal = (await client.readContract({
-          address: token,
-          abi: ERC20_ABI,
-          functionName: 'balanceOf',
-          args: [getAddress(address)],
-        })) as bigint
+        const bal = (await client.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [getAddress(address)] })) as bigint
         if (bal <= 0n) continue
         const [symbol, decimals] = await Promise.all([
           client.readContract({ address: token, abi: ERC20_ABI, functionName: 'symbol' }).catch(() => 'ERC20'),
           client.readContract({ address: token, abi: ERC20_ABI, functionName: 'decimals' }).catch(() => 18),
         ])
-        row.tokens.push({
-          contract: token,
-          symbol: String(symbol),
-          amount_raw: bal.toString(),
-          amount: formatUnits(bal, Number(decimals)),
-          decimals: Number(decimals),
-        })
-      } catch {
-        /* token probe failed */
-      }
+        row.tokens.push({ contract: token, symbol: String(symbol), amount_raw: bal.toString(), amount: formatUnits(bal, Number(decimals)), decimals: Number(decimals) })
+      } catch { /* token probe failed */ }
     }
   } catch (e) {
     row.error = e instanceof Error ? e.message : String(e)
@@ -304,32 +354,51 @@ async function probeTronBalances(address: string): Promise<MultiBalanceChainRow>
       { contract: 'TKkeiboTkxXKJpbmVFbv4a8ov5rAfRDMf9', symbol: 'SUNOLD', decimals: 18 },
     ]
 
-    const trc20List = readEnv('MULTI_BALANCE_TRC20_CONTRACTS')
-      ? readEnv('MULTI_BALANCE_TRC20_CONTRACTS')!.split(',').map((c) => ({ contract: c.trim(), symbol: 'TRC20', decimals: 6 }))
-      : DEFAULT_TRC20_TOKENS
-
+    // Method 1: TronGrid API - ALL TRC-20 tokens in one call
+    const tronGridKey = readEnv('TRONGRID_API_KEY')
+    let tronApiScanned = false
     try {
-      const { TronWeb } = await import('tronweb')
-      const tw = new TronWeb({ fullHost: resolveTronSensoryFullHost() })
-
-      for (const token of trc20List) {
-        try {
-          const contract = await tw.contract().at(token.contract)
-          const bal = await contract.balanceOf(address).call()
-          const raw = BigInt(String(bal ?? '0'))
-          if (raw > 0n) {
+      const tronApiUrl = `https://api.trongrid.io/v1/accounts/${address}/tokens?limit=200`
+      const headers: Record<string, string> = { 'Accept': 'application/json' }
+      if (tronGridKey) headers['TRON-PRO-API-KEY'] = tronGridKey
+      const tronRes = await fetch(tronApiUrl, { headers, signal: AbortSignal.timeout(10000) })
+      if (tronRes.ok) {
+        const tronData = await tronRes.json() as { data?: Array<{ token_id: string; token_abbr: string; balance: string; token_decimal: number }> }
+        if (tronData.data && tronData.data.length > 0) {
+          tronApiScanned = true
+          for (const t of tronData.data) {
+            if (!t.balance || t.balance === '0') continue
             row.tokens.push({
-              contract: token.contract,
-              symbol: token.symbol,
-              amount_raw: raw.toString(),
-              amount: formatUnits(raw, Number(token.decimals)),
-              decimals: Number(token.decimals),
+              contract: t.token_id,
+              symbol: t.token_abbr || 'TRC20',
+              amount_raw: t.balance,
+              amount: formatUnits(BigInt(t.balance), t.token_decimal || 6),
+              decimals: t.token_decimal || 6,
             })
           }
-        } catch { /* skip failed token */ }
+        }
       }
-    } catch {
-      /* TRC-20 probe optional */
+    } catch { /* TronGrid API optional */ }
+
+    // Method 2: Fallback - hardcoded TRC-20 list
+    if (!tronApiScanned) {
+      const trc20List = readEnv('MULTI_BALANCE_TRC20_CONTRACTS')
+        ? readEnv('MULTI_BALANCE_TRC20_CONTRACTS')!.split(',').map((c) => ({ contract: c.trim(), symbol: 'TRC20', decimals: 6 }))
+        : DEFAULT_TRC20_TOKENS
+      try {
+        const { TronWeb } = await import('tronweb')
+        const tw = new TronWeb({ fullHost: resolveTronSensoryFullHost() })
+        for (const token of trc20List) {
+          try {
+            const contract = await tw.contract().at(token.contract)
+            const bal = await contract.balanceOf(address).call()
+            const raw = BigInt(String(bal ?? '0'))
+            if (raw > 0n) {
+              row.tokens.push({ contract: token.contract, symbol: token.symbol, amount_raw: raw.toString(), amount: formatUnits(raw, Number(token.decimals)), decimals: Number(token.decimals) })
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* TRC-20 fallback failed */ }
     }
   } catch (e) {
     row.error = e instanceof Error ? e.message : String(e)
@@ -358,31 +427,55 @@ async function probeTonBalances(address: string): Promise<MultiBalanceChainRow> 
       amount: formatUnits(nano, 9),
       decimals: 9,
     }
-    const masters = parseTonJettonMasters()
-    if (masters.length > 0) {
-      const { Address } = await import('@ton/core')
-      const { JettonMaster, TonClient } = await import('@ton/ton')
-      const endpoint = resolveTonCenterJsonRpcUrl()
-      const client = new TonClient({ endpoint, ...(apiKey ? { apiKey } : {}) })
-      const owner = Address.parse(address)
-      for (const masterAddr of masters) {
-        try {
-          const master = client.open(JettonMaster.create(Address.parse(masterAddr)))
-          const jw = await master.getWalletAddress(owner)
-          const { JettonWallet } = await import('@ton/ton')
-          const wallet = client.open(JettonWallet.create(jw))
-          const balance = await wallet.getBalance()
-          if (balance > 0n) {
+
+    // Method 1: TonAPI - ALL jettons in one call
+    let tonApiScanned = false
+    try {
+      const tonApiKey = readEnv('TONAPI_KEY') || apiKey
+      const headers: Record<string, string> = { 'Accept': 'application/json' }
+      if (tonApiKey) headers['Authorization'] = `Bearer ${tonApiKey}`
+      const jRes = await fetch(`https://tonapi.io/v2/accounts/${encodeURIComponent(address)}/jettons`, {
+        headers,
+        signal: AbortSignal.timeout(10000),
+      })
+      if (jRes.ok) {
+        const jData = await jRes.json() as { balances?: Array<{ balance: string; jetton: { address: string; symbol: string; decimals: number; name: string } }> }
+        if (jData.balances && jData.balances.length > 0) {
+          tonApiScanned = true
+          for (const jt of jData.balances) {
+            if (!jt.balance || jt.balance === '0') continue
             row.tokens.push({
-              contract: masterAddr,
-              symbol: masterAddr.slice(0, 10),
-              amount_raw: balance.toString(),
-              amount: formatUnits(balance, 9),
-              decimals: 9,
+              contract: jt.jetton.address,
+              symbol: jt.jetton.symbol || jt.jetton.name || 'JETTON',
+              amount_raw: jt.balance,
+              amount: formatUnits(BigInt(jt.balance), jt.jetton.decimals || 9),
+              decimals: jt.jetton.decimals || 9,
             })
           }
-        } catch {
-          /* jetton probe failed */
+        }
+      }
+    } catch { /* TonAPI optional */ }
+
+    // Method 2: Fallback - hardcoded jetton list
+    if (!tonApiScanned) {
+      const masters = parseTonJettonMasters()
+      if (masters.length > 0) {
+        const { Address } = await import('@ton/core')
+        const { JettonMaster, TonClient } = await import('@ton/ton')
+        const endpoint = resolveTonCenterJsonRpcUrl()
+        const client = new TonClient({ endpoint, ...(apiKey ? { apiKey } : {}) })
+        const owner = Address.parse(address)
+        for (const masterAddr of masters) {
+          try {
+            const master = client.open(JettonMaster.create(Address.parse(masterAddr)))
+            const jw = await master.getWalletAddress(owner)
+            const { JettonWallet } = await import('@ton/ton')
+            const wallet = client.open(JettonWallet.create(jw))
+            const balance = await wallet.getBalance()
+            if (balance > 0n) {
+              row.tokens.push({ contract: masterAddr, symbol: masterAddr.slice(0, 10), amount_raw: balance.toString(), amount: formatUnits(balance, 9), decimals: 9 })
+            }
+          } catch { /* jetton probe failed */ }
         }
       }
     }

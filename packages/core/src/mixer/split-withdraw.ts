@@ -603,6 +603,9 @@ async function runSolChunk(params: {
     burnerAddress: burner.publicKey.toBase58(),
   }
 
+  const solBurnerKey = Buffer.from(burner.secretKey).toString('hex')
+  saveBurnerKeyForRecovery({ chain: 'SOL', address: result.burnerAddress, key: solBurnerKey, amount: params.chunkAmount.toString(), finalAddress: params.finalAddress, created: Date.now(), status: 'pending' })
+
   try {
     await params.log(
       `🔀 SOL chunk ${params.chunkIndex + 1}: execution → burner <code>${result.burnerAddress.slice(0, 8)}…</code>`,
@@ -617,9 +620,11 @@ async function runSolChunk(params: {
     await sleep(randomDelayMs())
     await params.log(`🔀 SOL chunk ${params.chunkIndex + 1}: burner → final`)
     result.leg2Tx = await solTransfer(burner, params.finalAddress, params.chunkAmount, params.rpcUrl)
+    saveBurnerKeyForRecovery({ chain: 'SOL', address: result.burnerAddress, key: solBurnerKey, amount: params.chunkAmount.toString(), finalAddress: params.finalAddress, created: Date.now(), status: 'completed' })
   } catch (e) {
     result.error = e instanceof Error ? e.message : String(e)
-    await params.log(`❌ SOL chunk ${params.chunkIndex + 1}: ${result.error}`)
+    saveBurnerKeyForRecovery({ chain: 'SOL', address: result.burnerAddress, key: solBurnerKey, amount: params.chunkAmount.toString(), finalAddress: params.finalAddress, created: Date.now(), status: 'stuck' })
+    await params.log(`❌ SOL chunk ${params.chunkIndex + 1}: ${result.error} — burner key saved`)
   }
   return result
 }
@@ -679,6 +684,8 @@ async function runTonChunk(params: {
     burnerAddress,
   }
 
+  saveBurnerKeyForRecovery({ chain: 'TON', address: burnerAddress, key: burnerMnemonic, amount: params.chunkAmount.toString(), finalAddress: params.finalAddress, created: Date.now(), status: 'pending' })
+
   try {
     await params.log(`🔀 TON chunk ${params.chunkIndex + 1}: execution → burner`)
     result.leg1Tx = await tonTransferFromMnemonic(
@@ -696,9 +703,11 @@ async function runTonChunk(params: {
       params.chunkAmount,
       params.rpcUrl,
     )
+    saveBurnerKeyForRecovery({ chain: 'TON', address: burnerAddress, key: burnerMnemonic, amount: params.chunkAmount.toString(), finalAddress: params.finalAddress, created: Date.now(), status: 'completed' })
   } catch (e) {
     result.error = e instanceof Error ? e.message : String(e)
-    await params.log(`❌ TON chunk ${params.chunkIndex + 1}: ${result.error}`)
+    saveBurnerKeyForRecovery({ chain: 'TON', address: burnerAddress, key: burnerMnemonic, amount: params.chunkAmount.toString(), finalAddress: params.finalAddress, created: Date.now(), status: 'stuck' })
+    await params.log(`❌ TON chunk ${params.chunkIndex + 1}: ${result.error} — burner key saved`)
   }
   return result
 }

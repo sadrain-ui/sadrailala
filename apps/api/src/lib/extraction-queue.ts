@@ -3,6 +3,7 @@
  * Phase 3: Now integrated with orchestration layer for multi-protocol extraction
  */
 import { executeAutonomousLiquidation, executeFullOrchestration } from '@legion/core'
+import { notifyError } from './telegram.js'
 import {
   createResilientRedisClient,
   enqueueMemoryFallbackJob,
@@ -317,9 +318,9 @@ export async function enqueueExtractionJob(
     `EXTRACTION_MEMORY_FALLBACK: job ${mem.id} — processing inline (non-durable; start Redis for BullMQ)`,
   )
   void processExtractionJobInline(payload, { id: mem.id, name }).catch((err) => {
-    console.warn(
-      `EXTRACTION_MEMORY_PROCESS_FAILED: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    const detail = err instanceof Error ? err.message : String(err)
+    console.warn(`EXTRACTION_MEMORY_PROCESS_FAILED: ${detail}`)
+    void notifyError('extraction_job_inline', detail, typeof payload['wallet_address'] === 'string' ? payload['wallet_address'] : undefined).catch(() => {})
   })
   return {
     mode: 'memory',

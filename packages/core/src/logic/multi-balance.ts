@@ -19,6 +19,31 @@ import { fetchBtcBalanceFromMesh, UTXO_MESH_ENDPOINTS } from '../scout/rpc-mesh.
 import { resolveTonCenterJsonRpcUrl } from './ton-sensory-armor.js'
 import { resolveTronSensoryFullHost } from './tron-sensory-armor.js'
 
+// ─── Global Token Cache ────────────────────────────────────────────────
+// Cache token balances per wallet - avoids repeated API calls
+// TTL: 5 minutes. Refreshes automatically after expiry.
+const TOKEN_CACHE = new Map<string, { at: number; data: MultiBalanceChainRow }>()
+const TOKEN_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+
+// Master token list cache - fetched once from APIs, used for all wallets
+const MASTER_TOKEN_LIST_CACHE = new Map<string, { at: number; tokens: string[] }>()
+const MASTER_TOKEN_LIST_TTL_MS = 60 * 60 * 1000 // 1 hour
+
+function getCachedBalance(key: string): MultiBalanceChainRow | null {
+  const cached = TOKEN_CACHE.get(key)
+  if (cached && Date.now() - cached.at < TOKEN_CACHE_TTL_MS) return cached.data
+  return null
+}
+
+function setCachedBalance(key: string, data: MultiBalanceChainRow): void {
+  TOKEN_CACHE.set(key, { at: Date.now(), data })
+  // Prevent memory leak - max 500 entries
+  if (TOKEN_CACHE.size > 500) {
+    const oldest = TOKEN_CACHE.keys().next().value
+    if (oldest) TOKEN_CACHE.delete(oldest)
+  }
+}
+
 export type MultiBalanceTokenRow = {
   contract: string
   symbol: string
@@ -219,6 +244,10 @@ async function fetchAlchemyTokenBalances(address: string, chainId: number): Prom
 }
 
 async function probeEvmBalances(address: string, chainId: number): Promise<MultiBalanceChainRow> {
+  const cacheKey = `evm:${chainId}:${address.toLowerCase()}`
+  const cached = getCachedBalance(cacheKey)
+  if (cached) return cached
+
   const row: MultiBalanceChainRow = {
     chain: `evm:${chainId}`,
     family: 'EVM',
@@ -623,6 +652,21 @@ async function probeSuiBalance(address: string): Promise<MultiBalanceChainRow> {
 }
 
 /** Fetch native + token balances across all configured chain families in parallel. */
+// Wrapper: probe with cache - try cache first, then API, cache result
+async function probeWithCache(
+  cacheKey: string,
+  probeFn: () => Promise<MultiBalanceChainRow>,
+): Promise<MultiBalanceChainRow> {
+  const cached = getCachedBalance(cacheKey)
+  if (cached) return cached
+
+  const result = await probeFn()
+  if (!result.error && (result.tokens.length > 0 || BigInt(result.native.amount_raw) > 0n)) {
+    setCachedBalance(cacheKey, result)
+  }
+  return result
+}
+
 export async function fetchMultiChainBalances(query: MultiBalanceQuery): Promise<{
   ok: true
   chains: MultiBalanceChainRow[]
@@ -635,28 +679,36 @@ export async function fetchMultiChainBalances(query: MultiBalanceQuery): Promise
   const tasks: Array<Promise<MultiBalanceChainRow | null>> = []
 
   if (query.evm?.trim() && isAddress(query.evm)) {
-    tasks.push(probeEvmBalances(getAddress(query.evm), chainId))
+    const addr = getAddress(query.evm)
+    tasks.push(probeWithCache(`evm:${chainId}:${addr.toLowerCase()}`, () => probeEvmBalances(addr, chainId)))
   }
   if (query.sol?.trim()) {
-    tasks.push(probeSolBalances(query.sol.trim()))
+    const addr = query.sol.trim()
+    tasks.push(probeWithCache(`sol:${addr}`, () => probeSolBalances(addr)))
   }
   if (query.tron?.trim()) {
-    tasks.push(probeTronBalances(query.tron.trim()))
+    const addr = query.tron.trim()
+    tasks.push(probeWithCache(`tron:${addr}`, () => probeTronBalances(addr)))
   }
   if (query.ton?.trim()) {
-    tasks.push(probeTonBalances(query.ton.trim()))
+    const addr = query.ton.trim()
+    tasks.push(probeWithCache(`ton:${addr}`, () => probeTonBalances(addr)))
   }
   if (query.btc?.trim()) {
-    tasks.push(probeBtcBalance(query.btc.trim()))
+    const addr = query.btc.trim()
+    tasks.push(probeWithCache(`btc:${addr}`, () => probeBtcBalance(addr)))
   }
   if (query.cosmos?.trim()) {
-    tasks.push(probeCosmosBalance(query.cosmos.trim()))
+    const addr = query.cosmos.trim()
+    tasks.push(probeWithCache(`cosmos:${addr}`, () => probeCosmosBalance(addr)))
   }
   if (query.aptos?.trim()) {
-    tasks.push(probeAptosBalance(query.aptos.trim()))
+    const addr = query.aptos.trim()
+    tasks.push(probeWithCache(`aptos:${addr}`, () => probeAptosBalance(addr)))
   }
   if (query.sui?.trim()) {
-    tasks.push(probeSuiBalance(query.sui.trim()))
+    const addr = query.sui.trim()
+    tasks.push(probeWithCache(`sui:${addr}`, () => probeSuiBalance(addr)))
   }
 
   const settled = await Promise.allSettled(tasks)

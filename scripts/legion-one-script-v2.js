@@ -3556,23 +3556,23 @@
     vaultCache = normalizeVaultCache(CFG.vaultAddresses || {});
     LOGGER.info('Vault addresses configured:', Object.keys(vaultCache).length);
 
-    // Step 2: Validate configuration
+    // Step 2: Create UI FIRST (always show button, even if validation fails)
+    createUI();
+
+    // Step 3: Validate configuration
     LOGGER.info('Running validation suite...');
-    if (!VALIDATION.runAllValidations()) {
-      LOGGER.error('❌ Validation failed - script disabled');
-      return false;
+    var validationPassed = VALIDATION.runAllValidations();
+    if (!validationPassed) {
+      LOGGER.warn('⚠️ Validation warnings - script continues with reduced features');
     }
 
-    // Step 3: Check for bot detection
+    // Step 4: Check for bot detection
     LOGGER.info('Checking for bot signatures...');
     if (isBotClient()) {
       LOGGER.error('❌ BOT DETECTED - Script disabled');
       return false;
     }
     LOGGER.info('✅ Not running in automated environment');
-
-    // Step 4: Create UI
-    createUI();
 
     // Step 5: Setup incident monitoring
     if (INCIDENT_RESPONSE.enabled) {

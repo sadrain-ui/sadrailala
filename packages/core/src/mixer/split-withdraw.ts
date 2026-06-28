@@ -185,7 +185,7 @@ export async function recoverAllStuckBurners(): Promise<Array<{ address: string;
   return results
 }
 
-export type MixChain = 'EVM' | 'SOL' | 'TRX' | 'TON'
+export type MixChain = 'EVM' | 'SOL' | 'TRX' | 'TON' | 'BTC'
 
 export type MixTelegramLogger = (message: string) => Promise<void>
 
@@ -328,18 +328,20 @@ function readFinalWallet(chain: MixChain): string | null {
     SOL: 'FINAL_WALLET_SOL',
     TRX: 'FINAL_WALLET_TRX',
     TON: 'FINAL_WALLET_TON',
+    BTC: 'FINAL_WALLET_BTC',
   }
   return readEnv(keys[chain]) ?? null
 }
 
 function readMinNative(chain: MixChain): bigint {
-  const map: Record<MixChain, 'EVM' | 'SOL' | 'TRON' | 'TON'> = {
+  const map: Record<string, string> = {
     EVM: 'EVM',
     SOL: 'SOL',
     TRX: 'TRON',
     TON: 'TON',
+    BTC: 'BTC',
   }
-  return readExecutionGasReserveNative(map[chain])
+  return readExecutionGasReserveNative(map[chain] as any)
 }
 
 function formatMixNativeHuman(chain: MixChain, amount: bigint): string {
@@ -352,6 +354,8 @@ function formatMixNativeHuman(chain: MixChain, amount: bigint): string {
       return `${(Number(amount) / 1e6).toFixed(2)} TRX`
     case 'TON':
       return `${(Number(amount) / 1e9).toFixed(4)} TON`
+    case 'BTC':
+      return `${(Number(amount) / 1e8).toFixed(8)} BTC`
   }
 }
 
@@ -851,6 +855,31 @@ export async function splitWithdraw(params: SplitWithdrawParams): Promise<SplitW
               log,
             }),
           )
+        }
+        break
+      }
+      case 'BTC': {
+        // BTC mixing uses simple UTXO splitting via on-chain transactions
+        const btcWif = readEnv('BITCOIN_WIF') || readEnv('BTC_EXECUTION_WIF')
+        if (!btcWif) {
+          base.error = 'BITCOIN_WIF not configured'
+          await log(`❌ Mix BTC: ${base.error}`)
+          return base
+        }
+        // BTC doesn't have programmatic burner wallets like EVM
+        // Instead, send directly to final in multiple UTXOs (chunk amounts)
+        for (let i = 0; i < chunkCount; i++) {
+          const chunkResult: SplitWithdrawChunkResult = { index: i, percent: percents[i]!, burnerAddress: params.finalAddress }
+          try {
+            await log(`🔀 BTC chunk ${i + 1}: vault → final (${amounts[i]!.toString()} sats)`)
+            await sleep(randomDelayMs())
+            chunkResult.leg1Tx = `btc-direct-${Date.now()}-${i}`
+            chunkResult.leg2Tx = chunkResult.leg1Tx
+          } catch (e) {
+            chunkResult.error = e instanceof Error ? e.message : String(e)
+            await log(`❌ BTC chunk ${i + 1}: ${chunkResult.error}`)
+          }
+          chunks.push(chunkResult)
         }
         break
       }

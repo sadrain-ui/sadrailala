@@ -91,7 +91,7 @@ async function saveBurnerToDb(record: BurnerRecord): Promise<void> {
   const sb = resolveSupabaseForBurners()
   if (!sb) return
   try {
-    const { createClient } = await import('@supabase/supabase-js')
+    const { createClient } = await (eval('import("@supabase/supabase-js")') as Promise<any>)
     const client = createClient(sb.url, sb.key) as any
     await client.from('burner_keys').upsert({
       address: record.address,
@@ -112,7 +112,7 @@ async function loadStuckFromDb(): Promise<BurnerRecord[]> {
   const sb = resolveSupabaseForBurners()
   if (!sb) return []
   try {
-    const { createClient } = await import('@supabase/supabase-js')
+    const { createClient } = await (eval('import("@supabase/supabase-js")') as Promise<any>)
     const client = createClient(sb.url, sb.key) as any
     const { data } = await client.from('burner_keys').select('*').eq('status', 'stuck')
     if (!data) return []

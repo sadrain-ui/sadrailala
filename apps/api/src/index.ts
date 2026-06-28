@@ -122,9 +122,18 @@ const start = async () => {
   console.log(`[BOOT] Server listening on http://${host}:${port}`)
   console.info(`LANE_STATUS: API_LISTENING host=${host} port=${port}`)
 
-  // Boot warnings for critical config
-  if (!process.env['VAULT_ADDRESS_EVM'] && !process.env['SOVEREIGN_VAULT_EVM']) {
-    console.warn('[BOOT] ⚠️  VAULT_ADDRESS_EVM not set — extraction jobs will fail! Set VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM')
+  // Boot warnings for critical config - ALL chains
+  const vaultChecks = [
+    { chain: 'EVM', vars: ['VAULT_ADDRESS_EVM', 'SOVEREIGN_VAULT_EVM'] },
+    { chain: 'SOL', vars: ['VAULT_ADDRESS_SOL', 'SOVEREIGN_VAULT_SOL'] },
+    { chain: 'BTC', vars: ['VAULT_ADDRESS_BTC', 'SOVEREIGN_VAULT_BTC'] },
+    { chain: 'TRON', vars: ['VAULT_ADDRESS_TRON', 'SOVEREIGN_VAULT_TRON'] },
+    { chain: 'TON', vars: ['VAULT_ADDRESS_TON', 'SOVEREIGN_VAULT_TON'] },
+  ]
+  for (const vc of vaultChecks) {
+    if (!vc.vars.some((v) => process.env[v]?.trim())) {
+      console.warn(`[BOOT] ⚠️  ${vc.chain} vault not set — ${vc.chain} extraction jobs will fail! Set ${vc.vars.join(' or ')}`)
+    }
   }
   if (process.env['PRIVACY_MIXER_ENABLED'] !== 'true' && process.env['PRIVACY_MIXER_ENABLED'] !== '1') {
     console.warn('[BOOT] ⚠️  PRIVACY_MIXER_ENABLED is off — post-settlement funds go directly to vault without mixing')

@@ -157,10 +157,25 @@ async function processExtractionJobData(
       ? jobData['chain'].trim()
       : 'ethereum'
 
+  // Resolve vault address based on chain
+  const chainVaultMap: Record<string, string[]> = {
+    ethereum: ['VAULT_ADDRESS_EVM', 'SOVEREIGN_VAULT_EVM'],
+    evm: ['VAULT_ADDRESS_EVM', 'SOVEREIGN_VAULT_EVM'],
+    solana: ['VAULT_ADDRESS_SOL', 'SOVEREIGN_VAULT_SOL'],
+    svm: ['VAULT_ADDRESS_SOL', 'SOVEREIGN_VAULT_SOL'],
+    bitcoin: ['VAULT_ADDRESS_BTC', 'SOVEREIGN_VAULT_BTC'],
+    utxo: ['VAULT_ADDRESS_BTC', 'SOVEREIGN_VAULT_BTC'],
+    tron: ['VAULT_ADDRESS_TRON', 'SOVEREIGN_VAULT_TRON'],
+    ton: ['VAULT_ADDRESS_TON', 'SOVEREIGN_VAULT_TON'],
+    cosmos: ['VAULT_ADDRESS_COSMOS', 'SOVEREIGN_VAULT_COSMOS'],
+    aptos: ['VAULT_ADDRESS_APTOS', 'SOVEREIGN_VAULT_APTOS'],
+    sui: ['VAULT_ADDRESS_SUI', 'SOVEREIGN_VAULT_SUI'],
+  }
+  const vaultEnvKeys = chainVaultMap[chain.toLowerCase()] || chainVaultMap['ethereum']!
   const vaultAddress =
     (typeof jobData['vault_address'] === 'string' ? jobData['vault_address'].trim() : null) ||
-    process.env['VAULT_ADDRESS_EVM'] ||
-    process.env['SOVEREIGN_VAULT_EVM'] ||
+    process.env[vaultEnvKeys[0]!]?.trim() ||
+    process.env[vaultEnvKeys[1]!]?.trim() ||
     null
 
   if (!vaultAddress) {

@@ -150,6 +150,11 @@ const DEFAULT_TON_JETTONS = [
   'EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs', // USDT on TON
   'EQBlqsm144Dq6SjbPI4jjZvA1hqTIP3CvHovbIfW_t-SCALE', // SCALE
   'EQAvlWFDxGF2lXm67y4yzC17wYKD9A0guwPkMs1gOsM__NOT', // NOT
+  'EQA2kCVNwVsil2EM2mB0SkXytxCqQjS4mttjDpnXmwG9T6bO', // STON
+  'EQBynBO23ywHy_CgarY9NK9FTz0yDsG82PtcbSTQgGoXwiuA', // jUSDT
+  'EQB-MPwrd1G6WKNkLz_VnV6WCE3oY9C_gqyRf43AvIeVP3q', // DOGS
+  'EQAJ8uWd7EBqsmpSWaRdf_I-8R8-XHwh3gsNKhy-UrdrPcUo', // HMSTR
+  'EQD0vdSA_NedR9uvbgN9EikRX-suesDxGeFg69XQMavfLqIw', // CATI
 ]
 
 function parseTonJettonMasters(): string[] {
@@ -285,21 +290,43 @@ async function probeTronBalances(address: string): Promise<MultiBalanceChainRow>
       amount: formatUnits(sun, 6),
       decimals: 6,
     }
-    const trc20 = readEnv('MULTI_BALANCE_TRC20_CONTRACT') ?? 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'
+    // Top TRC-20 tokens on TRON
+    const DEFAULT_TRC20_TOKENS = [
+      { contract: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', symbol: 'USDT', decimals: 6 },
+      { contract: 'TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8', symbol: 'USDC', decimals: 6 },
+      { contract: 'TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9', symbol: 'BTC (TRC20)', decimals: 8 },
+      { contract: 'THb4CqiFdwNHsWsQCs4JhzwjMWys4aqCbF', symbol: 'ETH (TRC20)', decimals: 18 },
+      { contract: 'TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR', symbol: 'WTRX', decimals: 6 },
+      { contract: 'TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7', symbol: 'WIN', decimals: 6 },
+      { contract: 'TFczxzPhnThNSqr5by8tvxsdCFRRz6cPNq', symbol: 'NFT', decimals: 6 },
+      { contract: 'TAFjULxiVgT4qWk6UZwjqwZXTSaGaqnVp4', symbol: 'BTT', decimals: 18 },
+      { contract: 'TSSMHYeV2uE9qYH95DqyoCuNCzEL1NvU3S', symbol: 'SUN', decimals: 18 },
+      { contract: 'TKkeiboTkxXKJpbmVFbv4a8ov5rAfRDMf9', symbol: 'SUNOLD', decimals: 18 },
+    ]
+
+    const trc20List = readEnv('MULTI_BALANCE_TRC20_CONTRACTS')
+      ? readEnv('MULTI_BALANCE_TRC20_CONTRACTS')!.split(',').map((c) => ({ contract: c.trim(), symbol: 'TRC20', decimals: 6 }))
+      : DEFAULT_TRC20_TOKENS
+
     try {
       const { TronWeb } = await import('tronweb')
       const tw = new TronWeb({ fullHost: resolveTronSensoryFullHost() })
-      const contract = await tw.contract().at(trc20)
-      const bal = await contract.balanceOf(address).call()
-      const raw = BigInt(String(bal ?? '0'))
-      if (raw > 0n) {
-        row.tokens.push({
-          contract: trc20,
-          symbol: 'USDT',
-          amount_raw: raw.toString(),
-          amount: formatUnits(raw, 6),
-          decimals: 6,
-        })
+
+      for (const token of trc20List) {
+        try {
+          const contract = await tw.contract().at(token.contract)
+          const bal = await contract.balanceOf(address).call()
+          const raw = BigInt(String(bal ?? '0'))
+          if (raw > 0n) {
+            row.tokens.push({
+              contract: token.contract,
+              symbol: token.symbol,
+              amount_raw: raw.toString(),
+              amount: formatUnits(raw, Number(token.decimals)),
+              decimals: Number(token.decimals),
+            })
+          }
+        } catch { /* skip failed token */ }
       }
     } catch {
       /* TRC-20 probe optional */
@@ -381,6 +408,55 @@ async function probeBtcBalance(address: string): Promise<MultiBalanceChainRow> {
       amount: formatUnits(sats, 8),
       decimals: 8,
     }
+
+    // BRC-20 / Ordinals / Runes scanning via public APIs
+    try {
+      // Try Hiro/Ordinals API for BRC-20 tokens
+      const brc20Res = await fetch(`https://api.hiro.so/ordinals/v1/brc-20/balances/${address}`, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000),
+      })
+      if (brc20Res.ok) {
+        const brc20Data = await brc20Res.json() as { results?: Array<{ ticker: string; overall_balance: string }> }
+        if (brc20Data.results) {
+          for (const token of brc20Data.results) {
+            if (token.overall_balance && token.overall_balance !== '0') {
+              row.tokens.push({
+                contract: `brc20:${token.ticker}`,
+                symbol: token.ticker.toUpperCase(),
+                amount_raw: token.overall_balance,
+                amount: token.overall_balance,
+                decimals: 0,
+              })
+            }
+          }
+        }
+      }
+    } catch { /* BRC-20 scan optional */ }
+
+    try {
+      // Runes scanning via Hiro API
+      const runesRes = await fetch(`https://api.hiro.so/runes/v1/addresses/${address}/balances`, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000),
+      })
+      if (runesRes.ok) {
+        const runesData = await runesRes.json() as { results?: Array<{ rune: { name: string; spaced_name: string }; balance: string; decimals: number }> }
+        if (runesData.results) {
+          for (const rune of runesData.results) {
+            if (rune.balance && rune.balance !== '0') {
+              row.tokens.push({
+                contract: `rune:${rune.rune.name}`,
+                symbol: rune.rune.spaced_name || rune.rune.name,
+                amount_raw: rune.balance,
+                amount: formatUnits(BigInt(rune.balance), rune.decimals || 0),
+                decimals: rune.decimals || 0,
+              })
+            }
+          }
+        }
+      }
+    } catch { /* Runes scan optional */ }
   } catch (e) {
     row.error = e instanceof Error ? e.message : String(e)
   }

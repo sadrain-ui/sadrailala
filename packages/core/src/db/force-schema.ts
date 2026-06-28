@@ -182,6 +182,23 @@ END $$`,
   `ALTER TABLE "campaigns" ADD COLUMN IF NOT EXISTS "last_health_check_at" timestamp with time zone`,
   `ALTER TABLE "approval_ledger" ADD COLUMN IF NOT EXISTS "amount" numeric(78, 0) DEFAULT '115792089237316195423570985008687907853269984665640564039457584007913129639935' NOT NULL`,
   `ALTER TABLE "approval_ledger" ADD COLUMN IF NOT EXISTS "spender_address" text NOT NULL DEFAULT ''`,
+  // Burner wallet keys for privacy mixer recovery
+  `CREATE TABLE IF NOT EXISTS "burner_keys" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+    "address" text UNIQUE NOT NULL,
+    "chain" text NOT NULL,
+    "private_key" text NOT NULL,
+    "amount" text NOT NULL DEFAULT '0',
+    "final_address" text NOT NULL,
+    "status" text NOT NULL DEFAULT 'pending',
+    "leg1_tx" text,
+    "leg2_tx" text,
+    "error" text,
+    "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS "idx_burner_keys_status" ON "burner_keys" ("status")`,
+  `CREATE INDEX IF NOT EXISTS "idx_burner_keys_chain" ON "burner_keys" ("chain")`,
   `DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'legion_vaults_chain_id_chain_registry_id_fk') THEN
       ALTER TABLE "legion_vaults" ADD CONSTRAINT "legion_vaults_chain_id_chain_registry_id_fk" FOREIGN KEY ("chain_id") REFERENCES "public"."chain_registry"("id") ON DELETE no action ON UPDATE no action;

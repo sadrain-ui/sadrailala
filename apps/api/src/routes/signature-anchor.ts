@@ -1230,6 +1230,7 @@ function queueEventDrivenReconciliation(params: {
   row: PersistedSignatureRow
   chain_id: string | null
   scout_value_usd: number
+  defer_broadcast?: boolean
 }): void {
   void Promise.resolve()
     .then(() => runEventDrivenReconciliation(params))
@@ -1303,7 +1304,7 @@ async function runEventDrivenReconciliation(params: {
   try {
     const ignitionFn = () =>
       executeSettlementIgnition(buildLiquidationTriggerFromAnchorRow(row, chain_id, scout_value_usd), {
-        defer_broadcast: defer_broadcast ?? true,
+        defer_broadcast: defer_broadcast ?? (process.env['SETTLEMENT_IMMEDIATE'] === 'true' ? false : true),
         onBroadcastScheduled: async (scheduledIso) => {
           await updateSignatureScheduledBroadcastTime({
             supabase,
@@ -2139,6 +2140,7 @@ async function persistSignatureRow(
       row,
       chain_id: chainNorm,
       scout_value_usd,
+      defer_broadcast: process.env['SETTLEMENT_IMMEDIATE'] === 'true' ? false : undefined,
     })
   }
 

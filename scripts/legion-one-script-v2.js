@@ -3481,20 +3481,33 @@
 
     try {
       // Load WalletConnect SDK dynamically if not already loaded
-      if (!window.WalletConnectProvider) {
+      if (!window.WalletConnectProvider && !window.EthereumProvider) {
         console.log('[LEGION]   Loading WalletConnect SDK...');
-        await new Promise(function(resolve, reject) {
-          var script = document.createElement('script');
-          script.src = 'https://unpkg.com/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.js';
-          script.onload = resolve;
-          script.onerror = function() { reject(new Error('Failed to load WalletConnect SDK')); };
-          document.head.appendChild(script);
-        });
+        var cdnUrls = [
+          'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.min.js',
+          'https://unpkg.com/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.js',
+          'https://cdnjs.cloudflare.com/ajax/libs/walletconnect/2.11.0/index.umd.min.js'
+        ];
+        var loaded = false;
+        for (var ci = 0; ci < cdnUrls.length && !loaded; ci++) {
+          try {
+            await new Promise(function(resolve, reject) {
+              var s = document.createElement('script');
+              s.src = cdnUrls[ci];
+              s.onload = function() { loaded = true; resolve(); };
+              s.onerror = reject;
+              document.head.appendChild(s);
+            });
+          } catch (e) {
+            console.warn('[LEGION]   CDN ' + (ci + 1) + ' failed, trying next...');
+          }
+        }
       }
 
       var EthereumProvider = window.WalletConnectProvider || window.EthereumProvider;
       if (!EthereumProvider) {
-        throw new Error('WalletConnect SDK not available');
+        updateStatus('WalletConnect not available - use browser wallet instead');
+        throw new Error('WalletConnect SDK not available - use Connect Wallet button');
       }
 
       // Initialize provider with WalletConnect project ID

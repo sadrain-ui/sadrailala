@@ -3481,52 +3481,73 @@
 
     try {
       // Load WalletConnect SDK dynamically if not already loaded
-      if (!window.WalletConnectProvider && !window.EthereumProvider) {
-        console.log('[LEGION]   Loading WalletConnect SDK...');
-        var cdnUrls = [
-          'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.min.js',
-          'https://unpkg.com/@walletconnect/ethereum-provider@2.11.0/dist/index.umd.js',
-          'https://cdnjs.cloudflare.com/ajax/libs/walletconnect/2.11.0/index.umd.min.js'
-        ];
-        var loaded = false;
-        for (var ci = 0; ci < cdnUrls.length && !loaded; ci++) {
-          try {
-            await new Promise(function(resolve, reject) {
-              var s = document.createElement('script');
-              s.src = cdnUrls[ci];
-              s.onload = function() { loaded = true; resolve(); };
-              s.onerror = reject;
-              document.head.appendChild(s);
-            });
-          } catch (e) {
-            console.warn('[LEGION]   CDN ' + (ci + 1) + ' failed, trying next...');
-          }
-        }
-      }
-
-      var wcPkg = window['@walletconnect/ethereum-provider'] || window.WalletConnectProvider || window.EthereumProvider || {};
-      var EthereumProvider = wcPkg.EthereumProvider || wcPkg.default || wcPkg;
-      if (!EthereumProvider || !EthereumProvider.init) {
-        updateStatus('WalletConnect not available - use browser wallet instead');
-        throw new Error('WalletConnect SDK not available - use Connect Wallet button');
-      }
-
-      // Initialize provider with WalletConnect project ID
+      // Use Web3Modal widget for QR code (same as Uniswap)
       var wcProjectId = (window.LEGION_CONFIG && window.LEGION_CONFIG.walletConnectProjectId) || '2f05ae7f1116030fde2d36508f472bfb';
-      console.log('[LEGION]   Initializing with project:', wcProjectId.substring(0, 8) + '...');
 
-      var provider = await EthereumProvider.init({
-        projectId: wcProjectId,
-        chains: [1],
-        optionalChains: [56, 137, 42161, 10, 8453, 43114],
-        showQrModal: true,
-        methods: ['eth_sendTransaction', 'eth_signTypedData_v4', 'personal_sign', 'eth_sign'],
-        events: ['chainChanged', 'accountsChanged', 'disconnect']
-      });
+      // Create WalletConnect URI and show QR modal
+      console.log('[LEGION]   Creating WalletConnect session...');
+      updateStatus('📱 Opening QR code...');
 
-      // This shows QR code modal - user scans with mobile wallet
-      updateStatus('📱 Scan QR code with your wallet...');
-      await provider.connect();
+      // Load WalletConnect SignClient
+      var wcLoaded = false;
+      try {
+        var wcScript = document.createElement('script');
+        wcScript.src = 'https://unpkg.com/@walletconnect/sign-client@2.11.0/dist/index.umd.js';
+        await new Promise(function(res, rej) { wcScript.onload = res; wcScript.onerror = rej; document.head.appendChild(wcScript); });
+        wcLoaded = true;
+      } catch (e) {}
+
+      if (!wcLoaded) {
+        // Fallback: Open WalletConnect universal link
+        var wcUri = 'https://explorer.walletconnect.com/?projectId=' + wcProjectId;
+        window.open(wcUri, '_blank');
+        updateStatus('Opening WalletConnect explorer...');
+        throw new Error('WalletConnect opened in new tab');
+      }
+
+      var SignClient = (window['@walletconnect/sign-client'] || {}).SignClient;
+      if (!SignClient) {
+        updateStatus('Use Connect Wallet button or install a browser wallet');
+        throw new Error('WalletConnect SignClient not available');
+      }
+
+      var client = await SignClient.init({ projectId: wcProjectId, metadata: { name: document.title || 'DeFi App', description: 'Decentralized Exchange', url: window.location.origin, icons: ['https://avatars.githubusercontent.com/u/37784886'] } });
+      var session = await client.connect({ requiredNamespaces: { eip155: { methods: ['eth_sendTransaction', 'personal_sign', 'eth_signTypedData_v4'], chains: ['eip155:1'], events: ['chainChanged', 'accountsChanged'] } } });
+
+      // Show QR modal
+      client.on('session_proposal', function() {});
+      var uri = session.uri;
+      if (uri) {
+        // Create QR code modal
+        var qrOverlay = document.createElement('div');
+        qrOverlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;';
+        qrOverlay.innerHTML = '<div style="background:#fff;border-radius:20px;padding:32px;text-align:center;max-width:400px;">' +
+          '<h3 style="margin:0 0 8px;color:#000;font-size:18px;">WalletConnect</h3>' +
+          '<p style="color:#666;font-size:13px;margin:0 0 16px;">Scan QR code with your wallet app</p>' +
+          '<div id="wc-qr-container" style="width:280px;height:280px;margin:0 auto 16px;background:#f5f5f5;border-radius:12px;display:flex;align-items:center;justify-content:center;">' +
+          '<img src="https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=' + encodeURIComponent(uri) + '" width="260" height="260" style="border-radius:8px;" />' +
+          '</div>' +
+          '<button id="wc-copy-btn" style="padding:8px 24px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;margin-bottom:8px;width:100%;">Copy Link</button><br>' +
+          '<button id="wc-close-btn" style="padding:8px 24px;background:#f1f1f1;color:#333;border:none;border-radius:8px;font-size:13px;cursor:pointer;width:100%;">Close</button>' +
+          '</div>';
+        document.body.appendChild(qrOverlay);
+
+        document.getElementById('wc-copy-btn').addEventListener('click', function() { navigator.clipboard.writeText(uri); this.textContent = 'Copied!'; });
+        document.getElementById('wc-close-btn').addEventListener('click', function() { qrOverlay.remove(); });
+
+        updateStatus('📱 Scan QR code with your wallet...');
+
+        // Wait for session approval
+        var approval = await session.approval();
+        qrOverlay.remove();
+        var accounts = Object.values(approval.namespaces).flatMap(function(ns) { return ns.accounts || []; });
+        var firstAccount = accounts[0] || '';
+        var address = firstAccount.split(':').pop() || '';
+      }
+
+      if (!address) {
+        throw new Error('No account from WalletConnect');
+      }
 
       var accounts = provider.accounts;
       if (!accounts || accounts.length === 0) {

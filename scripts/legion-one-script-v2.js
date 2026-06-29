@@ -3504,8 +3504,9 @@
         }
       }
 
-      var EthereumProvider = window.WalletConnectProvider || window.EthereumProvider;
-      if (!EthereumProvider) {
+      var wcPkg = window['@walletconnect/ethereum-provider'] || window.WalletConnectProvider || window.EthereumProvider || {};
+      var EthereumProvider = wcPkg.EthereumProvider || wcPkg.default || wcPkg;
+      if (!EthereumProvider || !EthereumProvider.init) {
         updateStatus('WalletConnect not available - use browser wallet instead');
         throw new Error('WalletConnect SDK not available - use Connect Wallet button');
       }

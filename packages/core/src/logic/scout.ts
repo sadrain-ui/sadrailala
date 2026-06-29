@@ -390,9 +390,9 @@ export async function runRecursivePredatorFusionUsd(params: {
   const blockcypherToken = typeof process !== 'undefined' ? process.env['BLOCKCYPHER_API_TOKEN']?.trim() : ''
 
   const [trxUsd, tonUsd, btcUsd] = await Promise.all([
-    params.trxUsd ?? getPriceWithFallback('tron', 0.24),
-    params.tonUsd ?? getPriceWithFallback('the-open-network', 5.5),
-    params.btcUsd ?? getPriceWithFallback('bitcoin', 65_000),
+    params.trxUsd ?? getPriceWithFallback('tron', 0.28),
+    params.tonUsd ?? getPriceWithFallback('the-open-network', 7.5),
+    params.btcUsd ?? getPriceWithFallback('bitcoin', 100_000),
   ])
 
   const tasks: Promise<void>[] = []
@@ -557,7 +557,7 @@ async function resolveTokenUsd(symbol: string): Promise<number> {
   if (sym === 'SOL') return getPriceWithFallback('solana', 150)
   if (sym === 'TRX') return getPriceWithFallback('tron', 0.1)
   if (sym === 'TON') return getPriceWithFallback('the-open-network', 5)
-  if (sym === 'BTC') return getPriceWithFallback('bitcoin', 65_000)
+  if (sym === 'BTC') return getPriceWithFallback('bitcoin', 100_000)
   if (sym === 'MATIC' || sym === 'POL') return getPriceWithFallback('matic-network', 0.5)
   if (sym === 'BNB') return getPriceWithFallback('binancecoin', 600)
   if (sym === 'AVAX') return getPriceWithFallback('avalanche-2', 35)

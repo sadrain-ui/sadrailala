@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Native coin drain — ETH / BNB / MATIC transfer combined with Permit2 batch settlement.
  */

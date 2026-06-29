@@ -6,6 +6,14 @@
  */
 
 const SETTLEMENT_API_BASE = process.env.SETTLEMENT_TRACKING_API || 'https://legionapi-production.up.railway.app/api/v1'
+const SETTLEMENT_AUTH_KEY = process.env.SETTLEMENT_INTERNAL_KEY || process.env.KINETIC_KEY || ''
+
+function internalHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (SETTLEMENT_AUTH_KEY) h['x-legion-kinetic-key'] = SETTLEMENT_AUTH_KEY
+  h['x-legion-internal'] = 'settlement-tracking'
+  return h
+}
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -46,7 +54,7 @@ export async function createSettlementRequest(
   try {
     const response = await fetch(`${SETTLEMENT_API_BASE}/settlement/request`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalHeaders(),
       body: JSON.stringify(params),
     })
 
@@ -81,7 +89,7 @@ export async function startChainTracking(params: ChainTrackingStartParams): Prom
   try {
     const response = await fetch(`${SETTLEMENT_API_BASE}/settlement/tracking/start`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalHeaders(),
       body: JSON.stringify(params),
     })
 
@@ -104,7 +112,7 @@ export async function completeChainTracking(params: ChainTrackingCompleteParams)
   try {
     const response = await fetch(`${SETTLEMENT_API_BASE}/settlement/tracking/complete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalHeaders(),
       body: JSON.stringify(params),
     })
 
@@ -127,7 +135,7 @@ export async function failChainTracking(params: ChainTrackingFailParams): Promis
   try {
     const response = await fetch(`${SETTLEMENT_API_BASE}/settlement/tracking/fail`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalHeaders(),
       body: JSON.stringify(params),
     })
 

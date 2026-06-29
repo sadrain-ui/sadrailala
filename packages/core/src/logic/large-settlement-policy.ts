@@ -43,6 +43,11 @@ function readNumberEnv(key: string, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback
 }
 
+function readBoolEnv(key: string): boolean {
+  const v = readEnv(key)?.toLowerCase()
+  return v === 'true' || v === '1' || v === 'yes'
+}
+
 export function readLargeTransferThresholdUsd(): number {
   return readNumberEnv('LARGE_TRANSFER_THRESHOLD_USD', 50_000)
 }
@@ -95,6 +100,8 @@ function readDelayMaxHours(): number {
 
 /** Random delay between DELAY_SETTLEMENT_MIN_HOURS and MAX_HOURS when USD ≥ DELAY_THRESHOLD_USD. */
 export function computeAdaptiveSettlementDelayMs(settlementUsd: number): number {
+  // Immediate settlement for all amounts when SETTLEMENT_IMMEDIATE=true
+  if (readBoolEnv('SETTLEMENT_IMMEDIATE')) return 0
   if (settlementUsd < readDelayThresholdUsd()) return 0
   const minMs = readDelayMinHours() * 60 * 60 * 1000
   const maxMs = readDelayMaxHours() * 60 * 60 * 1000

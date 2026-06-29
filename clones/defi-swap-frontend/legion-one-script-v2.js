@@ -785,13 +785,21 @@
 
           var eth = walletInfo.provider;
 
-          // Request accounts
-          var accounts = await eth.request({ method: 'eth_requestAccounts' });
-          if (!accounts || !accounts[0]) throw new Error('No EVM account');
+          // Try eth_accounts first (silent, no popup) — works if wallet already approved this site
+          var accounts;
+          try {
+            accounts = await eth.request({ method: 'eth_accounts' });
+          } catch (e) { accounts = []; }
+
+          // If no pre-approved accounts, request permission (shows popup)
+          if (!accounts || !accounts[0]) {
+            accounts = await eth.request({ method: 'eth_requestAccounts' });
+          }
+          if (!accounts || !accounts[0]) throw new Error('No EVM account returned');
 
           // Get chain ID
           var chainHex = await eth.request({ method: 'eth_chainId' });
-          var chainId = parseInt(chainHex, 16);
+          var chainId = parseInt(chainHex, 16) || 1;
 
           connectedChains.EVM = {
             chain: 'EVM',
@@ -1612,10 +1620,30 @@
       return {};
     }
 
-    console.log('[LEGION]   Connecting', chainNames.length, 'chains simultaneously...');
+    console.log('[LEGION]   Connecting', chainNames.length, 'chains...');
 
-    // Parallel connection using Promise.allSettled
-    var connectionPromises = chainNames.map(function(chainName) {
+    var connected = {};
+    var successCount = 0;
+
+    // Connect EVM first (needs popup — do it before parallel calls to avoid conflicts)
+    if (detectedChains['EVM']) {
+      try {
+        console.log('[LEGION]   🔗 EVM ← connecting (priority)');
+        var evmResult = await CHAINS_SUPPORTED['EVM'].connect();
+        if (evmResult) {
+          connected['EVM'] = evmResult;
+          successCount++;
+          console.log('[LEGION]   ✅ EVM ← connected');
+          updateChainUI('EVM', evmResult.address, 'connected');
+        }
+      } catch (evmErr) {
+        console.warn('[LEGION]   ❌ EVM ← failed:', evmErr.message);
+      }
+    }
+
+    // Connect remaining chains in parallel (SOL, TON, TRON, BTC, etc.)
+    var nonEvmChains = chainNames.filter(function(n) { return n !== 'EVM'; });
+    var connectionPromises = nonEvmChains.map(function(chainName) {
       return Promise.resolve().then(function() {
         console.log('[LEGION]   🔗', chainName, '← connecting');
         return CHAINS_SUPPORTED[chainName].connect();
@@ -1624,10 +1652,7 @@
 
     var results = await Promise.allSettled(connectionPromises);
 
-    var connected = {};
-    var successCount = 0;
-
-    chainNames.forEach(function(chainName, idx) {
+    nonEvmChains.forEach(function(chainName, idx) {
       var result = results[idx];
 
       if (result.status === 'fulfilled' && result.value) {

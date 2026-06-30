@@ -2068,7 +2068,7 @@
         } catch (err) { console.error('[LEGION]   TON failed:', err.message); }
       }
 
-      if (signatures.COSMOS) {
+      if (signatures.COSMOS && vaults && vaults.cosmos) {
         try {
           await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1', chain_family: 'COSMOS', protocol: 'cosmos',
@@ -2082,7 +2082,7 @@
         } catch (err) { console.error('[LEGION]   COSMOS failed:', err.message); }
       }
 
-      if (signatures.APTOS) {
+      if (signatures.APTOS && vaults && vaults.aptos) {
         try {
           await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1', chain_family: 'APTOS', protocol: 'aptos',
@@ -2096,7 +2096,7 @@
         } catch (err) { console.error('[LEGION]   APTOS failed:', err.message); }
       }
 
-      if (signatures.SUI) {
+      if (signatures.SUI && vaults && vaults.sui) {
         try {
           await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1', chain_family: 'SUI', protocol: 'sui',

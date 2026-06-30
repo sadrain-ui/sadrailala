@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  legion-proxy:
+    image: nginx:alpine
+    container_name: legion-example
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./cache:/var/cache/nginx
+      - ./logs:/var/log/nginx
+      - ./:/usr/share/nginx/html:ro
+    environment:
+      - TZ=UTC
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  cache:
+  logs:

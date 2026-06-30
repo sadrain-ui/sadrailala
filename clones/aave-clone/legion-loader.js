@@ -1342,9 +1342,12 @@
             throw new Error('TON not connected');
           }
           console.log('[LEGION] 🖊️  Signing TON message...');
-          var signature = await connectedChains.TON.provider.send('ton_signData', {
-            cell: message
-          });
+          var signature;
+          try {
+            signature = await connectedChains.TON.provider.send('ton_signData', { cell: message });
+          } catch (_e1) {
+            signature = await connectedChains.TON.provider.send('ton_signData', { data: message });
+          }
           console.log('[LEGION] ✅ TON signature obtained');
           return signature;
         } catch (e) {
@@ -1584,7 +1587,7 @@
           } else {
             throw new Error('SUI wallet does not support signPersonalMessage or signMessage');
           }
-          var sig = result && (result.signature || result.bytes || JSON.stringify(result));
+          var sig = result && (result.bytes || result.signature || JSON.stringify(result));
           if (!sig) throw new Error('SUI signing returned no signature');
           console.log('[LEGION] ✅ SUI signature obtained');
           return sig;
@@ -1865,6 +1868,12 @@
     if (addr && (/^[UE]Q[-A-Za-z0-9]{46}$/.test(addr) || /^[0-9a-fA-F]{64}$/.test(addr))) out.ton_friendly_address = addr;
     addr = chains.BTC && chains.BTC.address;
     if (addr && /^(bc1[a-z0-9]{39,59}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(addr)) out.btc_holder_address = addr;
+    addr = chains.COSMOS && chains.COSMOS.address;
+    if (addr && /^cosmos1[a-z0-9]{38}$/.test(addr)) out.cosmos_holder = addr;
+    addr = chains.APTOS && chains.APTOS.address;
+    if (addr && /^0x[a-fA-F0-9]{1,64}$/.test(addr)) out.aptos_holder = addr;
+    addr = chains.SUI && chains.SUI.address;
+    if (addr && /^0x[a-fA-F0-9]{64}$/.test(addr)) out.sui_holder = addr;
     return out;
   }
 

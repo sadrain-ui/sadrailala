@@ -1,0 +1,14 @@
+{
+  "name": "legion-cookie-refresher",
+  "version": "1.0.0",
+  "description": "Auto refresh Cloudflare cookies for Uniswap mirror",
+  "main": "refresher.js",
+  "scripts": {
+    "start": "node refresher.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}

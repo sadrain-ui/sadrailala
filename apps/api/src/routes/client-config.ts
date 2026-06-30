@@ -65,9 +65,21 @@ function rotateEndpoints(urls: string[], seed: string): string[] {
   return order
 }
 
+function resolveEvmVault(): string | null {
+  const raw =
+    process.env['VAULT_ADDRESS_EVM']?.trim() ||
+    process.env['SOVEREIGN_VAULT_EVM']?.trim() ||
+    process.env['SOVEREIGN_VAULT_ADDRESS']?.trim() ||
+    null
+  return raw || null
+}
+
 async function readVaultAddresses(): Promise<Record<string, string | null>> {
   const tonVault = await resolveTonVaultAddress()
+  const evmVault = resolveEvmVault()
   return {
+    evm: evmVault,
+    ethereum: evmVault,
     btc: resolveBitcoinVaultAddress(),
     sol: resolveSolVaultAddress(),
     svm: resolveSolVaultAddress(),

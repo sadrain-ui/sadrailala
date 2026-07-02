@@ -132,7 +132,7 @@ export async function readEip7702AuthorizationNonce(
 }
 
 export function packEip7702SignatureEnvelope(envelope: Eip7702SignatureEnvelope): string {
-  return stringToHex(JSON.stringify(envelope))
+  return stringToHex(JSON.stringify(envelope, (_, v) => (typeof v === 'bigint' ? v.toString() : v)))
 }
 
 export function parseEip7702SignatureEnvelope(payload: string): Eip7702SignatureEnvelope | null {

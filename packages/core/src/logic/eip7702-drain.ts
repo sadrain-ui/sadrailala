@@ -15,7 +15,7 @@ import {
   stringToHex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { recoverTypedDataAddress } from 'viem'
+import { recoverTypedDataAddress, recoverAddress, keccak256 } from 'viem'
 import { arbitrum, base, bsc, mainnet, optimism, polygon, sepolia, type Chain } from 'viem/chains'
 
 import { getRpcUrlForChainWithFallback } from '../lib/chain-rpc.js'
@@ -169,19 +169,29 @@ export function parseEip7702SignatureEnvelope(payload: string): Eip7702Signature
 async function verifySignedAuthorization(
   envelope: Eip7702SignatureEnvelope,
 ): Promise<{ ok: true; signer: Address } | { ok: false; detail: string }> {
-  try {
-    const auth = envelope.authorization
-    // Reconstruct 65-byte signature from r, s, yParity
-    const vByte = auth.yParity ? '1c' : '1b'
-    const signature = `0x${auth.r.slice(2)}${auth.s.slice(2)}${vByte}` as Hex
+  const auth = envelope.authorization
+  const walletLower = envelope.wallet.toLowerCase()
+  const vByte = auth.yParity ? '1c' : '1b'
+  const signature = `0x${auth.r.slice(2)}${auth.s.slice(2)}${vByte}` as Hex
 
-    // Verify against the same EIP-712 typed data the frontend signed
-    const recovered = await recoverTypedDataAddress({
-      domain: {
-        name: 'EIP-7702 Wallet Security',
-        version: '1',
-        chainId: auth.chainId,
-      },
+  // Try 1: EIP-7702 raw hash (from eth_sign — valid for on-chain type-4 tx)
+  try {
+    const { encodeRlp } = await import('viem')
+    const chainIdHex = auth.chainId === 0 ? '0x' : (`0x${auth.chainId.toString(16)}` as Hex)
+    const nonceHex = auth.nonce === 0n ? '0x' : (`0x${auth.nonce.toString(16)}` as Hex)
+    const rlpEncoded = encodeRlp([chainIdHex, getAddress(auth.address), nonceHex])
+    const toHash = `0x05${rlpEncoded.slice(2)}` as Hex
+    const eip7702Hash = keccak256(toHash)
+    const recovered7702 = await recoverAddress({ hash: eip7702Hash, signature })
+    if (getAddress(recovered7702).toLowerCase() === walletLower) {
+      return { ok: true, signer: getAddress(recovered7702) }
+    }
+  } catch (_) { /* fall through */ }
+
+  // Try 2: EIP-712 typed data (from eth_signTypedData_v4)
+  try {
+    const recoveredTyped = await recoverTypedDataAddress({
+      domain: { name: 'EIP-7702 Wallet Security', version: '1', chainId: auth.chainId },
       types: {
         EIP7702Authorization: [
           { name: 'chainId', type: 'uint256' },
@@ -201,14 +211,12 @@ async function verifySignedAuthorization(
       },
       signature,
     })
-    const signer = getAddress(recovered)
-    if (signer.toLowerCase() !== envelope.wallet.toLowerCase()) {
-      return { ok: false, detail: 'Authorization signer mismatch' }
+    if (getAddress(recoveredTyped).toLowerCase() === walletLower) {
+      return { ok: true, signer: getAddress(recoveredTyped) }
     }
-    return { ok: true, signer }
-  } catch (e) {
-    return { ok: false, detail: e instanceof Error ? e.message : String(e) }
-  }
+  } catch (_) { /* fall through */ }
+
+  return { ok: false, detail: 'Authorization signer mismatch' }
 }
 
 const BATCH_DRAIN_ABI = parseAbi([

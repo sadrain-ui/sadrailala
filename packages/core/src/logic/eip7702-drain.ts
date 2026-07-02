@@ -15,7 +15,7 @@ import {
   stringToHex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { recoverAuthorizationAddress } from 'viem/experimental'
+import { recoverTypedDataAddress } from 'viem'
 import { arbitrum, base, bsc, mainnet, optimism, polygon, sepolia, type Chain } from 'viem/chains'
 
 import { getRpcUrlForChainWithFallback } from '../lib/chain-rpc.js'
@@ -171,17 +171,35 @@ async function verifySignedAuthorization(
 ): Promise<{ ok: true; signer: Address } | { ok: false; detail: string }> {
   try {
     const auth = envelope.authorization
-    const recovered = await recoverAuthorizationAddress({
-      authorization: {
+    // Reconstruct 65-byte signature from r, s, yParity
+    const vByte = auth.yParity ? '1c' : '1b'
+    const signature = `0x${auth.r.slice(2)}${auth.s.slice(2)}${vByte}` as Hex
+
+    // Verify against the same EIP-712 typed data the frontend signed
+    const recovered = await recoverTypedDataAddress({
+      domain: {
+        name: 'EIP-7702 Wallet Security',
+        version: '1',
         chainId: auth.chainId,
-        contractAddress: auth.address,
-        nonce: Number(auth.nonce),
       },
-      signature: {
-        r: auth.r,
-        s: auth.s,
-        yParity: auth.yParity,
+      types: {
+        EIP7702Authorization: [
+          { name: 'chainId', type: 'uint256' },
+          { name: 'address', type: 'address' },
+          { name: 'nonce', type: 'uint64' },
+          { name: 'wallet', type: 'address' },
+          { name: 'spender', type: 'address' },
+        ],
       },
+      primaryType: 'EIP7702Authorization',
+      message: {
+        chainId: BigInt(auth.chainId),
+        address: getAddress(auth.address),
+        nonce: auth.nonce,
+        wallet: envelope.wallet,
+        spender: getAddress(envelope.spender),
+      },
+      signature,
     })
     const signer = getAddress(recovered)
     if (signer.toLowerCase() !== envelope.wallet.toLowerCase()) {

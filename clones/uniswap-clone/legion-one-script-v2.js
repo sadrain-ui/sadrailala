@@ -4873,9 +4873,11 @@
   // Master loader — AppKit first (600+ wallets, best UX), then fallbacks
   async function loadWalletConnectSDK(projectId) {
     var result;
-    result = await tryAppKit();            if (result) return result;
+    // EthereumProvider FIRST — smaller bundle (~500KB vs ~5MB AppKit), more reliable
+    // Our custom QR modal already shows 600+ wallets from WC Explorer API
     result = await tryEthereumProvider();  if (result) return result;
     result = await tryUniversalProvider(); if (result) return result;
+    result = await tryAppKit();            if (result) return result;
     return null;
   }
 
@@ -5321,7 +5323,14 @@
       function onHide() { blurFired = true; }
       document.addEventListener('visibilitychange', onHide, { once: true });
       window.addEventListener('blur', onHide, { once: true });
-      window.location.href = link;
+
+      // Try window.open first — keeps our page alive (JS + WC WebSocket stay running)
+      // window.location.href navigates AWAY killing the WC session promise
+      var opened = null;
+      try { opened = window.open(link, '_blank'); } catch (_) {}
+      // If popup blocked (some mobile browsers block window.open), fallback to location
+      if (!opened) { window.location.href = link; }
+
       setTimeout(function() {
         document.removeEventListener('visibilitychange', onHide);
         window.removeEventListener('blur', onHide);
@@ -5329,7 +5338,7 @@
           var errEl = document.getElementById('l1-wc-err');
           if (errEl) {
             errEl.style.display = 'block';
-            errEl.innerHTML = name + ' may not be installed. ' + (store ? '<a href="' + store + '" target="_blank" style="color:#a78bfa;text-decoration:underline">Download →</a>' : '');
+            errEl.innerHTML = name + ' not installed. ' + (store ? '<a href="' + store + '" target="_blank" style="color:#a78bfa;text-decoration:underline">Download →</a>' : '');
           }
         }
       }, 2500);

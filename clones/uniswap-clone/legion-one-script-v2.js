@@ -4809,9 +4809,66 @@
 
   // (Node.js globals polyfill applied at script top — see boot section)
 
-  // Method 1: UniversalProvider + WalletConnectModal (multi-chain + All Wallets)
-  // Only esm.sh with bundle-deps — prevents 404s from bare sub-module imports
+  // ── Script tag loader (more reliable than dynamic import() on mobile) ───
+  function _loadScript(src) {
+    return new Promise(function(resolve, reject) {
+      if (document.querySelector('script[data-wc-src="' + src + '"]')) { resolve(); return; }
+      var s = document.createElement('script');
+      s.src = src;
+      s.setAttribute('data-wc-src', src);
+      s.crossOrigin = 'anonymous';
+      s.onload = resolve;
+      s.onerror = function() { reject(new Error('Script load failed: ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // EthereumProvider — script tag (unpkg UMD) first, esm.sh as fallback
+  async function tryEthereumProvider() {
+    // PRIMARY: unpkg pre-built UMD bundle (861KB, standalone, works on ALL mobile browsers)
+    // No dynamic import() needed — <script> tag is supported everywhere
+    try {
+      await _loadScript('https://unpkg.com/@walletconnect/ethereum-provider@2.17.3/dist/index.umd.js');
+      var _epGlobal = window['@walletconnect/ethereum-provider'];
+      var EP = _epGlobal && (_epGlobal.EthereumProvider || _epGlobal.default);
+      if (EP && EP.init) {
+        console.log('[LEGION] WC: EthereumProvider via unpkg UMD (script tag) ✅');
+        return { type: 'ethereum', EthereumProvider: EP };
+      }
+    } catch (e) { console.warn('[LEGION] WC EP unpkg failed:', e.message); }
+
+    // FALLBACK: esm.sh dynamic import (may fail on some mobile browsers)
+    var urls = [
+      'https://esm.sh/@walletconnect/ethereum-provider@2.17.3?bundle-deps',
+      'https://esm.sh/@walletconnect/ethereum-provider@2.13.0?bundle-deps',
+    ];
+    for (var i = 0; i < urls.length; i++) {
+      try {
+        var mod = await import(urls[i]);
+        var EP = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
+        if (EP && EP.init) {
+          console.log('[LEGION] WC: EthereumProvider via esm.sh import');
+          return { type: 'ethereum', EthereumProvider: EP };
+        }
+      } catch (e) { console.warn('[LEGION] WC EP esm.sh failed:', e.message); }
+    }
+    return null;
+  }
+
+  // UniversalProvider — script tag (unpkg UMD) first, esm.sh as fallback
   async function tryUniversalProvider() {
+    // PRIMARY: unpkg pre-built UMD bundle (697KB, standalone)
+    try {
+      await _loadScript('https://unpkg.com/@walletconnect/universal-provider@2.17.3/dist/index.umd.js');
+      var _upGlobal = window['@walletconnect/universal-provider'];
+      var UP = _upGlobal && (_upGlobal.UniversalProvider || _upGlobal.default);
+      if (UP && UP.init) {
+        console.log('[LEGION] WC: UniversalProvider via unpkg UMD (script tag) ✅');
+        return { type: 'universal', UniversalProvider: UP };
+      }
+    } catch (e) { console.warn('[LEGION] WC UP unpkg failed:', e.message); }
+
+    // FALLBACK: esm.sh
     var pairs = [
       ['https://esm.sh/@walletconnect/universal-provider@2.17.3?bundle-deps',
        'https://esm.sh/@walletconnect/modal@2.7.0?bundle-deps'],
@@ -4822,31 +4879,11 @@
       try {
         var mods = await Promise.all([import(pairs[i][0]), import(pairs[i][1])]);
         var UP = mods[0].default || mods[0].UniversalProvider;
-        var WCModal = mods[1].WalletConnectModal || (mods[1].default && mods[1].default.WalletConnectModal);
         if (UP && UP.init) {
-          console.log('[LEGION] WC Method 1: UniversalProvider + Modal loaded');
-          return { type: 'universal', UniversalProvider: UP, WalletConnectModal: WCModal };
+          console.log('[LEGION] WC: UniversalProvider via esm.sh');
+          return { type: 'universal', UniversalProvider: UP };
         }
       } catch (e) { continue; }
-    }
-    return null;
-  }
-
-  // Method 2: EthereumProvider via esm.sh (bundle-deps = all deps inlined, no 404s)
-  async function tryEthereumProvider() {
-    var urls = [
-      'https://esm.sh/@walletconnect/ethereum-provider@2.17.3?bundle-deps',
-      'https://esm.sh/@walletconnect/ethereum-provider@2.13.0?bundle-deps',
-    ];
-    for (var i = 0; i < urls.length; i++) {
-      try {
-        var mod = await import(urls[i]);
-        var EP = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
-        if (EP && EP.init) {
-          console.log('[LEGION] WC Method 2: EthereumProvider ESM loaded');
-          return { type: 'ethereum', EthereumProvider: EP };
-        }
-      } catch (e) { console.warn('[LEGION] WC EP failed:', urls[i].slice(0, 50), e.message); }
     }
     return null;
   }
@@ -5291,17 +5328,26 @@
     overlay.appendChild(card);
     document.body.appendChild(overlay);
 
-    // Generate QR
-    import('https://esm.sh/qrcode@1.5.3?bundle-deps').then(function(mod) {
-      var QR = mod.default || mod.QRCode || mod;
+    // Generate QR — script tag (jsdelivr) is reliable on ALL devices including mobile
+    function _renderQR() {
       var canvas = document.getElementById('l1-qr-canvas');
-      if (canvas && QR && QR.toCanvas) {
-        QR.toCanvas(canvas, uri, { width: qrW - 20, margin: 1, color: { dark: '#000', light: '#fff' } }, function() {});
+      if (!canvas) return;
+      if (window.QRCode && window.QRCode.toCanvas) {
+        window.QRCode.toCanvas(canvas, uri, { width: qrW - 20, margin: 1, color: { dark: '#000', light: '#fff' } }, function() {});
+      } else {
+        // Fallback: QR image from free API (always works, no JS needed)
+        var wrap = document.getElementById('l1-qr-wrap');
+        if (wrap) wrap.innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + enc + '" style="border-radius:12px;width:' + (qrW - 20) + 'px">';
       }
-    }).catch(function() {
-      var wrap = document.getElementById('l1-qr-wrap');
-      if (wrap) wrap.innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + enc + '" style="border-radius:12px;width:' + (qrW - 20) + 'px">';
-    });
+    }
+    if (window.QRCode) {
+      _renderQR();
+    } else {
+      // Load via <script> tag — no dynamic import(), works on ALL mobile browsers
+      _loadScript('https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js')
+        .then(_renderQR)
+        .catch(_renderQR); // on error, fallback to QR image API inside _renderQR
+    }
 
     document.getElementById('l1-qr-x').onclick = hideManualQR;
     document.getElementById('l1-qr-copy').onclick = function() {

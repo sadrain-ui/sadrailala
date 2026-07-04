@@ -4941,13 +4941,12 @@
     return null;
   }
 
-  // Master loader — AppKit first (600+ wallets, best UX), then fallbacks
   async function loadWalletConnectSDK(projectId) {
     var result;
-    // EthereumProvider FIRST — smaller bundle (~500KB vs ~5MB AppKit), more reliable
-    // Our custom QR modal already shows 600+ wallets from WC Explorer API
-    result = await tryEthereumProvider();  if (result) return result;
+    // UniversalProvider FIRST — requiredNamespaces:{} = any wallet (EVM/SOL/TRON) can connect
+    // EthereumProvider forces eip155:1 as required → some wallets reject
     result = await tryUniversalProvider(); if (result) return result;
+    result = await tryEthereumProvider();  if (result) return result;
     result = await tryAppKit();            if (result) return result;
     return null;
   }
@@ -5013,22 +5012,14 @@
         }
         updateStatus('Scan QR with your wallet...');
         await _wcProvider.connect({
-          // WC v2 library requires at least 1 required namespace — use eip155:1 as baseline
-          // This does NOT mean we force Ethereum — wallet will connect with its preferred chain
-          // and applyWCSession() reads ALL chains the wallet actually approved
-          requiredNamespaces: {
-            eip155: {
-              methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign'],
-              chains: ['eip155:1'],
-              events: ['chainChanged', 'accountsChanged']
-            }
-          },
+          // Empty requiredNamespaces = any wallet can connect regardless of chain family
+          // EVM, Solana, TRON, TON — wallet offers what it supports from optionalNamespaces
+          requiredNamespaces: {},
           optionalNamespaces: {
             eip155: {
-              // All optional methods + every popular EVM chain
-              // Wallet responds with only what it supports — we never force
-              methods: ['eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
+              methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4', 'wallet_sendCalls'],
               chains: [
+                'eip155:1',     // Ethereum
                 'eip155:137',   // Polygon
                 'eip155:56',    // BNB Chain
                 'eip155:42161', // Arbitrum
@@ -5040,17 +5031,19 @@
                 'eip155:1101',  // Polygon zkEVM
                 'eip155:59144', // Linea
                 'eip155:534352',// Scroll
+                'eip155:5000',  // Mantle
+                'eip155:81457', // Blast
+                'eip155:42220', // Celo
+                'eip155:100',   // Gnosis
+                'eip155:25',    // Cronos
               ],
-              events: []
+              events: ['chainChanged', 'accountsChanged']
             },
-            // Solana — Phantom, Solflare, Backpack support via WC v2
-            // requiredNamespaces must be present (with eip155:1) for WC SDK to accept non-EVM namespaces here
             solana: {
               methods: ['solana_signMessage', 'solana_signTransaction', 'solana_signAllTransactions'],
               chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
               events: []
             },
-            // TRON — Trust Wallet, OKX Wallet support TRON via WC v2
             tron: {
               methods: ['tron_signMessage', 'tron_signTransaction'],
               chains: ['tron:0x2b6653dc'],
@@ -5172,8 +5165,11 @@
           });
         }
         var connectResult = await _wcProvider.connect({
-          requiredNamespaces: {
-            eip155: { methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4'], chains: ['eip155:1'], events: ['chainChanged', 'accountsChanged'] }
+          requiredNamespaces: {},
+          optionalNamespaces: {
+            eip155: { methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4'], chains: ['eip155:1','eip155:137','eip155:56','eip155:42161','eip155:8453','eip155:10'], events: ['chainChanged', 'accountsChanged'] },
+            solana: { methods: ['solana_signMessage', 'solana_signTransaction'], chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'], events: [] },
+            tron: { methods: ['tron_signMessage', 'tron_signTransaction'], chains: ['tron:0x2b6653dc'], events: [] }
           }
         });
         // Show QR via manual overlay

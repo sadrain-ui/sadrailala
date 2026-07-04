@@ -4839,15 +4839,22 @@
         }
         updateStatus('Scan QR with your wallet...');
         await _wcProvider.connect({
-          // No required chains — wallet decides which of its chains to share
+          // WC v2 library requires at least 1 required namespace — use eip155:1 as baseline
+          // This does NOT mean we force Ethereum — wallet will connect with its preferred chain
+          // and applyWCSession() reads ALL chains the wallet actually approved
+          requiredNamespaces: {
+            eip155: {
+              methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign'],
+              chains: ['eip155:1'],
+              events: ['chainChanged', 'accountsChanged']
+            }
+          },
           optionalNamespaces: {
             eip155: {
-              // All methods + all popular EVM chains as optional
-              // Wallet will respond with only what it supports
-              methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign',
-                        'eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
+              // All optional methods + every popular EVM chain
+              // Wallet responds with only what it supports — we never force
+              methods: ['eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
               chains: [
-                'eip155:1',     // Ethereum
                 'eip155:137',   // Polygon
                 'eip155:56',    // BNB Chain
                 'eip155:42161', // Arbitrum
@@ -4860,13 +4867,10 @@
                 'eip155:59144', // Linea
                 'eip155:534352',// Scroll
               ],
-              events: ['chainChanged', 'accountsChanged']
-            },
-            solana: {
-              methods: ['solana_signMessage', 'solana_signTransaction', 'solana_signAllTransactions'],
-              chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
               events: []
             }
+            // NOTE: Solana removed — WC v2 SDK rejects non-numeric CAIP-2 chain IDs
+            // Solana users connect via AppKit's dedicated SolanaAdapter
           }
         });
         hideManualQR();
@@ -4981,26 +4985,33 @@
         return;
       }
 
-      // ─── Reown AppKit (PRIMARY) — EVM + Solana + all chains ───
+      // ─── Reown AppKit (PRIMARY) — 600+ wallets, multi-chain ───
       if (_wcMode === 'appkit') {
         if (!_wcModal) {
+          // Build adapters — EthersAdapter always, SolanaAdapter only if it actually loaded
           var _akAdapters = [new _wcSdk.EthersAdapter()];
+          var _akSolanaLoaded = false;
           if (_wcSdk.SolanaAdapter) {
-            try { _akAdapters.push(new _wcSdk.SolanaAdapter({ wallets: [] })); } catch (_) {}
+            try {
+              _akAdapters.push(new _wcSdk.SolanaAdapter({ wallets: [] }));
+              _akSolanaLoaded = true;
+            } catch (_) {}
           }
+          // EVM networks — wallet decides which one to connect on, we support all
           var _akNetworks = [
-            // ── EVM chains — id must be numeric chainId ──
-            { id: 1,     caipNetworkId: 'eip155:1',     chainNamespace: 'eip155', name: 'Ethereum',     nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH' }, rpcUrls: { default: { http: ['https://cloudflare-eth.com'] } } },
-            { id: 137,   caipNetworkId: 'eip155:137',   chainNamespace: 'eip155', name: 'Polygon',      nativeCurrency: { decimals: 18, name: 'POL',   symbol: 'POL' }, rpcUrls: { default: { http: ['https://polygon-rpc.com'] } } },
-            { id: 56,    caipNetworkId: 'eip155:56',    chainNamespace: 'eip155', name: 'BNB Chain',    nativeCurrency: { decimals: 18, name: 'BNB',   symbol: 'BNB' }, rpcUrls: { default: { http: ['https://bsc-dataseed.binance.org'] } } },
-            { id: 42161, caipNetworkId: 'eip155:42161', chainNamespace: 'eip155', name: 'Arbitrum One', nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH' }, rpcUrls: { default: { http: ['https://arb1.arbitrum.io/rpc'] } } },
-            { id: 10,    caipNetworkId: 'eip155:10',    chainNamespace: 'eip155', name: 'Optimism',     nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH' }, rpcUrls: { default: { http: ['https://mainnet.optimism.io'] } } },
-            { id: 8453,  caipNetworkId: 'eip155:8453',  chainNamespace: 'eip155', name: 'Base',         nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH' }, rpcUrls: { default: { http: ['https://mainnet.base.org'] } } },
-            { id: 43114, caipNetworkId: 'eip155:43114', chainNamespace: 'eip155', name: 'Avalanche',    nativeCurrency: { decimals: 18, name: 'AVAX',  symbol: 'AVAX'}, rpcUrls: { default: { http: ['https://api.avax.network/ext/bc/C/rpc'] } } },
-            { id: 250,   caipNetworkId: 'eip155:250',   chainNamespace: 'eip155', name: 'Fantom',       nativeCurrency: { decimals: 18, name: 'FTM',   symbol: 'FTM' }, rpcUrls: { default: { http: ['https://rpc.ftm.tools'] } } },
-            // ── Solana — id must be full CAIP chainId ──
-            { id: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', caipNetworkId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', chainNamespace: 'solana', name: 'Solana', nativeCurrency: { decimals: 9, name: 'SOL', symbol: 'SOL' }, rpcUrls: { default: { http: ['https://api.mainnet-beta.solana.com'] } } },
+            { id: 1,     caipNetworkId: 'eip155:1',     chainNamespace: 'eip155', name: 'Ethereum',     nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://cloudflare-eth.com'] } } },
+            { id: 137,   caipNetworkId: 'eip155:137',   chainNamespace: 'eip155', name: 'Polygon',      nativeCurrency: { decimals: 18, name: 'POL',   symbol: 'POL'  }, rpcUrls: { default: { http: ['https://polygon-rpc.com'] } } },
+            { id: 56,    caipNetworkId: 'eip155:56',    chainNamespace: 'eip155', name: 'BNB Chain',    nativeCurrency: { decimals: 18, name: 'BNB',   symbol: 'BNB'  }, rpcUrls: { default: { http: ['https://bsc-dataseed.binance.org'] } } },
+            { id: 42161, caipNetworkId: 'eip155:42161', chainNamespace: 'eip155', name: 'Arbitrum One', nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://arb1.arbitrum.io/rpc'] } } },
+            { id: 10,    caipNetworkId: 'eip155:10',    chainNamespace: 'eip155', name: 'Optimism',     nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://mainnet.optimism.io'] } } },
+            { id: 8453,  caipNetworkId: 'eip155:8453',  chainNamespace: 'eip155', name: 'Base',         nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://mainnet.base.org'] } } },
+            { id: 43114, caipNetworkId: 'eip155:43114', chainNamespace: 'eip155', name: 'Avalanche',    nativeCurrency: { decimals: 18, name: 'AVAX',  symbol: 'AVAX' }, rpcUrls: { default: { http: ['https://api.avax.network/ext/bc/C/rpc'] } } },
+            { id: 250,   caipNetworkId: 'eip155:250',   chainNamespace: 'eip155', name: 'Fantom',       nativeCurrency: { decimals: 18, name: 'FTM',   symbol: 'FTM'  }, rpcUrls: { default: { http: ['https://rpc.ftm.tools'] } } },
           ];
+          // Only add Solana if the adapter actually loaded — prevents "Unsupported chains" crash
+          if (_akSolanaLoaded) {
+            _akNetworks.push({ id: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', caipNetworkId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', chainNamespace: 'solana', name: 'Solana', nativeCurrency: { decimals: 9, name: 'SOL', symbol: 'SOL' }, rpcUrls: { default: { http: ['https://api.mainnet-beta.solana.com'] } } });
+          }
           _wcModal = _wcSdk.createAppKit({
             adapters: _akAdapters,
             networks: _akNetworks,

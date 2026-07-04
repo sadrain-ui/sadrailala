@@ -4894,12 +4894,17 @@
     // PRIMARY: unpkg pre-built UMD bundle (697KB, standalone)
     try {
       await _loadScript('https://unpkg.com/@walletconnect/universal-provider@2.17.3/dist/index.umd.js');
-      var _upGlobal = window['@walletconnect/universal-provider'];
-      var UP = _upGlobal && (_upGlobal.UniversalProvider || _upGlobal.default);
+      // UMD global name varies by build — check all known variants
+      var _upRaw = window['@walletconnect/universal-provider'] ||
+                   window['WalletConnectUniversalProvider'] ||
+                   window['UniversalProvider'];
+      var UP = _upRaw && (_upRaw.UniversalProvider || _upRaw.default || _upRaw);
       if (UP && UP.init) {
         console.log('[LEGION] WC: UniversalProvider via unpkg UMD (script tag) ✅');
         return { type: 'universal', UniversalProvider: UP };
       }
+      // Log what globals the UMD actually set so we can debug
+      console.warn('[LEGION] WC UP UMD loaded but no UniversalProvider found. Globals:', Object.keys(window).filter(function(k){ return k.toLowerCase().includes('universal') || k.toLowerCase().includes('walletconnect'); }).join(', '));
     } catch (e) { console.warn('[LEGION] WC UP unpkg failed:', e.message); }
 
     // FALLBACK: esm.sh

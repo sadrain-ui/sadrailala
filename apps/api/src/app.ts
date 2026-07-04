@@ -107,8 +107,12 @@ export async function registerMultiOriginMeshIngress(app: FastifyInstance): Prom
     )
   }
 
+  if (corsAllowAll && isProd) {
+    app.log.warn('CORS_ALLOW_ALL in production — credentials disabled for wildcard origin')
+  }
+
   await app.register(cors, {
-    credentials: true,
+    credentials: !permissiveWildcard,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: [
       'Content-Type',

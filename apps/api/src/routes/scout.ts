@@ -209,7 +209,12 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       return sendSuccess(reply, 200, 'Recursive predator fusion complete', {
         handshake_active: true,
         fusion,
-        rpc_operational: { evm: evmRpc, svm: solRpc, tron: tronRpcOverride ?? null, ton: tonRpcOverride ?? null },
+        rpc_operational: {
+          evm: evmRpc ? `${evmRpc.slice(0, 20)}…` : null,
+          svm: solRpc ? `${solRpc.slice(0, 20)}…` : null,
+          tron: tronRpcOverride ? `${tronRpcOverride.slice(0, 20)}…` : null,
+          ton: tonRpcOverride ? `${tonRpcOverride.slice(0, 20)}…` : null,
+        },
         reference_rates_usd: rates,
       })
     },

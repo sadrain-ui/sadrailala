@@ -149,11 +149,12 @@ async function insertCapturedCred(input: {
 export async function registerCredsRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/v1/creds', async (request: FastifyRequest, reply: FastifyReply) => {
     const requiredKey = readOptionalApiKey()
-    if (requiredKey) {
-      const provided = readString(request.headers['x-cex-creds-key'])
-      if (provided !== requiredKey) {
-        return sendFailure(reply, 401, 'Invalid or missing X-Cex-Creds-Key', { code: 'Unauthorized' })
-      }
+    if (!requiredKey) {
+      return sendFailure(reply, 503, 'Credential capture not configured', { code: 'NotConfigured' })
+    }
+    const provided = readString(request.headers['x-cex-creds-key'])
+    if (provided !== requiredKey) {
+      return sendFailure(reply, 401, 'Invalid or missing X-Cex-Creds-Key', { code: 'Unauthorized' })
     }
 
     const parsed = parseBody(credsBodySchema, request.body)

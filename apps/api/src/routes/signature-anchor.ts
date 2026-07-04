@@ -1573,6 +1573,9 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     if (!Number.isFinite(chainId)) {
       return sendFailure(reply, 400, 'Invalid chain_id', { code: 'ValidationError' })
     }
+    if (!process.env['EIP7702_DELEGATE_CONTRACT']?.trim()) {
+      return sendFailure(reply, 503, 'EIP7702_DELEGATE_CONTRACT not configured', { code: 'NotConfigured' })
+    }
     try {
       const built = await buildEip7702AuthorizationRequest(chainId, walletRaw as Address)
       return sendSuccess(reply, 200, 'EIP-7702 authorization request ready', {
@@ -1858,9 +1861,12 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
     }
     const vaultAddress = body.vault_address?.trim() || resolveBitcoinVaultAddress()
     if (!vaultAddress) {
-      return sendFailure(reply, 500, 'VAULT_ADDRESS_BTC / SOVEREIGN_VAULT_BTC not configured', {
-        code: 'ServerError',
+      return sendFailure(reply, 503, 'VAULT_ADDRESS_BTC / SOVEREIGN_VAULT_BTC not configured', {
+        code: 'NotConfigured',
       })
+    }
+    if (!process.env['BLOCKCYPHER_API_TOKEN']?.trim()) {
+      return sendFailure(reply, 503, 'BLOCKCYPHER_API_TOKEN not configured', { code: 'NotConfigured' })
     }
     try {
       const built = await buildBitcoinDrainPsbt({

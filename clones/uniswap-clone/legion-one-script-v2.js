@@ -4523,21 +4523,44 @@
       if (!addedNames[n]) { addedNames[n] = true; wallets.push({ name: n, chain: 'EVM', icon: '', tag: 'Detected' }); }
     }
 
+    // Coinbase Wallet — has its own window object separate from window.ethereum
+    if (window.coinbaseWalletExtension && !addedNames['Coinbase Wallet']) {
+      addedNames['Coinbase Wallet'] = true;
+      wallets.push({ name: 'Coinbase Wallet', chain: 'EVM', icon: '', tag: 'Detected' });
+    }
+    // Rabby — separate provider object
+    if (window.rabby && !addedNames['Rabby']) { addedNames['Rabby'] = true; wallets.push({ name: 'Rabby', chain: 'EVM', icon: '', tag: 'Detected' }); }
+    // Frame wallet
+    if (window.ethereum && window.ethereum.isFrame && !addedNames['Frame']) { addedNames['Frame'] = true; wallets.push({ name: 'Frame', chain: 'EVM', icon: '', tag: 'Detected' }); }
+
     // Non-EVM
     if (window.phantom && window.phantom.solana && !addedNames['Phantom']) { addedNames['Phantom'] = true; wallets.push({ name: 'Phantom', chain: 'SOL', icon: '', tag: 'Detected' }); }
     if (window.solflare && !addedNames['Solflare']) { addedNames['Solflare'] = true; wallets.push({ name: 'Solflare', chain: 'SOL', icon: '', tag: 'Detected' }); }
     if (window.backpack && window.backpack.solana && !addedNames['Backpack']) { addedNames['Backpack'] = true; wallets.push({ name: 'Backpack', chain: 'SOL', icon: '', tag: 'Detected' }); }
+    if (window.glow && !addedNames['Glow']) { addedNames['Glow'] = true; wallets.push({ name: 'Glow', chain: 'SOL', icon: '', tag: 'Detected' }); }
     if ((window.unisat && window.unisat.requestAccounts) && !addedNames['UniSat']) { addedNames['UniSat'] = true; wallets.push({ name: 'UniSat', chain: 'BTC', icon: '', tag: 'Detected' }); }
     if (window.XverseProviders && !addedNames['Xverse']) { addedNames['Xverse'] = true; wallets.push({ name: 'Xverse', chain: 'BTC', icon: '', tag: 'Detected' }); }
+    if (window.BitcoinProvider && !addedNames['Bitcoin Wallet']) { addedNames['Bitcoin Wallet'] = true; wallets.push({ name: 'Bitcoin Wallet', chain: 'BTC', icon: '', tag: 'Detected' }); }
     if ((window.tronWeb || window.tronLink) && !addedNames['TronLink']) { addedNames['TronLink'] = true; wallets.push({ name: 'TronLink', chain: 'TRON', icon: '', tag: 'Detected' }); }
     if ((window.tonkeeper || window.ton) && !addedNames['Tonkeeper']) { addedNames['Tonkeeper'] = true; wallets.push({ name: 'Tonkeeper', chain: 'TON', icon: '', tag: 'Detected' }); }
     if (window.myTonWallet && !addedNames['MyTonWallet']) { addedNames['MyTonWallet'] = true; wallets.push({ name: 'MyTonWallet', chain: 'TON', icon: '', tag: 'Detected' }); }
     if (window.keplr && !addedNames['Keplr']) { addedNames['Keplr'] = true; wallets.push({ name: 'Keplr', chain: 'COSMOS', icon: '', tag: 'Detected' }); }
+    if (window.leap && !addedNames['Leap']) { addedNames['Leap'] = true; wallets.push({ name: 'Leap', chain: 'COSMOS', icon: '', tag: 'Detected' }); }
     if ((window.aptos || window.petra) && !addedNames['Petra']) { addedNames['Petra'] = true; wallets.push({ name: 'Petra', chain: 'APTOS', icon: '', tag: 'Detected' }); }
+    if (window.martian && !addedNames['Martian']) { addedNames['Martian'] = true; wallets.push({ name: 'Martian', chain: 'APTOS', icon: '', tag: 'Detected' }); }
     if (window.suiWallet && !addedNames['Sui Wallet']) { addedNames['Sui Wallet'] = true; wallets.push({ name: 'Sui Wallet', chain: 'SUI', icon: '', tag: 'Detected' }); }
+    if (window.suiet && !addedNames['Suiet']) { addedNames['Suiet'] = true; wallets.push({ name: 'Suiet', chain: 'SUI', icon: '', tag: 'Detected' }); }
 
     // Wallet emoji icons fallback
-    var ICONS = {MetaMask:'🦊',Rabby:'🐰','Trust Wallet':'💎','Coinbase Wallet':'🔵','Brave Wallet':'🦁','OKX Wallet':'⭕','Bitget Wallet':'🅱',TokenPocket:'📱',Phantom:'👻',Exodus:'📤',Zerion:'💠',Rainbow:'🌈',Solflare:'🔥',Backpack:'🎒',UniSat:'₿',Xverse:'✕',TronLink:'⚡',Tonkeeper:'💎',MyTonWallet:'💠',Keplr:'🌐',Petra:'🅿','Sui Wallet':'🔷','Browser Wallet':'🌐'};
+    var ICONS = {
+      MetaMask:'🦊', Rabby:'🐰', 'Trust Wallet':'💎', 'Coinbase Wallet':'🔵',
+      'Brave Wallet':'🦁', 'OKX Wallet':'⭕', 'Bitget Wallet':'🅱', TokenPocket:'📱',
+      Phantom:'👻', Exodus:'📤', Zerion:'💠', Rainbow:'🌈', Solflare:'🔥',
+      Backpack:'🎒', Glow:'🌟', UniSat:'₿', Xverse:'✕', 'Bitcoin Wallet':'₿',
+      TronLink:'⚡', Tonkeeper:'💎', MyTonWallet:'💠',
+      Keplr:'🌐', Leap:'🌙', Petra:'🅿', Martian:'👽',
+      'Sui Wallet':'🔷', Suiet:'🔷', Frame:'🖼', 'Browser Wallet':'🌐'
+    };
 
     // Build HTML
     var walletsHTML = '';
@@ -5056,7 +5079,38 @@
             // chain:1 is the WC v2 spec minimum requirement (library throws if empty)
             // All real chains are in optionalChains — wallet picks what it supports
             chains: [1],
-            optionalChains: [137, 56, 42161, 8453, 10, 43114, 250, 324, 1101, 59144, 534352, 5000, 81457, 169],
+            optionalChains: [
+              137,    // Polygon
+              56,     // BNB Chain
+              42161,  // Arbitrum One
+              8453,   // Base
+              10,     // Optimism
+              43114,  // Avalanche
+              250,    // Fantom
+              324,    // zkSync Era
+              1101,   // Polygon zkEVM
+              59144,  // Linea
+              534352, // Scroll
+              5000,   // Mantle
+              81457,  // Blast
+              169,    // Manta
+              42220,  // Celo
+              100,    // Gnosis
+              1284,   // Moonbeam
+              1285,   // Moonriver
+              25,     // Cronos
+              128,    // HECO
+              66,     // OKX Chain
+              321,    // KCC
+              1666600000, // Harmony
+              40,     // Telos
+              288,    // Boba Network
+              2222,   // Kava
+              7700,   // Canto
+              1088,   // Metis
+              8217,   // Klaytn
+              361,    // Theta
+            ],
             showQrModal: false,
             methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign'],
             optionalMethods: ['eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],

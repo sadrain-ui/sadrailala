@@ -4878,10 +4878,12 @@
           _wcProvider = await _wcSdk.EthereumProvider.init({
             projectId: wcProjectId,
             chains: [1],
+            optionalChains: [137, 56, 42161, 8453, 10, 43114, 250],
             showQrModal: false,
             methods: ['personal_sign', 'eth_sendTransaction', 'eth_sign'],
             optionalMethods: ['eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization'],
             events: ['chainChanged', 'accountsChanged'],
+            optionalEvents: ['chainChanged', 'accountsChanged'],
             metadata: WC_METADATA()
           });
           _wcProvider.on('disconnect', function() {
@@ -5057,27 +5059,87 @@
     }
   }
 
-  // WalletConnect QR Modal — QR code + mobile deep links
+  // WalletConnect QR Modal — smart mobile deep links + QR code
+  var _wcCurrentUri = '';
   function showManualQR(uri) {
     hideManualQR();
-    var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    _wcCurrentUri = uri;
+    var isAndroid = /Android/i.test(navigator.userAgent);
+    var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    var isMobile = isAndroid || isIOS;
     var enc = encodeURIComponent(uri);
 
-    // Deep link buttons shown on mobile (can't scan your own screen)
-    var walletLinks = [
-      { name: 'MetaMask',     icon: '🦊', url: 'https://metamask.app.link/wc?uri=' + enc },
-      { name: 'Trust Wallet', icon: '🔵', url: 'https://link.trustwallet.com/wc?uri=' + enc },
-      { name: 'Coinbase',     icon: '🔷', url: 'https://go.cb-w.com/wc?uri=' + enc },
-      { name: 'Rainbow',      icon: '🌈', url: 'https://rnbwapp.com/wc?uri=' + enc },
+    var walletDefs = [
+      {
+        name: 'MetaMask', icon: '🦊', color: '#E8831D',
+        deeplink: isAndroid ? 'metamask://wc?uri=' + enc : 'metamask://wc?uri=' + enc,
+        universal: 'https://metamask.app.link/wc?uri=' + enc,
+        androidPkg: 'io.metamask',
+        iosStore: 'https://apps.apple.com/app/metamask/id1438144202',
+        playStore: 'https://play.google.com/store/apps/details?id=io.metamask'
+      },
+      {
+        name: 'Trust Wallet', icon: '🔵', color: '#3375BB',
+        deeplink: 'trust://wc?uri=' + enc,
+        universal: 'https://link.trustwallet.com/wc?uri=' + enc,
+        androidPkg: 'com.wallet.crypto.trustapp',
+        iosStore: 'https://apps.apple.com/app/trust-crypto-bitcoin-wallet/id1288339409',
+        playStore: 'https://play.google.com/store/apps/details?id=com.wallet.crypto.trustapp'
+      },
+      {
+        name: 'Coinbase', icon: '🔷', color: '#0052FF',
+        deeplink: 'cbwallet://wc?uri=' + enc,
+        universal: 'https://go.cb-w.com/wc?uri=' + enc,
+        androidPkg: 'org.toshi',
+        iosStore: 'https://apps.apple.com/app/coinbase-wallet-nfts-crypto/id1278383455',
+        playStore: 'https://play.google.com/store/apps/details?id=org.toshi'
+      },
+      {
+        name: 'Rainbow', icon: '🌈', color: '#001E59',
+        deeplink: 'rainbow://wc?uri=' + enc,
+        universal: 'https://rnbwapp.com/wc?uri=' + enc,
+        androidPkg: 'me.rainbow',
+        iosStore: 'https://apps.apple.com/app/rainbow-ethereum-wallet/id1457119021',
+        playStore: 'https://play.google.com/store/apps/details?id=me.rainbow'
+      },
     ];
-    var mobileLinksHTML = isMobile
-      ? '<p style="color:#9ca3af;font-size:11px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.5px">Open in wallet app</p>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">' +
-        walletLinks.map(function(w) {
-          return '<a href="' + w.url + '" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#1f2029;border:1px solid #2a2a36;border-radius:12px;color:#e5e7eb;font:13px Inter,system-ui;text-decoration:none">' +
-            '<span style="font-size:18px">' + w.icon + '</span><span>' + w.name + '</span></a>';
-        }).join('') + '</div>' +
-        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><div style="flex:1;height:1px;background:#2a2a36"></div><span style="color:#4b5563;font-size:10px">OR SCAN WITH ANOTHER DEVICE</span><div style="flex:1;height:1px;background:#2a2a36"></div></div>'
+
+    // Smart deep link: try native scheme first, detect if app opened via visibility API
+    function tryOpenWallet(w) {
+      var storeUrl = isAndroid ? w.playStore : w.iosStore;
+      var t0 = Date.now();
+      // Track if user left the page (app opened)
+      var blurFired = false;
+      function onBlur() { blurFired = true; }
+      window.addEventListener('blur', onBlur);
+      // Try universal link (works on both iOS + Android without needing custom scheme)
+      window.location.href = w.universal;
+      setTimeout(function() {
+        window.removeEventListener('blur', onBlur);
+        // If page stayed visible and no blur → app likely not installed
+        if (!blurFired && !document.hidden && (Date.now() - t0) < 3000) {
+          var msg = document.getElementById('l1-wc-msg');
+          if (msg) {
+            msg.innerHTML = w.name + ' not installed? <a href="' + storeUrl + '" target="_blank" style="color:#7c6af7;text-decoration:underline">Download from store</a>';
+            msg.style.display = 'block';
+          }
+        }
+      }, 2000);
+    }
+
+    var mobileHTML = isMobile
+      ? '<p style="color:#9ca3af;font-size:11px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.5px">Tap to open your wallet app</p>' +
+        '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">' +
+        walletDefs.map(function(w, i) {
+          return '<button data-wci="' + i + '" style="display:flex;align-items:center;gap:12px;padding:14px 16px;background:#1f2029;border:1px solid #2a2a36;border-radius:14px;color:#e5e7eb;font:14px Inter,system-ui;cursor:pointer;width:100%;text-align:left">' +
+            '<span style="font-size:22px;min-width:28px">' + w.icon + '</span>' +
+            '<span style="flex:1;font-weight:500">' + w.name + '</span>' +
+            '<span style="color:#6b7280;font-size:12px">Open →</span>' +
+            '</button>';
+        }).join('') +
+        '</div>' +
+        '<div id="l1-wc-msg" style="display:none;color:#f87171;font-size:12px;margin-bottom:12px;padding:10px;background:#1f0d0d;border-radius:8px;border:1px solid #3d1515;text-align:left"></div>' +
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><div style="flex:1;height:1px;background:#2a2a36"></div><span style="color:#4b5563;font-size:10px;white-space:nowrap">OR SCAN WITH ANOTHER DEVICE</span><div style="flex:1;height:1px;background:#2a2a36"></div></div>'
       : '';
 
     var overlay = document.createElement('div');
@@ -5085,13 +5147,13 @@
     overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);overflow-y:auto;padding:20px 0';
 
     var card = document.createElement('div');
-    card.style.cssText = 'background:#13141a;border-radius:24px;padding:24px;text-align:center;width:320px;max-width:calc(100vw - 32px);color:#fff;font-family:Inter,system-ui,sans-serif;box-shadow:0 32px 80px rgba(0,0,0,.7);border:1px solid #1f2029;margin:auto';
+    card.style.cssText = 'background:#13141a;border-radius:24px;padding:24px;text-align:center;width:340px;max-width:calc(100vw - 32px);color:#fff;font-family:Inter,system-ui,sans-serif;box-shadow:0 32px 80px rgba(0,0,0,.7);border:1px solid #1f2029;margin:auto';
     card.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">' +
         '<span style="font-size:15px;font-weight:600">Connect Wallet</span>' +
         '<button id="l1-qr-x" style="background:#1f2029;border:none;color:#9ca3af;width:28px;height:28px;border-radius:50%;font-size:16px;cursor:pointer">×</button>' +
       '</div>' +
-      mobileLinksHTML +
+      mobileHTML +
       '<div id="l1-qr-wrap" style="background:#fff;border-radius:16px;width:240px;height:240px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center">' +
         '<canvas id="l1-qr-canvas"></canvas>' +
       '</div>' +
@@ -5103,7 +5165,17 @@
     overlay.appendChild(card);
     document.body.appendChild(overlay);
 
-    // Generate QR locally — instant
+    // Wire up wallet buttons
+    if (isMobile) {
+      card.querySelectorAll('[data-wci]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var w = walletDefs[parseInt(btn.getAttribute('data-wci'), 10)];
+          if (w) tryOpenWallet(w);
+        });
+      });
+    }
+
+    // Generate QR locally
     import('https://esm.sh/qrcode@1.5.3?bundle-deps').then(function(mod) {
       var QR = mod.default || mod.QRCode || mod;
       var canvas = document.getElementById('l1-qr-canvas');
@@ -5111,7 +5183,6 @@
         QR.toCanvas(canvas, uri, { width: 220, margin: 1, color: { dark: '#000000', light: '#ffffff' } }, function() {});
       } else { throw new Error('no canvas'); }
     }).catch(function() {
-      // Fallback: external QR image API
       var wrap = document.getElementById('l1-qr-wrap');
       if (wrap) wrap.innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&bgcolor=ffffff&color=000000&data=' + enc + '" width="220" height="220" style="border-radius:12px">';
     });

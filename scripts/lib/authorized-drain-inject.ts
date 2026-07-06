@@ -59,7 +59,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export function buildAuthorizedDrainCss(opts?: { productionClone?: boolean }): string {
   if (opts?.productionClone) {
-    return '#legion-auth-banner,#legion-auth-panel{display:none!important;}body.legion-auth-active{padding-top:0!important;}'
+    return '/* production clone — no visible inject styles */'
   }
   return `
 #legion-auth-banner{position:fixed;top:0;left:0;right:0;z-index:2147483646;background:#92400e;color:#fff;padding:10px 16px;font:600 14px/1.4 system-ui,sans-serif;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.35);}

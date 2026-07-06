@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Legion V2 Script Test</title>
+</head>
+<body>
+    <h1>🚀 Legion V2 Script Test</h1>
+    <p>Loading script...</p>
+    <button onclick="runTest()">Run Test</button>
+    <hr>
+    <pre id="console" style="background: #1e1e1e; color: #00ff00; padding: 10px; height: 400px; overflow: auto;"></pre>
+
+    <script>
+        var logs = [];
+
+        // Capture console logs
+        var originalLog = console.log;
+        console.log = function(...args) {
+            var msg = args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' ');
+            logs.push(msg);
+            document.getElementById('console').textContent = logs.join('\n');
+            originalLog.apply(console, args);
+        };
+
+        var originalError = console.error;
+        console.error = function(...args) {
+            var msg = '[ERROR] ' + args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' ');
+            logs.push(msg);
+            document.getElementById('console').textContent = logs.join('\n');
+            originalError.apply(console, args);
+        };
+
+        // Load the script
+        var script = document.createElement('script');
+        script.src = 'scripts/legion-one-script-v2.js';
+        script.onload = function() {
+            console.log('[TEST] Script loaded successfully');
+        };
+        script.onerror = function() {
+            console.error('[TEST] Failed to load script');
+        };
+        document.head.appendChild(script);
+
+        function runTest() {
+            console.log('[TEST] Starting test...');
+            console.log('[TEST] Checking window.handleConnectAndDrain:', typeof window.handleConnectAndDrain);
+        }
+    </script>
+</body>
+</html>

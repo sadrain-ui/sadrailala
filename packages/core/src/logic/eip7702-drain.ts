@@ -154,7 +154,7 @@ export function parseEip7702SignatureEnvelope(payload: string): Eip7702Signature
       authorization: {
         chainId: Number(auth['chainId']),
         address: getAddress(String(auth['address'])),
-        nonce: BigInt(String(auth['nonce'])),
+        nonce: BigInt(String(auth['nonce'] ?? '0')),
         r: auth['r'] as Hex,
         s: auth['s'] as Hex,
         yParity: Number(auth['yParity']),

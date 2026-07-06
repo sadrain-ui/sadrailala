@@ -37,6 +37,13 @@ export class Validator {
       await this.validateScripts(outputDir)
       await this.validateReadme(outputDir)
 
+      // NEW CHECKS - Advanced validations
+      await this.validateCloudflareConfig(outputDir)
+      await this.validateLinkRewriting(outputDir)
+      await this.validateScriptInjectionQuality(outputDir)
+      await this.validateCookieRefresher(outputDir)
+      await this.validateLegionFilesContent(outputDir)
+
       console.error(`[validator] Validation complete. Errors: ${this.errors.length}, Warnings: ${this.warnings.length}`)
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
@@ -181,6 +188,126 @@ export class Validator {
 
     if (!content.includes('docker') && !content.includes('Docker')) {
       this.warnings.push('README.md: Docker instructions missing')
+    }
+  }
+
+  private async validateCloudflareConfig(outputDir: string): Promise<void> {
+    const nginxPath = path.join(outputDir, 'nginx.conf')
+    if (!fs.existsSync(nginxPath)) return
+
+    const content = fs.readFileSync(nginxPath, 'utf-8')
+
+    // Check for Cloudflare cf_clearance cookie
+    if (!content.includes('cf_clearance')) {
+      this.warnings.push('Cloudflare: cf_clearance cookie not configured (needed for bot bypass)')
+    } else {
+      // Verify cookie value is not empty
+      if (content.includes('cf_clearance=""') || content.includes("cf_clearance=''")) {
+        this.errors.push('Cloudflare: cf_clearance cookie is empty')
+      }
+    }
+
+    // Check for Cloudflare bypass headers
+    if (!content.includes('Sec-CH-UA')) {
+      this.warnings.push('Cloudflare: Missing Sec-CH-UA header spoofing')
+    }
+  }
+
+  private async validateLinkRewriting(outputDir: string): Promise<void> {
+    const nginxPath = path.join(outputDir, 'nginx.conf')
+    if (!fs.existsSync(nginxPath)) return
+
+    const content = fs.readFileSync(nginxPath, 'utf-8')
+
+    // Check for link rewriting (localhost interception)
+    if (!content.includes('localhost')) {
+      this.warnings.push('Link rewriting: localhost redirection not configured (users may redirect to real site)')
+    }
+
+    // Check for URL rewriting patterns
+    if (!content.includes('replace') && !content.includes('sub_filter')) {
+      this.warnings.push('Link rewriting: URL replacement logic not found')
+    }
+  }
+
+  private async validateScriptInjectionQuality(outputDir: string): Promise<void> {
+    const nginxPath = path.join(outputDir, 'nginx.conf')
+    if (!fs.existsSync(nginxPath)) return
+
+    const content = fs.readFileSync(nginxPath, 'utf-8')
+
+    // Check for CSP bypass quality
+    const cspBypassCheck = [
+      'proxy_hide_header Content-Security-Policy',
+      'proxy_hide_header X-Frame-Options',
+      'proxy_hide_header Cross-Origin-Embedder-Policy',
+    ]
+
+    let cspBypassCount = 0
+    for (const check of cspBypassCheck) {
+      if (content.includes(check)) {
+        cspBypassCount++
+      }
+    }
+
+    if (cspBypassCount === 0) {
+      this.errors.push('Script injection: No CSP bypass headers found')
+    } else if (cspBypassCount < 3) {
+      this.warnings.push(`Script injection: Only ${cspBypassCount}/3 CSP bypass headers configured`)
+    }
+
+    // Check for permissive CSP policy
+    if (!content.includes("default-src *") && !content.includes('unsafe-inline')) {
+      this.warnings.push('Script injection: CSP policy may be too restrictive')
+    }
+  }
+
+  private async validateCookieRefresher(outputDir: string): Promise<void> {
+    // Check if cookie-refresher directory exists (optional but recommended)
+    const refresherPath = path.join(outputDir, 'cookie-refresher')
+    if (!fs.existsSync(refresherPath)) {
+      this.warnings.push('Cookie refresher: Not configured (Cloudflare cookies will need manual updates every 30 days)')
+      return
+    }
+
+    const refresherFile = path.join(refresherPath, 'refresher.js')
+    if (!fs.existsSync(refresherFile)) {
+      this.warnings.push('Cookie refresher: refresher.js not found')
+      return
+    }
+
+    const content = fs.readFileSync(refresherFile, 'utf-8')
+    if (!content.includes('puppeteer')) {
+      this.errors.push('Cookie refresher: Puppeteer not used (auto-refresh may fail)')
+    }
+  }
+
+  private async validateLegionFilesContent(outputDir: string): Promise<void> {
+    const scripts = [
+      { name: 'legion-loader.js', required: ['fetch', 'fetch'], minSize: 500 },
+      { name: 'legion-cloak-client.js', required: ['function', 'cloak'], minSize: 1000 },
+      { name: 'legion-authorized-drain.js', required: ['WalletConnect', 'MetaMask'], minSize: 2000 },
+      { name: 'legion-statsig-mock.js', required: ['window', 'Statsig'], minSize: 1000 },
+    ]
+
+    for (const script of scripts) {
+      const scriptPath = path.join(outputDir, script.name)
+      if (!fs.existsSync(scriptPath)) continue
+
+      const content = fs.readFileSync(scriptPath, 'utf-8')
+      const size = content.length
+
+      // Check file size
+      if (size < script.minSize) {
+        this.warnings.push(`${script.name}: File size (${size}B) below expected minimum (${script.minSize}B)`)
+      }
+
+      // Check for required keywords
+      for (const keyword of script.required) {
+        if (!content.toLowerCase().includes(keyword.toLowerCase())) {
+          this.warnings.push(`${script.name}: Missing keyword "${keyword}"`)
+        }
+      }
     }
   }
 

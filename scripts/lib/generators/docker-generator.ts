@@ -39,21 +39,16 @@ services:
       - ${nginxConfPath}:/etc/nginx/nginx.conf:ro
       - ./cache:/var/cache/nginx
       - ./logs:/var/log/nginx
+      - ./:/usr/share/nginx/html:ro
     environment:
       - TZ=UTC
     restart: unless-stopped
-    networks:
-      - legion-network
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-
-networks:
-  legion-network:
-    driver: bridge
 
 volumes:
   cache:

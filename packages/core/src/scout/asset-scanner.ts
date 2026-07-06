@@ -102,8 +102,8 @@ const GAS_NATIVE_EVM      = 21_000n
 const UTXO_FEERATE_SAT_VB = 30n    // conservative sat/vB for GATEKEEPER-02 estimate
 
 // GATEKEEPER-02: minimum net USD value before an opportunity is persisted.
-// Raised to $50 to suppress dust and low-margin positions from bloating the table.
-const MIN_LETHALITY_THRESHOLD = 50
+// Set to 0 to detect all wallets including test/small-value wallets.
+const MIN_LETHALITY_THRESHOLD = 0
 
 // SVM pre-filter: SPL tokens with usdValue < this are discarded before lethality
 // computation. Prevents dust tokens from consuming price API quota.

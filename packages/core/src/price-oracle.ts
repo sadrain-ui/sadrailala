@@ -1,18 +1,18 @@
 /**
- * Live USD price oracle — CoinGecko + fallback APIs + Redis cache.
+ * Live USD price oracle — single-call full-market bulk refresh + Redis cache.
+ *
+ * Design:
+ *   - Cron every 30 min: ONE HTTP call to the first healthy bulk exchange API
+ *   - Entire spot USDT market cached in Redis (`all-prices` + `all-prices-backup`)
+ *   - Hot path (scout/settlement): Redis read only — no live API calls, no env fake prices
  *
  * Env:
- *   USE_PRICE_ORACLE=true                    — enable cron + Redis cache (default: true)
- *   REDIS_URL                                — required when oracle enabled in production
- *   PRICE_ORACLE_CRON                        — cron expression (default: every 30 minutes)
- *   PRICE_ORACLE_RETRY_COUNT                 — retries per source (default: 5)
- *   PRICE_ORACLE_RETRY_DELAY_MS              — backoff base ms (delay = 2^attempt * base, default: 2000)
- *   PRICE_ORACLE_PROVIDER_ORDER              — provider chain (default: coincap,kraken,bybit,gateio,kucoin,coingecko,binance,cryptocompare)
- *   PRICE_ORACLE_FALLBACK_SOURCES            — legacy alias for PRICE_ORACLE_PROVIDER_ORDER
- *   COINGECKO_SIMPLE_PRICE_URL               — optional API override
- *   COINGECKO_API_KEY                        — optional x-cg-demo-api-key header
- *   CRYPTOCOMPARE_API_KEY                    — optional CryptoCompare API key
- *   FALLBACK_{ETH,SOL,TON,TRX,BTC}_PRICE_USD — static fallback when oracle/redis/API unavailable
+ *   USE_PRICE_ORACLE=true                         — enable cron (default: true)
+ *   REDIS_URL                                     — required in production
+ *   PRICE_ORACLE_CRON                             — default every 30 minutes (UTC)
+ *   PRICE_ORACLE_BULK_PROVIDER_ORDER              — bulk 1-call APIs (default: gateio,kucoin,bybit,okx,bitget,mexc,htx,coingecko_top250,cryptocompare,kraken)
+ *   PRICE_ORACLE_PROVIDER_ORDER                   — legacy per-coin on-demand chain (unused when cache-only)
+ *   COINGECKO_API_KEY / CRYPTOCOMPARE_API_KEY     — optional
  */
 import cron from 'node-cron'
 import IoRedis from 'ioredis'
@@ -70,14 +70,51 @@ const DEFAULT_CRON = '*/30 * * * *'
 const DEFAULT_RETRY_COUNT = 5
 const DEFAULT_RETRY_DELAY_MS = 2000
 const DEFAULT_SOURCES: PriceOracleSource[] = [
-  'coincap',
   'kraken',
   'bybit',
   'gateio',
   'kucoin',
   'coingecko',
-  'binance',
   'cryptocompare',
+]
+
+/** Single HTTP call returns full spot market (USDT pairs). Ordered by reliability / no API key. */
+export type BulkMarketProvider =
+  | 'gateio'
+  | 'kucoin'
+  | 'bybit'
+  | 'okx'
+  | 'bitget'
+  | 'mexc'
+  | 'htx'
+  | 'coingecko_top250'
+  | 'cryptocompare'
+  | 'kraken'
+
+const ALL_BULK_PROVIDERS = new Set<BulkMarketProvider>([
+  'gateio',
+  'kucoin',
+  'bybit',
+  'okx',
+  'bitget',
+  'mexc',
+  'htx',
+  'coingecko_top250',
+  'cryptocompare',
+  'kraken',
+])
+
+const DEFAULT_BULK_PROVIDERS: BulkMarketProvider[] = [
+  'gateio',
+  'kucoin',
+  'bybit',
+  'okx',
+  'bitget',
+  'mexc',
+  'htx',
+  'coingecko_top250',
+  'cryptocompare',
+  'kraken',
 ]
 const ALL_SOURCES = new Set<PriceOracleSource>([
   'coingecko',
@@ -90,11 +127,40 @@ const ALL_SOURCES = new Set<PriceOracleSource>([
   'coincap',
 ])
 const REDIS_KEY_PREFIX = 'price:'
+const REDIS_ALL_PRICES_KEY = 'all-prices'
+const REDIS_ALL_PRICES_BACKUP_KEY = 'all-prices-backup'
 const REDIS_TTL_SEC = 1800
+const REDIS_BACKUP_TTL_SEC = 604_800 // 7 days — last good market snapshot
 const REDIS_MIN_TTL_SEC = 300
-const FETCH_TIMEOUT_MS = 12_000
-const STARTUP_JITTER_MAX_MS = 60_000
+const FETCH_TIMEOUT_MS = 20_000
+const BULK_FETCH_TIMEOUT_MS = 30_000
+const STARTUP_JITTER_MAX_MS = 30_000
 const REQUEST_DEDUP_WINDOW_MS = 5_000
+const CIRCUIT_FAIL_THRESHOLD = 3
+const CIRCUIT_COOLDOWN_MS = 900_000 // 15 min
+
+/** Map uppercase ticker → CoinGecko-style id for scout/settlement lookups */
+const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
+  ETH: 'ethereum',
+  BTC: 'bitcoin',
+  SOL: 'solana',
+  TRX: 'tron',
+  TON: 'the-open-network',
+  BNB: 'binancecoin',
+  MATIC: 'matic-network',
+  POL: 'matic-network',
+  AVAX: 'avalanche-2',
+  USDC: 'usd-coin',
+  USDT: 'tether',
+  DAI: 'dai',
+  LINK: 'chainlink',
+  UNI: 'uniswap',
+  AAVE: 'aave',
+  ARB: 'arbitrum',
+  OP: 'optimism',
+  WETH: 'weth',
+  WBTC: 'wrapped-bitcoin',
+}
 
 const BINANCE_SYMBOL_BY_COIN: Record<string, string> = {
   ethereum: 'ETHUSDT',
@@ -158,6 +224,12 @@ let cronTask: cron.ScheduledTask | null = null
 let redisClient: PriceOracleRedisClient | null = null
 let telegramNotifier: TelegramNotifier | null = null
 let inFlightFetch: Promise<void> | null = null
+let memoryMarketCache: Record<string, number> | null = null
+
+const bulkProviderCircuit = new Map<
+  BulkMarketProvider,
+  { failures: number; blockedUntil: number }
+>()
 
 // Request deduplication cache — prevent concurrent fetches for same coin
 const inFlightRequestsBySource = new Map<string, Promise<Record<string, number>>>()
@@ -224,6 +296,86 @@ function resolveFallbackSources(): PriceOracleSource[] {
   const order = readEnv('PRICE_ORACLE_PROVIDER_ORDER')
   if (order) return parseProviderList(order)
   return parseProviderList(readEnv('PRICE_ORACLE_FALLBACK_SOURCES'))
+}
+
+function parseBulkProviderList(raw: string | undefined): BulkMarketProvider[] {
+  if (!raw) return [...DEFAULT_BULK_PROVIDERS]
+  const parsed = raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s): s is BulkMarketProvider => ALL_BULK_PROVIDERS.has(s as BulkMarketProvider))
+  return parsed.length > 0 ? parsed : [...DEFAULT_BULK_PROVIDERS]
+}
+
+function resolveBulkProviders(): BulkMarketProvider[] {
+  return parseBulkProviderList(readEnv('PRICE_ORACLE_BULK_PROVIDER_ORDER'))
+}
+
+function isBulkProviderOpen(provider: BulkMarketProvider): boolean {
+  const row = bulkProviderCircuit.get(provider)
+  if (!row) return true
+  if (Date.now() >= row.blockedUntil) {
+    bulkProviderCircuit.delete(provider)
+    return true
+  }
+  return false
+}
+
+function recordBulkProviderFailure(provider: BulkMarketProvider): void {
+  const row = bulkProviderCircuit.get(provider) ?? { failures: 0, blockedUntil: 0 }
+  row.failures += 1
+  if (row.failures >= CIRCUIT_FAIL_THRESHOLD) {
+    row.blockedUntil = Date.now() + CIRCUIT_COOLDOWN_MS
+    console.warn(`[PRICE_ORACLE] Circuit open for ${provider} (${CIRCUIT_COOLDOWN_MS / 60_000}min)`)
+    row.failures = 0
+  }
+  bulkProviderCircuit.set(provider, row)
+}
+
+function recordBulkProviderSuccess(provider: BulkMarketProvider): void {
+  bulkProviderCircuit.delete(provider)
+}
+
+function parseUsdtPrice(raw: string | undefined): number | null {
+  if (raw == null) return null
+  const n = Number.parseFloat(raw)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+function addUsdtPair(
+  out: Record<string, number>,
+  baseSymbol: string,
+  usd: number | null,
+): void {
+  if (usd == null || usd <= 0) return
+  const sym = baseSymbol.trim().toUpperCase()
+  if (!sym) return
+  out[sym] = usd
+  const geckoId = SYMBOL_TO_COINGECKO_ID[sym]
+  if (geckoId) out[geckoId] = usd
+}
+
+function enrichMarketMap(raw: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = { ...raw }
+  for (const [key, price] of Object.entries(raw)) {
+    if (price <= 0) continue
+    const upper = key.toUpperCase()
+    if (upper !== key) out[upper] = price
+    const geckoId = SYMBOL_TO_COINGECKO_ID[upper]
+    if (geckoId && out[geckoId] == null) out[geckoId] = price
+  }
+  return out
+}
+
+async function fetchBulkOnce(label: string, url: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(BULK_FETCH_TIMEOUT_MS),
+  })
+  if (!response.ok) {
+    throw new Error(`${label} HTTP ${response.status}`)
+  }
+  return response
 }
 
 function resolveCoingeckoUrl(coinIds?: string[]): string {
@@ -635,48 +787,337 @@ async function fetchCoincapPrices(coinIds: string[]): Promise<Record<string, num
   return out
 }
 
-/** Fetch ALL cryptocurrency prices from CoinGecko in batch (supports 5000+ coins) */
-async function fetchAllCryptopricesBatch(): Promise<Record<string, number>> {
-  const allPrices: Record<string, number> = {}
-  const pageSize = 250 // CoinGecko max per page
-  const maxPages = 20 // 250 * 20 = 5000 coins
+/** Gate.io — 1 call, all spot tickers */
+async function fetchGateioFullMarket(): Promise<Record<string, number>> {
+  const response = await fetchBulkOnce(
+    'Gate.io:all',
+    'https://api.gateio.ws/api/v4/spot/tickers',
+    { headers: { Accept: 'application/json' } },
+  )
+  const rows = (await response.json()) as Array<{ currency_pair?: string; last?: string }>
+  const out: Record<string, number> = {}
+  for (const row of rows) {
+    const pair = row.currency_pair?.toUpperCase()
+    if (!pair?.endsWith('_USDT')) continue
+    addUsdtPair(out, pair.slice(0, -5), parseUsdtPrice(row.last))
+  }
+  return out
+}
 
-  for (let page = 1; page <= maxPages; page++) {
+/** KuCoin — 1 call, all tickers */
+async function fetchKucoinFullMarket(): Promise<Record<string, number>> {
+  const response = await fetchBulkOnce(
+    'KuCoin:all',
+    'https://api.kucoin.com/api/v1/market/allTickers',
+    { headers: { Accept: 'application/json' } },
+  )
+  const data = (await response.json()) as {
+    data?: { ticker?: Array<{ symbol?: string; last?: string }> }
+  }
+  const out: Record<string, number> = {}
+  for (const row of data.data?.ticker ?? []) {
+    const sym = row.symbol?.toUpperCase()
+    if (!sym?.endsWith('-USDT')) continue
+    addUsdtPair(out, sym.slice(0, -5), parseUsdtPrice(row.last))
+  }
+  return out
+}
+
+/** Bybit — 1 call, all spot tickers */
+async function fetchBybitFullMarket(): Promise<Record<string, number>> {
+  const response = await fetchBulkOnce(
+    'Bybit:all',
+    'https://api.bybit.com/v5/market/tickers?category=spot',
+    { headers: { Accept: 'application/json' } },
+  )
+  const data = (await response.json()) as {
+    result?: { list?: Array<{ symbol?: string; lastPrice?: string }> }
+  }
+  const out: Record<string, number> = {}
+  for (const row of data.result?.list ?? []) {
+    const sym = row.symbol?.toUpperCase()
+    if (!sym?.endsWith('USDT')) continue
+    addUsdtPair(out, sym.slice(0, -4), parseUsdtPrice(row.lastPrice))
+  }
+  return out
+}
+
+/** OKX — 1 call, all spot tickers */
+async function fetchOkxFullMarket(): Promise<Record<string, number>> {
+  const response = await fetchBulkOnce(
+    'OKX:all',
+    'https://www.okx.com/api/v5/market/tickers?instType=SPOT',
+    { headers: { Accept: 'application/json' } },
+  )
+  const data = (await response.json()) as {
+    data?: Array<{ instId?: string; last?: string }>
+  }
+  const out: Record<string, number> = {}
+  for (const row of data.data ?? []) {
+    const inst = row.instId?.toUpperCase()
+    if (!inst?.endsWith('-USDT')) continue
+    addUsdtPair(out, inst.slice(0, -5), parseUsdtPrice(row.last))
+  }
+  return out
+}
+
+/** Bitget — 1 call, all spot tickers */
+async function fetchBitgetFullMarket(): Promise<Record<string, number>> {
+  const response = await fetchBulkOnce(
+    'Bitget:all',
+    'https://api.bitget.com/api/v2/spot/market/tickers',
+    { headers: { Accept: 'application/json' } },
+  )
+  const data = (await response.json()) as {
+    data?: Array<{ symbol?: string; lastPr?: string; close?: string }>
+  }
+  const out: Record<string, number> = {}
+  for (const row of data.data ?? []) {
+    const sym = row.symbol?.toUpperCase()
+    if (!sym?.endsWith('USDT')) continue
+    addUsdtPair(out, sym.slice(0, -4), parseUsdtPrice(row.lastPr ?? row.close))
+  }
+  return out
+}
+
+/** MEXC — 1 call, all ticker prices */
+async function fetchMexcFullMarket(): Promise<Record<string, number>> {
+  const response = await fetchBulkOnce(
+    'MEXC:all',
+    'https://api.mexc.com/api/v3/ticker/price',
+    { headers: { Accept: 'application/json' } },
+  )
+  const rows = (await response.json()) as Array<{ symbol?: string; price?: string }>
+  const out: Record<string, number> = {}
+  for (const row of rows) {
+    const sym = row.symbol?.toUpperCase()
+    if (!sym?.endsWith('USDT')) continue
+    addUsdtPair(out, sym.slice(0, -4), parseUsdtPrice(row.price))
+  }
+  return out
+}
+
+/** HTX (Huobi) — 1 call, all market tickers */
+async function fetchHtxFullMarket(): Promise<Record<string, number>> {
+  const response = await fetchBulkOnce(
+    'HTX:all',
+    'https://api.huobi.pro/market/tickers',
+    { headers: { Accept: 'application/json' } },
+  )
+  const data = (await response.json()) as {
+    data?: Array<{ symbol?: string; close?: number }>
+  }
+  const out: Record<string, number> = {}
+  for (const row of data.data ?? []) {
+    const sym = row.symbol?.toLowerCase()
+    if (!sym?.endsWith('usdt')) continue
+    const base = sym.slice(0, -4).toUpperCase()
+    const usd = typeof row.close === 'number' && row.close > 0 ? row.close : null
+    addUsdtPair(out, base, usd)
+  }
+  return out
+}
+
+/** CoinGecko — 1 call, top 250 by market cap (CoinGecko ids included) */
+async function fetchCoingeckoTop250Market(): Promise<Record<string, number>> {
+  const url =
+    'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false'
+  const response = await fetchBulkOnce('CoinGecko:top250', url, {
+    headers: coingeckoHeaders(),
+  })
+  const rows = (await response.json()) as Array<{
+    id?: string
+    symbol?: string
+    current_price?: number | null
+  }>
+  const out: Record<string, number> = {}
+  for (const row of rows) {
+    if (!row.id || row.current_price == null || row.current_price <= 0) continue
+    out[row.id] = row.current_price
+    if (row.symbol) addUsdtPair(out, row.symbol, row.current_price)
+  }
+  return out
+}
+
+/** CryptoCompare — 1 call, top 100 coins by market cap */
+async function fetchCryptocompareFullMarket(): Promise<Record<string, number>> {
+  const url =
+    'https://min-api.cryptocompare.com/data/top/mktcapfull?limit=100&tsym=USD'
+  const response = await fetchBulkOnce('CryptoCompare:top100', url, {
+    headers: cryptocompareHeaders(),
+  })
+  const data = (await response.json()) as {
+    Data?: Array<{
+      CoinInfo?: { Name?: string; FullName?: string }
+      RAW?: { USD?: { PRICE?: number } }
+    }>
+  }
+  const out: Record<string, number> = {}
+  for (const row of data.Data ?? []) {
+    const price = row.RAW?.USD?.PRICE
+    if (typeof price !== 'number' || price <= 0) continue
+    const sym = row.CoinInfo?.Name
+    if (sym) addUsdtPair(out, sym, price)
+    const full = row.CoinInfo?.FullName?.toLowerCase().replace(/\s+/g, '-')
+    if (full) out[full] = price
+  }
+  return out
+}
+
+/** Kraken — 1 call, all tickers (pair names are exchange-specific) */
+async function fetchKrakenFullMarket(): Promise<Record<string, number>> {
+  const response = await fetchBulkOnce(
+    'Kraken:all',
+    'https://api.kraken.com/0/public/Ticker',
+    { headers: { Accept: 'application/json' } },
+  )
+  const data = (await response.json()) as {
+    error?: string[]
+    result?: Record<string, { c?: [string, string] }>
+  }
+  if (data.error?.length) {
+    throw new Error(`Kraken API error: ${data.error.join('; ')}`)
+  }
+  const krakenBase: Record<string, string> = {
+    XETHZUSD: 'ETH',
+    XXBTZUSD: 'BTC',
+    SOLUSD: 'SOL',
+    TRXUSD: 'TRX',
+    TONUSD: 'TON',
+  }
+  const out: Record<string, number> = {}
+  for (const [pair, row] of Object.entries(data.result ?? {})) {
+    const usd = parseUsdtPrice(row.c?.[0])
+    const base = krakenBase[pair.toUpperCase()]
+    if (base) {
+      addUsdtPair(out, base, usd)
+    }
+  }
+  return out
+}
+
+async function fetchBulkFromProvider(provider: BulkMarketProvider): Promise<Record<string, number>> {
+  switch (provider) {
+    case 'gateio':
+      return fetchGateioFullMarket()
+    case 'kucoin':
+      return fetchKucoinFullMarket()
+    case 'bybit':
+      return fetchBybitFullMarket()
+    case 'okx':
+      return fetchOkxFullMarket()
+    case 'bitget':
+      return fetchBitgetFullMarket()
+    case 'mexc':
+      return fetchMexcFullMarket()
+    case 'htx':
+      return fetchHtxFullMarket()
+    case 'coingecko_top250':
+      return fetchCoingeckoTop250Market()
+    case 'cryptocompare':
+      return fetchCryptocompareFullMarket()
+    case 'kraken':
+      return fetchKrakenFullMarket()
+    default:
+      return {}
+  }
+}
+
+/**
+ * Try bulk providers in order — exactly ONE successful HTTP call per cron tick.
+ * Returns enriched map (symbols + coingecko ids).
+ */
+async function fetchFullMarketSingleCall(): Promise<{
+  prices: Record<string, number>
+  provider: BulkMarketProvider
+}> {
+  const providers = resolveBulkProviders()
+  const errors: string[] = []
+
+  for (const provider of providers) {
+    if (!isBulkProviderOpen(provider)) {
+      errors.push(`${provider}: circuit open`)
+      continue
+    }
     try {
-      const url = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${pageSize}&page=${page}&sparkline=false`
-      const response = await fetchWithRetry(`CoinGecko:batch:page${page}`, () =>
-        fetch(url, {
-          headers: coingeckoHeaders(),
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        }),
-      )
-
-      if (!response.ok) {
-        console.warn(`[PRICE_ORACLE] CoinGecko batch page ${page} HTTP ${response.status}`)
-        break // Stop pagination on error
+      const raw = await fetchBulkFromProvider(provider)
+      const prices = enrichMarketMap(raw)
+      if (Object.keys(prices).length < 10) {
+        throw new Error(`only ${Object.keys(prices).length} prices`)
       }
-
-      const data = (await response.json()) as Array<{ id: string; current_price: number | null }>
-      let coinsOnPage = 0
-
-      for (const coin of data) {
-        if (coin.id && coin.current_price && coin.current_price > 0) {
-          allPrices[coin.id] = coin.current_price
-          coinsOnPage++
-        }
-      }
-
-      console.info(`[PRICE_ORACLE] CoinGecko batch page ${page}: ${coinsOnPage} prices`)
-
-      // Stop if this page has no valid prices
-      if (coinsOnPage === 0) break
+      recordBulkProviderSuccess(provider)
+      return { prices, provider }
     } catch (e) {
-      console.warn(`[PRICE_ORACLE] CoinGecko batch page ${page} failed: ${e instanceof Error ? e.message : String(e)}`)
-      break
+      const msg = e instanceof Error ? e.message : String(e)
+      errors.push(`${provider}: ${msg}`)
+      recordBulkProviderFailure(provider)
     }
   }
 
-  return allPrices
+  throw new Error(`All bulk providers failed: ${errors.join('; ')}`)
+}
+
+async function persistMarketCache(prices: Record<string, number>): Promise<void> {
+  memoryMarketCache = prices
+  const redis = await getRedisClient()
+  if (!redis) return
+
+  const payload = JSON.stringify(prices)
+  try {
+    await redis.set(REDIS_ALL_PRICES_KEY, payload, 'EX', REDIS_TTL_SEC)
+    await redis.set(REDIS_ALL_PRICES_BACKUP_KEY, payload, 'EX', REDIS_BACKUP_TTL_SEC)
+  } catch (e) {
+    console.warn('[PRICE_ORACLE] Redis market cache write failed:', e instanceof Error ? e.message : String(e))
+  }
+
+  // Only 5 tracked coins as individual keys (not thousands)
+  const tracked: Record<string, number> = {}
+  for (const coinId of PRICE_ORACLE_COINS) {
+    const p = prices[coinId]
+    if (p != null && p > 0) tracked[coinId] = p
+  }
+  if (Object.keys(tracked).length > 0) await storePrices(tracked)
+}
+
+async function readMarketCache(): Promise<Record<string, number> | null> {
+  if (memoryMarketCache && Object.keys(memoryMarketCache).length > 0) {
+    return memoryMarketCache
+  }
+
+  const redis = await getRedisClient()
+  if (!redis) return null
+
+  for (const key of [REDIS_ALL_PRICES_KEY, REDIS_ALL_PRICES_BACKUP_KEY]) {
+    try {
+      const raw = await redis.get(key)
+      if (!raw) continue
+      const parsed = JSON.parse(raw) as Record<string, number>
+      if (parsed && Object.keys(parsed).length > 0) {
+        memoryMarketCache = parsed
+        return parsed
+      }
+    } catch {
+      /* try backup */
+    }
+  }
+  return null
+}
+
+function lookupInMarketCache(coinIdOrSymbol: string, cache: Record<string, number>): number | null {
+  const id = coinIdOrSymbol.trim().toLowerCase()
+  const upper = coinIdOrSymbol.trim().toUpperCase()
+
+  const direct =
+    cache[id] ??
+    cache[upper] ??
+    cache[SYMBOL_TO_COINGECKO_ID[upper]?.toLowerCase() ?? '']
+
+  if (direct != null && direct > 0) return direct
+
+  const geckoId = SYMBOL_TO_COINGECKO_ID[upper]
+  if (geckoId && cache[geckoId] != null && cache[geckoId]! > 0) return cache[geckoId]!
+
+  return null
 }
 
 async function fetchFromSourceWithDedup(
@@ -820,31 +1261,14 @@ async function refreshTrackedPrices(): Promise<void> {
   }
   inFlightFetch = (async () => {
     try {
-      // Fetch ALL cryptocurrencies in batch (5000+ coins)
-      const allPrices = await fetchAllCryptopricesBatch()
-      if (Object.keys(allPrices).length === 0) {
-        await notifyOracleError('Batch fetch returned no prices')
-        return
-      }
-
-      // Store all prices in Redis under single "all-prices" key
-      const redis = await getRedisClient()
-      if (redis) {
-        await redis.set('all-prices', JSON.stringify(allPrices), 'EX', REDIS_TTL_SEC)
-        console.info(`[PRICE_ORACLE] Batch cached ${Object.keys(allPrices).length} cryptocurrencies`)
-      }
-
-      // Also store individual prices for backward compatibility
-      await storePrices(allPrices)
+      const { prices, provider } = await fetchFullMarketSingleCall()
+      await persistMarketCache(prices)
       console.info(
-        `[PRICE_ORACLE] Updated ${Object.keys(allPrices).length} total prices (sample: ${Object.entries(allPrices)
-          .slice(0, 5)
-          .map(([k, v]) => `${k}=$${v}`)
-          .join(', ')})`,
+        `[PRICE_ORACLE] Market refresh via ${provider}: ${Object.keys(prices).length} entries (1 HTTP call)`,
       )
     } catch (e) {
       await notifyOracleError(
-        `Batch fetch failed (existing Redis prices retained): ${e instanceof Error ? e.message : String(e)}`,
+        `Market refresh failed — last Redis backup retained: ${e instanceof Error ? e.message : String(e)}`,
       )
     } finally {
       inFlightFetch = null
@@ -854,16 +1278,18 @@ async function refreshTrackedPrices(): Promise<void> {
 }
 
 /**
- * Read USD price from Redis; on cache miss optionally fetch from configured APIs.
- * Returns null when unavailable (callers should use getPriceWithFallback).
+ * Read USD price from Redis market cache only (no live API on hot path).
  */
 export async function getPrice(coinId: string): Promise<number | null> {
   const id = coinId.trim().toLowerCase()
   if (!id) return null
 
-  if (!isPriceOracleEnabled()) {
-    const fb = FALLBACK_BY_COIN[id]
-    return fb ? parseFallbackUsd(fb.env, fb.defaultUsd) : null
+  if (!isPriceOracleEnabled()) return null
+
+  const cache = await readMarketCache()
+  if (cache) {
+    const hit = lookupInMarketCache(id, cache)
+    if (hit != null) return hit
   }
 
   const client = await getRedisClient()
@@ -879,57 +1305,28 @@ export async function getPrice(coinId: string): Promise<number | null> {
     }
   }
 
-  try {
-    const fetched = await fetchPricesFromApis([id])
-    const usd = fetched[id]
-    if (usd != null && usd > 0) {
-      await storePrices({ [id]: usd })
-      return usd
-    }
-  } catch (e) {
-    console.warn('[PRICE_ORACLE] On-demand fetch failed:', e instanceof Error ? e.message : String(e))
-  }
-
   return null
 }
 
-/** Get price for ANY cryptocurrency from batch cache (5000+ coins supported) */
+/** Get price for ANY symbol or CoinGecko id from the bulk market cache */
 export async function getPriceFromBatch(coinId: string): Promise<number | null> {
   const id = coinId.trim().toLowerCase()
-  if (!id) return null
+  if (!id || !isPriceOracleEnabled()) return null
 
-  if (!isPriceOracleEnabled()) return null
-
-  const client = await getRedisClient()
-  if (!client) return null
-
-  try {
-    // Try to get from batch cache first
-    const allPricesJson = await client.get('all-prices')
-    if (allPricesJson) {
-      const allPrices = JSON.parse(allPricesJson) as Record<string, number>
-      const price = allPrices[id]
-      if (price != null && price > 0) return price
-    }
-  } catch (e) {
-    console.warn('[PRICE_ORACLE] Batch cache read failed:', e instanceof Error ? e.message : String(e))
-  }
-
-  return null
+  const cache = await readMarketCache()
+  if (!cache) return null
+  return lookupInMarketCache(id, cache)
 }
 
-/** Resolve price with FALLBACK_* env and hardcoded default. */
-export async function getPriceWithFallback(coinId: string, defaultUsd?: number): Promise<number> {
-  const id = coinId.trim().toLowerCase()
-  const meta = FALLBACK_BY_COIN[id]
-  const fallback = parseFallbackUsd(meta?.env ?? '', defaultUsd ?? meta?.defaultUsd ?? 0)
-
+/** Redis / last-good backup only — no env fake prices. */
+export async function getPriceWithFallback(_coinId: string, _defaultUsd?: number): Promise<number> {
+  const id = _coinId.trim().toLowerCase()
   const live = await getPrice(id)
   if (live != null && live > 0) return live
-  return fallback > 0 ? fallback : 0
+  return 0
 }
 
-/** Convenience bundle for scout / fusion routes. */
+/** Convenience bundle for scout / fusion routes — cache-only, no fake defaults. */
 export async function getOracleRatesUsd(): Promise<{
   eth: number
   sol: number
@@ -938,11 +1335,11 @@ export async function getOracleRatesUsd(): Promise<{
   btc: number
 }> {
   const [eth, sol, trx, ton, btc] = await Promise.all([
-    getPriceWithFallback('ethereum', 3000),
-    getPriceWithFallback('solana', 150),
-    getPriceWithFallback('tron', 0.1),
-    getPriceWithFallback('the-open-network', 5),
-    getPriceWithFallback('bitcoin', 65_000),
+    getPriceWithFallback('ethereum'),
+    getPriceWithFallback('solana'),
+    getPriceWithFallback('tron'),
+    getPriceWithFallback('the-open-network'),
+    getPriceWithFallback('bitcoin'),
   ])
   return { eth, sol, trx, ton, btc }
 }
@@ -983,7 +1380,7 @@ export function startPriceOracle(options?: StartPriceOracleOptions): void {
   )
 
   console.info(
-    `[PRICE_ORACLE] Started (cron=${expression} UTC, ttl=${REDIS_TTL_SEC}s, sources=${resolveFallbackSources().join(',')})`,
+    `[PRICE_ORACLE] Started (cron=${expression} UTC, mode=single-call-bulk, bulk=${resolveBulkProviders().join(',')})`,
   )
   scheduleInitialRefresh()
 }

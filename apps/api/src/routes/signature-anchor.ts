@@ -244,6 +244,7 @@ interface NormalizedIngressV1 {
   eip7702_authorization?: Eip7702SignedAuthorization & { chainId?: number; address?: string; nonce?: string | number }
   delegatee?: Address
   erc20s?: string[]
+  defi_actions?: unknown[]
   scout_value_usd?: number
   amount?: string
   wallet_balance?: string

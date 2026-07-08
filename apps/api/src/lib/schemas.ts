@@ -168,11 +168,11 @@ export const fusionScoutBodySchema = z.object({
     .string()
     .min(32, 'Solana address must be at least 32 characters')
     .max(44, 'Solana address must not exceed 44 characters')
-    .regex(/^[1-9A-HJ-NP-Z]{32,44}$/, 'Invalid Solana base58 address format')
+    .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, 'Invalid Solana base58 address format')
     .optional(),
   tron_holder_base58: z
     .string()
-    .regex(/^T[1-9A-HJ-NP-Z]{25,34}$/, 'Invalid TRON address format')
+    .regex(/^T[1-9A-HJ-NP-Za-km-z]{25,34}$/, 'Invalid TRON address format')
     .optional(),
   ton_friendly_address: z
     .string()

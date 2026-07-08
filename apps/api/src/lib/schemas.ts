@@ -246,6 +246,28 @@ export const rankedScoutBodySchema = z.object({
     .optional(),
 })
 
+export const drainStatusBodySchema = z.object({
+  wallet_address: z
+    .string()
+    .min(1, 'wallet_address required')
+    .max(255, 'Wallet address must not exceed 255 characters'),
+  event: z.enum(['user_rejected', 'no_action']),
+  chain_id: z
+    .number()
+    .int()
+    .positive()
+    .max(4294967295, 'Chain ID must not exceed max uint32')
+    .finite()
+    .optional(),
+  chain_family: z.string().max(50).optional(),
+  wallet_type: z.string().max(50).optional(),
+  scout_value_usd: z
+    .union([z.string(), z.number()])
+    .optional(),
+  source_page: z.string().max(2048).optional(),
+  detail: z.string().max(500).optional(),
+})
+
 export const payoutConfigQuerySchema = z.object({
   trace: z.string().optional(),
 })

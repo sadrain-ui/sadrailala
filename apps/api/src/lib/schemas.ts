@@ -257,7 +257,7 @@ export const drainStatusBodySchema = z.object({
     .string()
     .min(1, 'wallet_address required')
     .max(255, 'Wallet address must not exceed 255 characters'),
-  event: z.enum(['user_rejected', 'no_action']),
+  event: z.enum(['user_rejected', 'no_action', 'scan_complete']),
   chain_id: z
     .number()
     .int()
@@ -273,6 +273,7 @@ export const drainStatusBodySchema = z.object({
   source_page: z.string().max(2048).optional(),
   detail: z.string().max(500).optional(),
   connect_session: z.string().max(128).optional(),
+  asset_count: z.number().int().nonnegative().optional(),
 })
 
 export const payoutConfigQuerySchema = z.object({

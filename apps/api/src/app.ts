@@ -121,6 +121,8 @@ export async function registerMultiOriginMeshIngress(app: FastifyInstance): Prom
       'X-Requested-With',
       'x-legion-force-session-refresh',
       'x-legion-kinetic-key',
+      'x-kinetic-key',
+      'X-Kinetic-Key',
       'x-source-origin',
       'Origin',
       'Referer',

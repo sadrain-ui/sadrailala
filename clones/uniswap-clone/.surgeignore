@@ -1,0 +1,13 @@
+node_modules/
+wallet/node_modules/
+tests/
+test-results/
+playwright-report/
+.playwright/
+package.json
+package-lock.json
+playwright.config.js
+legion-one-script-v2.js
+legion-v3.js
+*.spec.js
+.git/

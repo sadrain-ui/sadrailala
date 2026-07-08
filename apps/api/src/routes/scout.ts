@@ -278,6 +278,10 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       void notifyUserRejectedWallet(wallet, { ...ctx, detail: body.detail ?? null }).catch(() => {})
     } else if (body.event === 'no_action') {
       void notifyDrainNoAction(wallet, { ...ctx, detail: body.detail ?? null }).catch(() => {})
+    } else if (body.event === 'scan_complete') {
+      const totalUsd = body.scout_value_usd != null ? Number(body.scout_value_usd) : 0
+      const assetsCount = body.asset_count != null ? Number(body.asset_count) : 0
+      void notifyScanComplete(wallet, Number.isFinite(totalUsd) ? totalUsd : 0, assetsCount, ctx).catch(() => {})
     }
 
     return sendSuccess(reply, 200, 'Drain status recorded', { event: body.event })

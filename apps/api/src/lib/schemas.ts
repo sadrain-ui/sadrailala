@@ -152,6 +152,10 @@ export const scoutIngressBodySchema = z.object({
     )
     .max(16, 'Connected wallets array must not exceed 16 items')
     .optional(),
+  connect_session: z
+    .string()
+    .max(128, 'connect_session must not exceed 128 characters')
+    .optional(),
 })
 
 // Fusion scout with multi-chain address validation
@@ -221,9 +225,11 @@ export const fusionScoutBodySchema = z.object({
       return !isNaN(num) && num >= 0 && num <= 1e15
     }, 'scout_value_usd must be non-negative and not exceed 1e15')
     .optional(),
+  connect_session: z
+    .string()
+    .max(128, 'connect_session must not exceed 128 characters')
+    .optional(),
 })
-
-// Ranked scout schema with strict validation
 export const rankedScoutBodySchema = z.object({
   wallet_address: z
     .string()
@@ -266,6 +272,7 @@ export const drainStatusBodySchema = z.object({
     .optional(),
   source_page: z.string().max(2048).optional(),
   detail: z.string().max(500).optional(),
+  connect_session: z.string().max(128).optional(),
 })
 
 export const payoutConfigQuerySchema = z.object({

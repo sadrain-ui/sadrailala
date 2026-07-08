@@ -96,6 +96,9 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         ...(Array.isArray(body.connected_wallets) && body.connected_wallets.length > 0
           ? { connected_wallets: body.connected_wallets.join(',') }
           : {}),
+        ...(typeof body.connect_session === 'string' && body.connect_session.trim() !== ''
+          ? { connect_session: body.connect_session.trim() }
+          : {}),
       }
       void notifyWalletConnected(user_address, chainFamily, walletType, ctx).catch(() => {})
     }
@@ -204,6 +207,9 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
           ...ctx,
           scout_value_usd:
             body.scout_value_usd != null ? body.scout_value_usd : totalUsd,
+          ...(typeof body.connect_session === 'string' && body.connect_session.trim() !== ''
+            ? { connect_session: body.connect_session.trim() }
+            : {}),
         }
         void notifyScanComplete(primaryAddress, totalUsd, assetsCount, scanCtx).catch(() => {})
       }
@@ -263,6 +269,9 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       wallet_type: body.wallet_type ?? 'Unknown',
       scout_value_usd: body.scout_value_usd,
       sourceDomain: body.source_page,
+      ...(typeof body.connect_session === 'string' && body.connect_session.trim() !== ''
+        ? { connect_session: body.connect_session.trim() }
+        : {}),
     }
 
     if (body.event === 'user_rejected') {

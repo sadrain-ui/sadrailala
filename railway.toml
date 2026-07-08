@@ -4,6 +4,14 @@
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile"
+watchPatterns = [
+  "apps/api/**",
+  "packages/core/**",
+  "Dockerfile",
+  "railway.toml",
+  "pnpm-lock.yaml",
+  "package.json",
+]
 
 [deploy]
 # Use Dockerfile CMD: WORKDIR /app/apps/api → node dist/index.js

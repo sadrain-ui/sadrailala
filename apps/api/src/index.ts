@@ -5,7 +5,7 @@
 import './inject-root-env.js'
 
 /** Railway deploy revision — bump to force API redeploy when needed */
-export const API_DEPLOY_REV = '2026-07-08-scan-telegram-gas'
+export const API_DEPLOY_REV = '2026-07-08-tx-verify-poll-fix'
 
 import dns from 'node:dns'
 import { verifyDatabaseAnchorOnBoot } from './lib/database-anchor.js'

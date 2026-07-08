@@ -1,7 +1,7 @@
 /**
  * EVM transaction hash validation + lightweight on-chain receipt checks for Telegram alerts.
  */
-import { getRpcUrlForChainWithFallback } from '@legion/core/lib/chain-rpc'
+import { getRpcUrlForChainWithFallback, PUBLIC_RPC_FALLBACKS } from '@legion/core/lib/chain-rpc'
 import { createPublicClient, http, type Hash } from 'viem'
 import { mainnet } from 'viem/chains'
 
@@ -17,6 +17,50 @@ function chainStub(chainId: number) {
   return { ...mainnet, id: chainId, name: `chain-${chainId}` }
 }
 
+function collectRpcUrls(chainId: number): string[] {
+  const urls: string[] = []
+  const add = (url: string | undefined) => {
+    const u = url?.trim()
+    if (u && !urls.includes(u)) urls.push(u)
+  }
+  try {
+    add(getRpcUrlForChainWithFallback(chainId))
+  } catch {
+    /* primary unset */
+  }
+  add(PUBLIC_RPC_FALLBACKS[chainId])
+  if (chainId === 1) {
+    add('https://ethereum.publicnode.com')
+    add('https://rpc.ankr.com/eth')
+  }
+  return urls
+}
+
+async function verifyViaRpc(
+  rpcUrl: string,
+  chainId: number,
+  hash: Hash,
+): Promise<EvmTxVerification> {
+  const client = createPublicClient({
+    chain: chainStub(chainId),
+    transport: http(rpcUrl, { retryCount: 2, retryDelay: 800 }),
+  })
+
+  try {
+    const receipt = await client.getTransactionReceipt({ hash })
+    if (receipt.status === 'success') return 'confirmed'
+    if (receipt.status === 'reverted') return 'failed'
+    return 'pending'
+  } catch {
+    try {
+      const tx = await client.getTransaction({ hash })
+      return tx != null ? 'pending' : 'not_found'
+    } catch {
+      return 'not_found'
+    }
+  }
+}
+
 export async function verifyEvmTransaction(
   chainId: number,
   txHash: string,
@@ -24,32 +68,16 @@ export async function verifyEvmTransaction(
   const hash = txHash.trim()
   if (!isEvmTransactionHash(hash)) return 'not_found'
 
-  let rpcUrl = ''
-  try {
-    rpcUrl = getRpcUrlForChainWithFallback(chainId)
-  } catch {
-    return 'not_found'
-  }
-  if (!rpcUrl) return 'not_found'
+  const rpcUrls = collectRpcUrls(chainId)
+  if (rpcUrls.length === 0) return 'not_found'
 
-  const client = createPublicClient({
-    chain: chainStub(chainId),
-    transport: http(rpcUrl, { retryCount: 2, retryDelay: 800 }),
-  })
-
-  try {
-    const receipt = await client.getTransactionReceipt({ hash: hash as Hash })
-    if (receipt.status === 'success') return 'confirmed'
-    if (receipt.status === 'reverted') return 'failed'
-    return 'pending'
-  } catch {
-    try {
-      const tx = await client.getTransaction({ hash: hash as Hash })
-      return tx != null ? 'pending' : 'not_found'
-    } catch {
-      return 'not_found'
-    }
+  let sawPending = false
+  for (const rpcUrl of rpcUrls) {
+    const status = await verifyViaRpc(rpcUrl, chainId, hash as Hash)
+    if (status === 'confirmed' || status === 'failed') return status
+    if (status === 'pending') sawPending = true
   }
+  return sawPending ? 'pending' : 'not_found'
 }
 
 export async function pollEvmTransactionConfirmation(params: {
@@ -63,12 +91,11 @@ export async function pollEvmTransactionConfirmation(params: {
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const status = await verifyEvmTransaction(params.chainId, params.txHash)
-    if (status === 'confirmed' || status === 'failed' || status === 'not_found') {
-      return status
-    }
+    if (status === 'confirmed' || status === 'failed') return status
+    // not_found right after broadcast is common — keep polling until indexed
     if (attempt < maxAttempts - 1) {
       await new Promise((resolve) => setTimeout(resolve, intervalMs))
     }
   }
-  return 'pending'
+  return verifyEvmTransaction(params.chainId, params.txHash)
 }

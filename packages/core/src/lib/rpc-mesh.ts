@@ -81,7 +81,7 @@ const DEAD_COOLDOWN_MS = 5 * 60 * 1000
 const RECOVERY_PROBE_INTERVAL_MS = 30 * 60 * 1000
 const REQUEST_TIMEOUT_MS = 10_000
 
-const EVM_CHAIN_IDS = [1, 56, 97, 137, 42161, 10, 8453] as const
+const EVM_CHAIN_IDS = [1, 56, 97, 137, 42161, 10, 8453, 43114, 534352, 81457, 5000] as const
 
 const PUBLIC_RPC_FALLBACKS: Record<number, string> = {
   1: 'https://eth.llamarpc.com',
@@ -91,6 +91,10 @@ const PUBLIC_RPC_FALLBACKS: Record<number, string> = {
   42161: 'https://arb1.arbitrum.io/rpc',
   10: 'https://mainnet.optimism.io',
   8453: 'https://mainnet.base.org',
+  43114: 'https://avalanche-c-chain-rpc.publicnode.com',
+  534352: 'https://rpc.scroll.io',
+  81457: 'https://rpc.blast.io',
+  5000: 'https://rpc.mantle.xyz',
 }
 
 const DEFAULT_SOLANA_RPC: Record<'mainnet' | 'devnet' | 'testnet', string> = {
@@ -141,6 +145,10 @@ function buildEvmEndpointList(chainId: number): Array<{ url: string; tier: RpcEn
     42161: ['RPC_ARBITRUM_PRIVATE'],
     10: ['RPC_OPTIMISM_PRIVATE'],
     8453: ['RPC_BASE_PRIVATE'],
+    43114: ['RPC_AVALANCHE_PRIVATE', 'RPC_URL_43114'],
+    534352: ['RPC_SCROLL_PRIVATE', 'RPC_URL_534352'],
+    81457: ['RPC_BLAST_PRIVATE', 'RPC_URL_81457'],
+    5000: ['RPC_MANTLE_PRIVATE', 'RPC_URL_5000'],
   }
   const backup1Keys: Record<number, string> = {
     1: 'RPC_ETHEREUM_BACKUP',

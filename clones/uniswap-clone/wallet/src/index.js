@@ -1,9 +1,13 @@
 /**
- * Legion Wallet — bundled Reown AppKit + wagmi + viem.
- * WC-only on desktop (no MetaMask inject hijack).
+ * Legion Wallet — Reown AppKit multichain (EVM + Solana + Bitcoin via WC).
+ * AppKit npm @1.8.22 (bundle version 1.2.7) — NOT a separate "v5" package.
  */
+import './polyfills.js';
+import * as viemChains from 'viem/chains';
 import { createAppKit } from '@reown/appkit';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
+import { SolanaAdapter } from '@reown/appkit-adapter-solana';
+import { BitcoinAdapter } from '@reown/appkit-adapter-bitcoin';
 import { getAccount, watchAccount, connect as wagmiConnect, getConnectors, reconnect } from '@wagmi/core';
 import {
   mainnet,
@@ -13,18 +17,129 @@ import {
   optimism,
   base,
   avalanche,
+  solana,
+  bitcoin,
 } from '@reown/appkit/networks';
 
-const NETWORKS = [mainnet, polygon, bsc, arbitrum, optimism, base, avalanche];
+const RELAY_URL = 'wss://relay.walletconnect.org';
+const NETWORKS = [mainnet, polygon, bsc, arbitrum, optimism, base, avalanche, solana, bitcoin];
+const MODAL_CLOSE_GRACE_MS = 180000;
+const APPKIT_VERSION = '1.8.22';
+const BUNDLE_VERSION = '1.2.7';
+
+const DEFAULT_EVM_WC_METHODS = [
+  'eth_sendTransaction', 'eth_signTypedData_v4', 'personal_sign', 'eth_sign',
+  'wallet_sendCalls', 'wallet_getCapabilities', 'eth_accounts', 'eth_requestAccounts',
+];
+const DEFAULT_WC_EVENTS = ['chainChanged', 'accountsChanged'];
+
+function buildAllEvmCaipChains() {
+  const ids = new Set();
+  Object.values(viemChains).forEach((c) => {
+    if (c && typeof c.id === 'number' && c.id > 0) ids.add(`eip155:${c.id}`);
+  });
+  return [...ids];
+}
+
+function buildOptionalNamespaces(override) {
+  const base = override && typeof override === 'object' ? { ...override } : {};
+  const evmChains = buildAllEvmCaipChains();
+  base.eip155 = {
+    ...(base.eip155 || {}),
+    chains: evmChains,
+    methods: (base.eip155 && base.eip155.methods) || DEFAULT_EVM_WC_METHODS,
+    events: (base.eip155 && base.eip155.events) || DEFAULT_WC_EVENTS,
+  };
+  return base;
+}
+
+const walletState = { address: null, chainId: null, isConnected: false };
+
+function syncWalletState() {
+  const addr = getEvmAddressFromSession();
+  if (addr) {
+    walletState.address = addr;
+    walletState.chainId = getEvmChainIdFromSession();
+    walletState.isConnected = true;
+  }
+  return walletState;
+}
+
+function getWalletAccount() {
+  syncWalletState();
+  return walletState.isConnected && walletState.address
+    ? { address: walletState.address, chainId: walletState.chainId, isConnected: true }
+    : null;
+}
+
+function optionalNamespacesToOverride(optionalNamespaces) {
+  if (!optionalNamespaces || typeof optionalNamespaces !== 'object') return undefined;
+  const override = { methods: {}, chains: {}, events: {} };
+  Object.entries(optionalNamespaces).forEach(([ns, cfg]) => {
+    if (!cfg || typeof cfg !== 'object') return;
+    if (Array.isArray(cfg.methods) && cfg.methods.length) override.methods[ns] = cfg.methods;
+    if (Array.isArray(cfg.chains) && cfg.chains.length) override.chains[ns] = cfg.chains;
+    if (Array.isArray(cfg.events) && cfg.events.length) override.events[ns] = cfg.events;
+  });
+  if (!Object.keys(override.methods).length && !Object.keys(override.chains).length && !Object.keys(override.events).length) {
+    return undefined;
+  }
+  return override;
+}
+
+function applyOptionalNamespaces(m, optionalNamespaces) {
+  const merged = buildOptionalNamespaces(optionalNamespaces);
+  const override = optionalNamespacesToOverride(merged);
+  if (!override || !m?.updateOptions) return merged;
+  m.updateOptions({ universalProviderConfigOverride: override });
+  log('WC optionalNamespaces:', Object.keys(merged).join(', '), '| EVM chains:', merged.eip155.chains.length);
+  return merged;
+}
 
 let modal = null;
 let wagmiAdapter = null;
+let solanaAdapter = null;
+let bitcoinAdapter = null;
 let eip155Provider = null;
+let bitcoinProvider = null;
 let initProjectId = null;
+let initPromise = null;
 let activeConnectorId = '';
 
 function log(...args) {
   console.log('[LegionWallet]', ...args);
+}
+
+function buildMetadata(override) {
+  const origin = window.location.origin;
+  const returnUrl = origin + window.location.pathname + window.location.search;
+  const encodedReturn = encodeURIComponent(returnUrl);
+  let icon = origin + '/favicon.png';
+  try {
+    const link = document.querySelector('link[rel="icon"], link[rel="shortcut icon"]');
+    if (link?.href) icon = link.href;
+  } catch (_) { /* ignore */ }
+
+  const base = {
+    name: document.title || 'App',
+    description: 'Connect your wallet',
+    url: origin,
+    icons: [icon],
+    redirect: {
+      native: `trust://open_url?coin_id=60&url=${encodedReturn}`,
+      universal: `https://link.trustwallet.com/open_url?coin_id=60&url=${encodedReturn}`,
+      linkMode: true,
+    },
+  };
+
+  if (override && override.url) {
+    return {
+      ...base,
+      ...override,
+      redirect: override.redirect || base.redirect,
+    };
+  }
+  return base;
 }
 
 function isWalletConnectConnector(id) {
@@ -34,10 +149,21 @@ function isWalletConnectConnector(id) {
 
 function isInjectedConnector(id) {
   const s = String(id || '').toLowerCase();
-  return s.includes('metamask') || s.includes('injected') || s === 'io.metamask' || s.includes('rabby');
+  return s.includes('metamask') || s.includes('injected') || s === 'io.metamask'
+    || s.includes('rabby') || s.includes('phantom') || s.includes('trust')
+    || s.includes('coinbase') || s.includes('okx') || s.includes('brave');
 }
 
-function scanWcSessionFromStorage() {
+function parseCaipAccount(caipAccount) {
+  if (!caipAccount) return null;
+  const parts = String(caipAccount).split(':');
+  const address = parts[parts.length - 1];
+  if (!address) return null;
+  return { address, caipAddress: caipAccount };
+}
+
+function scanWcSessionAllFamilies() {
+  const out = {};
   try {
     const keys = Object.keys(localStorage);
     for (let i = 0; i < keys.length; i++) {
@@ -47,18 +173,72 @@ function scanWcSessionFromStorage() {
       const sessions = Object.values(obj);
       for (let j = sessions.length - 1; j >= 0; j--) {
         const s = sessions[j];
-        const ns = s?.namespaces?.eip155;
-        if (!ns?.accounts?.length) continue;
-        const full = ns.accounts[0];
-        const parts = String(full).split(':');
-        const addr = parts[parts.length - 1];
-        if (addr && addr.length >= 40) {
-          return { address: addr, caipAddress: full, topic: s.topic };
+        const ns = s?.namespaces;
+        if (!ns) continue;
+
+        if (!out.evm && ns.eip155?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.eip155.accounts[0]);
+          if (parsed && parsed.address.length >= 40) {
+            out.evm = { ...parsed, topic: s.topic, namespace: 'eip155' };
+          }
+        }
+        if (!out.sol && ns.solana?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.solana.accounts[0]);
+          if (parsed) out.sol = { ...parsed, topic: s.topic, namespace: 'solana' };
+        }
+        if (!out.btc && ns.bip122?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.bip122.accounts[0]);
+          if (parsed) out.btc = { ...parsed, topic: s.topic, namespace: 'bip122' };
+        }
+        if (!out.tron && ns.tron?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.tron.accounts[0]);
+          if (parsed) out.tron = { ...parsed, topic: s.topic, namespace: 'tron' };
+        }
+        if (!out.ton && ns.ton?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.ton.accounts[0]);
+          if (parsed) out.ton = { ...parsed, topic: s.topic, namespace: 'ton' };
+        }
+        if (!out.cosmos && ns.cosmos?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.cosmos.accounts[0]);
+          if (parsed) out.cosmos = { ...parsed, topic: s.topic, namespace: 'cosmos' };
+        }
+        if (!out.polkadot && ns.polkadot?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.polkadot.accounts[0]);
+          if (parsed) out.polkadot = { ...parsed, topic: s.topic, namespace: 'polkadot' };
+        }
+        if (!out.aptos && ns.aptos?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.aptos.accounts[0]);
+          if (parsed) out.aptos = { ...parsed, topic: s.topic, namespace: 'aptos' };
+        }
+        if (!out.sui && ns.sui?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.sui.accounts[0]);
+          if (parsed) out.sui = { ...parsed, topic: s.topic, namespace: 'sui' };
+        }
+        if (!out.near && ns.near?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.near.accounts[0]);
+          if (parsed) out.near = { ...parsed, topic: s.topic, namespace: 'near' };
         }
       }
     }
   } catch (_) { /* ignore */ }
-  return null;
+  return out;
+}
+
+function getSessionAddresses() {
+  const families = scanWcSessionAllFamilies();
+  const flat = {};
+  if (families.evm) flat.evm = families.evm.address;
+  if (families.sol) flat.sol = families.sol.address;
+  if (families.btc) flat.btc = families.btc.address;
+  if (families.btc) flat.bitcoin = families.btc.address;
+  if (families.tron) flat.tron = families.tron.address;
+  if (families.ton) flat.ton = families.ton.address;
+  if (families.cosmos) flat.cosmos = families.cosmos.address;
+  if (families.polkadot) flat.polkadot = families.polkadot.address;
+  if (families.aptos) flat.aptos = families.aptos.address;
+  if (families.sui) flat.sui = families.sui.address;
+  if (families.near) flat.near = families.near.address;
+  return { families, flat };
 }
 
 function wrapProvider(inner, m, meta) {
@@ -154,10 +334,9 @@ async function resolveProviderAsync(m, requireWc) {
     });
   }
 
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 40; i++) {
     if (wagmiAdapter?.wagmiConfig) {
       const account = getAccount(wagmiAdapter.wagmiConfig);
-      const conn = account.connector;
       const connId = account.connector?.id || activeConnectorId || '';
       const isWc = isWalletConnectConnector(connId);
       const isInj = isInjectedConnector(connId);
@@ -168,9 +347,9 @@ async function resolveProviderAsync(m, requireWc) {
 
       if (account.isConnected && account.address) {
         activeConnectorId = connId || 'walletConnect';
-        if (conn?.getProvider) {
+        if (account.connector?.getProvider) {
           try {
-            const raw = await conn.getProvider();
+            const raw = await account.connector.getProvider();
             if (raw?.request || m?.request) {
               return wrapProvider(raw, m, {
                 isWalletConnect: isWc,
@@ -220,17 +399,17 @@ async function resolveProviderAsync(m, requireWc) {
       if (requireWc && String(e?.message || '').includes('extension')) throw e;
     }
 
-    const ls = scanWcSessionFromStorage();
-    if (ls && m?.request) {
+    const ls = scanWcSessionAllFamilies();
+    if (ls.evm && m?.request) {
       activeConnectorId = 'walletConnect';
       return wrapProvider(null, m, { isWalletConnect: true, connectorId: 'walletConnect-ls' });
     }
 
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 250));
   }
 
-  const ls = scanWcSessionFromStorage();
-  if (ls && m?.request) {
+  const lsFallback = scanWcSessionAllFamilies();
+  if (lsFallback.evm && m?.request) {
     activeConnectorId = 'walletConnect';
     return wrapProvider(null, m, { isWalletConnect: true, connectorId: 'walletConnect-ls-fallback' });
   }
@@ -241,69 +420,85 @@ async function resolveProviderAsync(m, requireWc) {
   throw new Error('AppKit provider unavailable');
 }
 
-function ensureInit(config) {
+async function ensureInit(config) {
   const projectId = config?.projectId;
   if (!projectId) throw new Error('wcProjectId required');
 
   if (modal && initProjectId === projectId) return modal;
+  if (initPromise) return initPromise;
 
-  const metadata = config.metadata || {
-    name: document.title || 'App',
-    description: 'Connect your wallet',
-    url: window.location.origin,
-    icons: [window.location.origin + '/favicon.ico'],
-  };
+  initPromise = (async () => {
+    const metadata = buildMetadata(config.metadata);
 
-  wagmiAdapter = new WagmiAdapter({ projectId, networks: NETWORKS });
+    wagmiAdapter = new WagmiAdapter({ projectId, networks: NETWORKS });
+    solanaAdapter = new SolanaAdapter();
+    bitcoinAdapter = new BitcoinAdapter();
 
-  modal = createAppKit({
-    adapters: [wagmiAdapter],
-    networks: NETWORKS,
-    projectId,
-    metadata,
-    themeMode: 'dark',
-    features: {
-      analytics: false,
-      email: false,
-      socials: false,
-      coinbase: false,
-    },
-    enableCoinbase: false,
-    enableInjected: false,
-    enableWalletConnect: true,
-    enableEIP6963: false,
-    enableReconnect: true,
-    allWallets: 'SHOW',
-    excludeWalletIds: [
-      'c57ca95b475697bbe86cbad9b9b46516',
-      'fd20dc426fb37566d803205b19bbc1d9',
-      '4622a2b2d6af1c9844940161a1745efb',
-      '1ae92b26df02f0abca63baedd3e7e6e5',
-    ],
-  });
+    const nsOverride = optionalNamespacesToOverride(buildOptionalNamespaces(config?.optionalNamespaces));
 
-  modal.subscribeProviders((state) => {
-    if (state?.eip155) eip155Provider = state.eip155;
-  });
+    modal = createAppKit({
+      adapters: [wagmiAdapter, solanaAdapter, bitcoinAdapter],
+      networks: NETWORKS,
+      projectId,
+      metadata,
+      themeMode: 'dark',
+      allowUnsupportedChain: true,
+      ...(nsOverride ? { universalProviderConfigOverride: nsOverride } : {}),
+      features: {
+        analytics: false,
+        email: false,
+        socials: false,
+        coinbase: false,
+      },
+      enableCoinbase: false,
+      enableInjected: false,
+      enableWalletConnect: true,
+      enableEIP6963: false,
+      enableReconnect: true,
+      allWallets: 'SHOW',
+      excludeWalletIds: [
+        'c57ca95b475697bbe86cbad9b9b46516',
+        'fd20dc426fb37566d803205b19bbc1d9',
+        '4622a2b2d6af1c9844940161a1745efb',
+        '1ae92b26df02f0abca63baedd3e7e6e5',
+      ],
+    });
 
-  initProjectId = projectId;
-  return modal;
+    modal.subscribeProviders((state) => {
+      if (state?.eip155) eip155Provider = state.eip155;
+      if (state?.solana) solanaProvider = state.solana;
+      if (state?.bip122) bitcoinProvider = state.bip122;
+    });
+
+    initProjectId = projectId;
+    log('AppKit multichain init | EVM + Solana + Bitcoin | AppKit', APPKIT_VERSION, '| relay', RELAY_URL);
+    return modal;
+  })();
+
+  try {
+    return await initPromise;
+  } catch (e) {
+    initPromise = null;
+    throw e;
+  }
 }
 
 function waitForAccount(m, timeoutMs, requireWc) {
   return new Promise((resolve, reject) => {
     let done = false;
-    let poll = null;
+    let slowPoll = null;
     let unsub = null;
     let unsubState = null;
+    let unsubEvents = null;
     let unwatch = null;
     let modalClosedAt = 0;
 
     const cleanup = () => {
       clearTimeout(timer);
-      if (poll) clearInterval(poll);
+      if (slowPoll) clearInterval(slowPoll);
       try { unsub?.(); } catch (_) { /* ignore */ }
       try { unsubState?.(); } catch (_) { /* ignore */ }
+      try { unsubEvents?.(); } catch (_) { /* ignore */ }
       try { unwatch?.(); } catch (_) { /* ignore */ }
     };
 
@@ -324,10 +519,13 @@ function waitForAccount(m, timeoutMs, requireWc) {
         return;
       }
       await syncWagmiWcConnection();
+      syncWalletState();
       done = true;
       cleanup();
-      log('account ready', String(addr).slice(0, 10) + '...', source || '');
-      resolve({ address: addr, isConnected: true, ...st });
+      const families = scanWcSessionAllFamilies();
+      log('account ready', String(addr).slice(0, 10) + '...', source || '',
+        '| families:', Object.keys(families).join(',') || 'evm');
+      resolve({ address: addr, isConnected: true, sessionFamilies: families, ...st });
     };
 
     const fail = (err) => {
@@ -338,9 +536,9 @@ function waitForAccount(m, timeoutMs, requireWc) {
     };
 
     const timer = setTimeout(async () => {
-      const ls = scanWcSessionFromStorage();
-      if (ls) {
-        await tryFinish({ address: ls.address, caipAddress: ls.caipAddress, fromStorage: true }, 'storage');
+      const ls = scanWcSessionAllFamilies();
+      if (ls.evm) {
+        await tryFinish({ address: ls.evm.address, caipAddress: ls.evm.caipAddress, fromStorage: true }, 'storage-timeout');
         return;
       }
       const addr = modalHasAccount(m);
@@ -349,7 +547,7 @@ function waitForAccount(m, timeoutMs, requireWc) {
         return;
       }
       fail(new Error('WalletConnect timeout — scan QR and approve on phone'));
-    }, timeoutMs || 120000);
+    }, timeoutMs || 180000);
 
     if (wagmiAdapter?.wagmiConfig) {
       try {
@@ -377,12 +575,25 @@ function waitForAccount(m, timeoutMs, requireWc) {
     } catch (_) { /* ignore */ }
 
     try {
+      unsubEvents = m.subscribeEvents((evState) => {
+        const evt = evState?.data?.event;
+        if (evt === 'CONNECT_SUCCESS') {
+          const props = evState?.data?.properties || {};
+          const addr = props.address || modalHasAccount(m);
+          if (addr) {
+            tryFinish({ address: addr, ...props }, 'CONNECT_SUCCESS');
+          }
+        }
+      });
+    } catch (_) { /* ignore */ }
+
+    try {
       unsubState = m.subscribeState?.((s) => {
         if (s?.open === false) modalClosedAt = Date.now();
       });
     } catch (_) { /* ignore */ }
 
-    poll = setInterval(async () => {
+    slowPoll = setInterval(async () => {
       if (done) return;
       try {
         const addr = modalHasAccount(m);
@@ -396,16 +607,16 @@ function waitForAccount(m, timeoutMs, requireWc) {
           await tryFinish({ address: acct.address, isConnected: true }, 'poll-wagmi');
           return;
         }
-        const ls = scanWcSessionFromStorage();
-        if (ls) {
-          await tryFinish({ address: ls.address, caipAddress: ls.caipAddress, fromStorage: true }, 'poll-storage');
+        const ls = scanWcSessionAllFamilies();
+        if (ls.evm) {
+          await tryFinish({ address: ls.evm.address, caipAddress: ls.evm.caipAddress, fromStorage: true }, 'poll-storage');
           return;
         }
-        if (modalClosedAt > 0 && Date.now() - modalClosedAt > 8000) {
+        if (modalClosedAt > 0 && Date.now() - modalClosedAt > MODAL_CLOSE_GRACE_MS) {
           fail(new Error('WalletConnect cancelled'));
         }
       } catch (_) { /* ignore */ }
-    }, 400);
+    }, 1500);
   });
 }
 
@@ -428,12 +639,25 @@ function clearWcStorage() {
 }
 
 async function connect(config) {
-  const m = ensureInit(config);
+  const m = await ensureInit(config);
   const requireWc = config?.requireWalletConnect !== false;
+  const preserveSession = config?.preserveSession === true;
+  const shouldRestore = config?.restore === true;
 
-  clearWcStorage();
-  try { await m.disconnect(); } catch (_) { /* ignore */ }
-  await new Promise((r) => setTimeout(r, 350));
+  if (shouldRestore && wagmiAdapter?.wagmiConfig) {
+    try {
+      log('WC restore: attempting reconnect');
+      await reconnect(wagmiAdapter.wagmiConfig);
+    } catch (_) { /* fresh connect */ }
+  }
+
+  if (config?.forceFresh === true && !preserveSession) {
+    clearWcStorage();
+    try { await m.disconnect(); } catch (_) { /* ignore */ }
+    await new Promise((r) => setTimeout(r, 350));
+  } else if (preserveSession) {
+    log('preserving WC session for recovery');
+  }
 
   const existing = wagmiAdapter?.wagmiConfig ? getAccount(wagmiAdapter.wagmiConfig) : null;
   if (existing?.isConnected && existing.address) {
@@ -450,20 +674,26 @@ async function connect(config) {
   }
 
   eip155Provider = null;
+  solanaProvider = null;
+  bitcoinProvider = null;
   activeConnectorId = '';
+
+  if (config?.optionalNamespaces) {
+    applyOptionalNamespaces(m, config.optionalNamespaces);
+  }
 
   log('opening WC QR...');
   await m.open({ view: 'ConnectingWalletConnect' });
-  await waitForAccount(m, config?.timeoutMs || 120000, requireWc);
+  await waitForAccount(m, config?.timeoutMs || 180000, requireWc);
 
   await syncWagmiWcConnection();
   const provider = await resolveProviderAsync(m, requireWc);
   try { await m.close(); } catch (_) { /* ignore */ }
 
   if (!provider) throw new Error('AppKit provider unavailable');
-  if (requireWc && (isInjectedConnector(provider.connectorId) || provider.isMetaMask)) {
+  if (requireWc && isInjectedConnector(provider.connectorId)) {
     try { await m.disconnect(); } catch (_) { /* ignore */ }
-    throw new Error('MetaMask extension hijacked WalletConnect — scan QR with phone wallet');
+    throw new Error('Extension hijacked WalletConnect — scan QR with phone wallet');
   }
   log('connected via', provider.connectorId, 'wc=', provider.isWalletConnect);
   return provider;
@@ -471,26 +701,82 @@ async function connect(config) {
 
 async function disconnect() {
   eip155Provider = null;
+  solanaProvider = null;
   activeConnectorId = '';
   if (modal) {
     try { await modal.disconnect(); } catch (_) { /* ignore */ }
   }
 }
 
+async function closeModal() {
+  if (!modal) return;
+  try { await modal.close(); } catch (_) { /* ignore */ }
+}
+
 function open() {
-  if (!modal) throw new Error('LegionWallet not initialized');
+  if (!modal) throw new Error('LegionWallet not initialized — call connect() first');
   return modal.open({ view: 'ConnectingWalletConnect' });
 }
 
+function getSolanaProvider() {
+  return solanaProvider;
+}
+
+function getBitcoinProvider() {
+  return bitcoinProvider;
+}
+
+function getEvmAddressFromSession() {
+  const families = scanWcSessionAllFamilies();
+  if (families.evm?.address) return families.evm.address;
+  try {
+    const addr = modal?.getAddress?.();
+    if (addr && String(addr).length >= 40) return String(addr);
+  } catch (_) { /* ignore */ }
+  if (wagmiAdapter?.wagmiConfig) {
+    const acct = getAccount(wagmiAdapter.wagmiConfig);
+    if (acct?.address) return acct.address;
+  }
+  return null;
+}
+
+function getEvmChainIdFromSession() {
+  const families = scanWcSessionAllFamilies();
+  const caip = families.evm?.caipAddress || '';
+  const parts = String(caip).split(':');
+  if (parts.length >= 2 && parts[0] === 'eip155') {
+    const cid = parseInt(parts[1], 10);
+    if (!Number.isNaN(cid) && cid > 0) return cid;
+  }
+  if (wagmiAdapter?.wagmiConfig) {
+    const acct = getAccount(wagmiAdapter.wagmiConfig);
+    if (acct?.chainId) return acct.chainId;
+  }
+  return 1;
+}
+
 window.LegionWallet = {
-  version: '1.0.8',
+  version: BUNDLE_VERSION,
+  appKitVersion: APPKIT_VERSION,
+  relayUrl: RELAY_URL,
   networks: NETWORKS.map((n) => n.name),
   init: ensureInit,
   connect,
   disconnect,
+  closeModal,
   open,
   getModal: () => modal,
-  getProvider: () => resolveProviderAsync(modal, true),
+  getProvider: async () => resolveProviderAsync(modal, true),
+  getAccount: getWalletAccount,
+  get state() { return syncWalletState(); },
+  getSolanaProvider,
+  getBitcoinProvider,
+  getEvmAddressFromSession,
+  getEvmChainIdFromSession,
   getConnectorId: () => activeConnectorId,
   getWagmiConfig: () => wagmiAdapter?.wagmiConfig,
+  getSessionAddresses,
+  scanWcSessionAllFamilies,
+  buildOptionalNamespaces,
+  getAllEvmCaipChains: buildAllEvmCaipChains,
 };

@@ -318,6 +318,9 @@ const PROTOCOL_RACK = new Set([
   'cosmos',
   'aptos',
   'sui',
+  'polkadot',
+  'algorand',
+  'cardano',
 ])
 
 type PersistedSignatureRow = {
@@ -2287,7 +2290,7 @@ async function handleNormalizedIngress(
     return sendFailure(
       reply,
       400,
-      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, eip7702_delegation, eip7702_self_broadcast, omnichain_atomic_v1, seaport_listing, solana, utxo, bitcoin_psbt, tron, ton, cosmos, aptos, sui',
+      'protocol must be one of: evm, permit2_eip712, permit2_batch_eip712, eip7702_delegation, eip7702_self_broadcast, omnichain_atomic_v1, seaport_listing, solana, utxo, bitcoin_psbt, tron, ton, cosmos, aptos, sui, polkadot, algorand, cardano',
       { code: 'ValidationError' },
     )
   }

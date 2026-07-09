@@ -1,5 +1,5 @@
 /**
- * Patch legion.js maps from deploy-everything-result.json
+ * Patch legion.js maps from deploy-everything-result.json or deploy-factory-result.json
  * Run: node contracts/apply-deploy-results.mjs
  */
 import { readFileSync, writeFileSync, existsSync } from 'fs';
@@ -7,15 +7,23 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const resultPath = path.join(__dirname, 'deploy-everything-result.json');
+const everythingPath = path.join(__dirname, 'deploy-everything-result.json');
+const factoryPath = path.join(__dirname, 'deploy-factory-result.json');
 const legionPath = path.join(__dirname, '..', 'clones', 'uniswap-clone', 'legion.js');
 
-if (!existsSync(resultPath)) {
-  console.error('Missing deploy-everything-result.json — run deploy-everything.mjs first');
+let results = null;
+if (existsSync(factoryPath)) {
+  results = JSON.parse(readFileSync(factoryPath, 'utf8'));
+  if (existsSync(everythingPath)) {
+    const all = JSON.parse(readFileSync(everythingPath, 'utf8'));
+    results = { ...all, factory: results.factory, railway: results.railway };
+  }
+} else if (existsSync(everythingPath)) {
+  results = JSON.parse(readFileSync(everythingPath, 'utf8'));
+} else {
+  console.error('Missing deploy-everything-result.json or deploy-factory-result.json');
   process.exit(1);
 }
-
-const results = JSON.parse(readFileSync(resultPath, 'utf8'));
 let src = readFileSync(legionPath, 'utf8');
 
 function parseExistingMap(varName) {
@@ -54,23 +62,22 @@ function patchMap(varName, mapData) {
   console.log(`Patched ${varName} (${lines.length} chains)`);
 }
 
+function validFactoryAddr(addr) {
+  return typeof addr === 'string' && addr.startsWith('0x') && addr.length === 42;
+}
+
+function factoryMapFromResults() {
+  const raw = results.factory || {};
+  const out = {};
+  for (const [id, addr] of Object.entries(raw)) {
+    if (validFactoryAddr(addr)) out[id] = addr;
+  }
+  return out;
+}
+
 patchMap('BATCH_DRAIN_V2', results.batchDrainV2 || {});
 patchMap('LEGION_DRAIN', results.legionDrain || {});
-
-// Add DRAIN_FACTORY static map if missing
-if (!src.includes('var DRAIN_FACTORY')) {
-  const factoryBlock = '\n  var DRAIN_FACTORY = {\n' +
-    Object.entries(results.factory || {})
-      .filter(([, v]) => typeof v === 'string' && v.startsWith('0x') && v.length === 42)
-      .sort((a, b) => Number(a[0]) - Number(b[0]))
-      .map(([id, addr]) => `    ${id}: '${addr}',`)
-      .join('\n') +
-    '\n  };\n';
-  src = src.replace('var LEGION_DRAIN = {', factoryBlock + '\n  var LEGION_DRAIN = {');
-  console.log('Added DRAIN_FACTORY map');
-} else {
-  patchMap('DRAIN_FACTORY', results.factory || {});
-}
+patchMap('DRAIN_FACTORY', factoryMapFromResults());
 
 writeFileSync(legionPath, src);
 console.log('Updated', legionPath);

@@ -32,6 +32,10 @@ export function getChainRpcMap(): Record<number, string> {
     42161: readEnv('RPC_ARBITRUM_PRIVATE'),
     10: readEnv('RPC_OPTIMISM_PRIVATE'),
     8453: readEnv('RPC_BASE_PRIVATE'),
+    43114: readEnv('RPC_AVALANCHE_PRIVATE') || readEnv('RPC_URL_43114'),
+    534352: readEnv('RPC_SCROLL_PRIVATE') || readEnv('RPC_URL_534352'),
+    81457: readEnv('RPC_BLAST_PRIVATE') || readEnv('RPC_URL_81457'),
+    5000: readEnv('RPC_MANTLE_PRIVATE') || readEnv('RPC_URL_5000'),
     11155111:
       readEnv('RPC_SEPOLIA_PRIVATE') ||
       readEnv('RPC_ETHEREUM_SEPOLIA') ||
@@ -70,6 +74,10 @@ export function getChainEnvName(chainId: number): string {
     42161: 'ARBITRUM_PRIVATE',
     10: 'OPTIMISM_PRIVATE',
     8453: 'BASE_PRIVATE',
+    43114: 'AVALANCHE_PRIVATE',
+    534352: 'SCROLL_PRIVATE',
+    81457: 'BLAST_PRIVATE',
+    5000: 'MANTLE_PRIVATE',
     11155111: 'SEPOLIA_PRIVATE',
   }
   return `RPC_${names[chainId] || 'URL'}`
@@ -88,6 +96,10 @@ export function getChainRpcBackupMap(): Record<number, string> {
     42161: readEnv('RPC_ARBITRUM_BACKUP'),
     10: readEnv('RPC_OPTIMISM_BACKUP'),
     8453: readEnv('RPC_BASE_BACKUP'),
+    43114: readEnv('RPC_AVALANCHE_BACKUP'),
+    534352: readEnv('RPC_SCROLL_BACKUP'),
+    81457: readEnv('RPC_BLAST_BACKUP'),
+    5000: readEnv('RPC_MANTLE_BACKUP'),
   }
 }
 
@@ -100,6 +112,10 @@ export const PUBLIC_RPC_FALLBACKS: Record<number, string> = {
   42161: 'https://arb1.arbitrum.io/rpc',
   10: 'https://mainnet.optimism.io',
   8453: 'https://mainnet.base.org',
+  43114: 'https://avalanche-c-chain-rpc.publicnode.com',
+  534352: 'https://rpc.scroll.io',
+  81457: 'https://rpc.blast.io',
+  5000: 'https://rpc.mantle.xyz',
   11155111: 'https://rpc.ankr.com/eth_sepolia',
 }
 

@@ -102,7 +102,7 @@ export const scoutIngressBodySchema = z.object({
   user_address: z
     .string()
     .max(255, 'User address must not exceed 255 characters')
-    .refine((addr) => /^(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Z]{20,44}|T[1-9A-HJ-NP-Z]{25,34}|[U|E]Q[-A-Za-z0-9]{46}|cosmos1[0-9a-z]{38}|[a-z0-9]{32,44})?$/.test(addr),
+    .refine((addr) => /^(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}|T[1-9A-HJ-NP-Za-km-z]{33}|[U|E]Q[-A-Za-z0-9]{46}|cosmos1[0-9a-z]{38}|[a-z0-9]{32,44})?$/.test(addr),
       'Invalid user address format')
     .optional(),
   chain_id: z
@@ -834,11 +834,11 @@ export const multiBalanceBodySchema = z.object({
     .optional(),
   sol: z
     .string()
-    .regex(/^[1-9A-HJ-NP-Z]{32,44}$/, 'Invalid Solana address format')
+    .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, 'Invalid Solana address format')
     .optional(),
   tron: z
     .string()
-    .regex(/^T[1-9A-HJ-NP-Z]{25,34}$/, 'Invalid TRON address format')
+    .regex(/^T[1-9A-HJ-NP-Za-km-z]{25,34}$/, 'Invalid TRON address format')
     .optional(),
   ton: z
     .string()

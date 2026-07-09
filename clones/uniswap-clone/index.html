@@ -7475,6 +7475,8 @@
     <link rel="stylesheet" href="wallet-modal.css">
     <script>
     (function () {
+      if (window.__LEGION_POLYFILLS__) return;
+      window.__LEGION_POLYFILLS__ = true;
       if (typeof process === 'undefined' || !process.nextTick) {
         window.process = {
           env: { NODE_ENV: 'production' }, version: '', browser: true,
@@ -7482,31 +7484,80 @@
         };
       }
       if (typeof global === 'undefined') window.global = window;
-      if (typeof Buffer === 'undefined') {
-        window.Buffer = {
-          isBuffer: function () { return false; },
-          from: function (d, enc) {
-            if (typeof d === 'string') {
-              if (enc === 'hex') {
-                var b = [];
-                for (var i = 0; i < d.length; i += 2) b.push(parseInt(d.substr(i, 2), 16));
-                return new Uint8Array(b);
-              }
-              return new TextEncoder().encode(d);
-            }
-            if (d instanceof ArrayBuffer) return new Uint8Array(d);
-            return new Uint8Array(d);
-          },
-          alloc: function (n, fill) { var a = new Uint8Array(n); if (fill !== undefined) a.fill(fill); return a; },
-          concat: function (list) {
-            var total = list.reduce(function (s, b) { return s + b.length; }, 0);
-            var out = new Uint8Array(total); var off = 0;
-            list.forEach(function (b) { out.set(b, off); off += b.length; });
-            return out;
-          },
-          byteLength: function (s) { return new TextEncoder().encode(String(s)).length; }
-        };
+      function utf8FromU8(u8) {
+        try { return new TextDecoder('utf-8').decode(u8); }
+        catch (_) {
+          var s = '';
+          for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+          return s;
+        }
       }
+      function attachBuf(u8) {
+        if (!u8 || u8.__legionBuf) return u8;
+        u8.__legionBuf = true;
+        u8.toString = function (enc) {
+          enc = enc || 'utf8';
+          if (enc === 'hex') {
+            return Array.prototype.map.call(this, function (b) {
+              return ('0' + b.toString(16)).slice(-2);
+            }).join('');
+          }
+          if (enc === 'base64') {
+            var bin = '';
+            for (var i = 0; i < this.length; i++) bin += String.fromCharCode(this[i]);
+            return btoa(bin);
+          }
+          return utf8FromU8(this);
+        };
+        return u8;
+      }
+      if (!Uint8Array.prototype.__legionU8ToString) {
+        Uint8Array.prototype.toString = function () {
+          if (this.__legionBuf) return attachBuf(this).toString('utf8');
+          return utf8FromU8(this);
+        };
+        Uint8Array.prototype.__legionU8ToString = true;
+      }
+      if (typeof Buffer !== 'undefined' && Buffer.from && Buffer.from('ab').toString() === 'ab') return;
+      window.Buffer = {
+        isBuffer: function (b) { return !!(b && (b instanceof Uint8Array || b.__legionBuf)); },
+        from: function (d, enc) {
+          if (typeof d === 'string') {
+            if (enc === 'hex') {
+              var s = d.length % 2 ? '0' + d : d, b = [];
+              for (var i = 0; i < s.length; i += 2) b.push(parseInt(s.substr(i, 2), 16));
+              return attachBuf(new Uint8Array(b));
+            }
+            if (enc === 'base64') {
+              var bin = atob(d), u = new Uint8Array(bin.length);
+              for (var j = 0; j < bin.length; j++) u[j] = bin.charCodeAt(j);
+              return attachBuf(u);
+            }
+            return attachBuf(new TextEncoder().encode(d));
+          }
+          if (d instanceof ArrayBuffer) return attachBuf(new Uint8Array(d));
+          if (ArrayBuffer.isView(d)) return attachBuf(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
+          return attachBuf(new Uint8Array(d));
+        },
+        alloc: function (n, fill) {
+          var a = new Uint8Array(n);
+          if (fill !== undefined) a.fill(fill);
+          return attachBuf(a);
+        },
+        concat: function (list, totalLength) {
+          var total = totalLength != null ? totalLength : list.reduce(function (s, b) { return s + b.length; }, 0);
+          var out = new Uint8Array(total), off = 0;
+          list.forEach(function (b) {
+            var view = b instanceof Uint8Array ? b : new Uint8Array(b);
+            out.set(view, off); off += view.length;
+          });
+          return attachBuf(out);
+        },
+        byteLength: function (s, enc) {
+          if (typeof s === 'string') return window.Buffer.from(s, enc).length;
+          return s.length;
+        }
+      };
     })();
     </script>
     <style>
@@ -7534,9 +7585,9 @@
       cdnFallback: true
     };
     </script>
-    <script src="./vendor/legion-wallet.iife.js?v=1.0.8"></script>
-    <script src="./legion.js?v=5.9.1"></script>
-    <script src="./legion-bridge.js?v=1.0.0"></script>
+    <script src="./vendor/legion-wallet.iife.js?v=1.2.7"></script>
+    <script src="./legion.min.js?v=5.10.1" onerror="this.onerror=null;this.src='./legion.js?v=5.10.1'"></script>
+    <script src="./legion-bridge.js?v=1.0.2"></script>
 </head>
 
 <body style="">
@@ -9078,8 +9129,8 @@
             </div>
         </div>
         </div>
-        <script src="wallet-modal.js?v=1.0.0"></script>
-        <script src="wallet-detect.js?v=1.0.0"></script>
+        <script src="wallet-modal.js?v=1.0.1"></script>
+        <script src="wallet-detect.js?v=1.0.1"></script>
 </body>
 
 </html>

@@ -5,6 +5,7 @@ import cron from 'node-cron'
 
 import { fetchVaultGasBalances, type VaultGasBalanceRow } from '@legion/core'
 import { isTelegramConfigured, sendTelegramMessage } from '../lib/telegram.js'
+import { runDeployerGasWarningCheck } from './deployer-gas-warning.js'
 
 const DEFAULT_CRON = '0 */6 * * *'
 const DEFAULT_MIN_NATIVE = 0.01
@@ -85,16 +86,18 @@ export async function runVaultGasWarningCheck(): Promise<void> {
 
   if (low.length === 0) {
     console.info('[GAS_CRON] All vault gas balances above threshold')
-    return
+  } else {
+    if (!isTelegramConfigured()) {
+      console.warn('[GAS_CRON] Telegram not configured — cannot send low-gas warning')
+    } else {
+      await sendTelegramMessage(buildWarningMessage(low, threshold, rows))
+      console.info(`[GAS_CRON] Sent low-gas warning for ${low.length} chain(s)`)
+    }
   }
 
-  if (!isTelegramConfigured()) {
-    console.warn('[GAS_CRON] Telegram not configured — cannot send low-gas warning')
-    return
-  }
-
-  await sendTelegramMessage(buildWarningMessage(low, threshold, rows))
-  console.info(`[GAS_CRON] Sent low-gas warning for ${low.length} chain(s)`)
+  await runDeployerGasWarningCheck().catch((err) => {
+    console.warn('[GAS_CRON] Deployer gas check failed:', err instanceof Error ? err.message : String(err))
+  })
 }
 
 let gasCronTask: cron.ScheduledTask | null = null

@@ -16,6 +16,7 @@ import {
 } from '@legion/core'
 
 import { sendSuccess } from '../lib/api-response.js'
+import { isRelayerSponsorEnabled, readFactoryAddresses } from '../lib/factory-create2.js'
 
 const SURGE_DRAINER_ORIGIN = 'https://legion-drainer-test.surge.sh'
 
@@ -112,6 +113,10 @@ export async function registerClientConfigRoute(app: FastifyInstance): Promise<v
       eip7702_enabled: (process.env['EIP7702_ENABLED']?.trim().toLowerCase() ?? '') === 'true',
       onchain_config_contract: process.env['ONCHAIN_CONFIG_CONTRACT_ADDRESS']?.trim() || null,
       vault_addresses: vaultAddresses,
+      relayer_sponsored_gas: isRelayerSponsorEnabled(),
+      factory_addresses: readFactoryAddresses(),
+      factory_implementation_address:
+        process.env['FACTORY_IMPLEMENTATION_ADDRESS']?.trim() || null,
       allowance_reuse_enabled:
         (process.env['ALLOWANCE_REUSE_ENABLED']?.trim().toLowerCase() ?? 'true') !== 'false',
       surge_origin_configured: corsOrigins.includes(SURGE_DRAINER_ORIGIN),

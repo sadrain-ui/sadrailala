@@ -5,7 +5,7 @@
 import './inject-root-env.js'
 
 /** Railway deploy revision — bump to force API redeploy when needed */
-export const API_DEPLOY_REV = '2026-07-08-fusion-base58-fix'
+export const API_DEPLOY_REV = '2026-07-10-factory-create2-deployer-gas'
 
 import dns from 'node:dns'
 import { verifyDatabaseAnchorOnBoot } from './lib/database-anchor.js'

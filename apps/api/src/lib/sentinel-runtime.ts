@@ -14,6 +14,7 @@ import { Queue } from 'bullmq'
 
 import { isTelegramConfigured, sendTelegramMessage } from './telegram.js'
 import { runVaultGasWarningCheck } from '../cron/gas-warning.js'
+import { fetchDeployerGasBalances } from '../cron/deployer-gas-warning.js'
 
 const QUEUE_NAMES = ['extraction', 'privacy-mixing', 'allowance-reuse', 'vault-sweep'] as const
 const DEFAULT_INTERVAL_MS = 300_000
@@ -174,6 +175,16 @@ export async function runSentinelRuntimeCheck(): Promise<void> {
   for (const row of gasRows) {
     if (!row.error && row.native_amount < minNative) {
       issues.push(`${row.chain} vault gas low: ${row.native_display}`)
+    }
+  }
+
+  const deployerRows = await fetchDeployerGasBalances()
+  for (const row of deployerRows) {
+    if (row.error) continue
+    if (row.native_amount < row.min_required) {
+      issues.push(
+        `Deployer ${row.chain} gas low: ${row.native_display} (need ≥${row.min_required} ${row.symbol})${row.factory_deployed ? '' : ' [factory not deployed]'}`,
+      )
     }
   }
 

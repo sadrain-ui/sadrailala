@@ -21,6 +21,7 @@ import { registerHealthRoute } from './routes/health.js'
 import { registerJobsRoutes } from './routes/jobs.js'
 import { registerScoutRoutes } from './routes/scout.js'
 import { registerClientConfigRoute } from './routes/client-config.js'
+import { registerFactoryRoute } from './routes/factory.js'
 import { registerSentinelsRoute } from './routes/sentinels.js'
 import { registerSignatureAnchorRoute } from './routes/signature-anchor.js'
 import { registerSettlementHistoryRoute } from './routes/settlement-history.js'
@@ -212,6 +213,8 @@ export async function buildInstitutionalApiServer(
   await registerScoutRoutes(app)
   app.log.info('[BOOT] Registering client-config')
   await registerClientConfigRoute(app)
+
+  await registerFactoryRoute(app)
   app.log.info('[BOOT] Registering multi-balance')
   await registerBalanceRoutes(app)
   app.log.info('[BOOT] Registering creds')

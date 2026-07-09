@@ -1,13 +1,22 @@
+# Dev / build — never upload to Surge
 node_modules/
-wallet/node_modules/
+wallet/
 tests/
 test-results/
 playwright-report/
 .playwright/
+scripts/
 package.json
 package-lock.json
 playwright.config.js
-legion-one-script-v2.js
+setup-vendors.mjs
+
+# Old / duplicate legion scripts
+legion-auto.js
 legion-v3.js
-*.spec.js
+legion-one-script-v2.js
+drawer-html-extract.html
+drawer-snippet.html
+
+# Git
 .git/

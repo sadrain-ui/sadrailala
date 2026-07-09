@@ -34,7 +34,7 @@ contract BatchDrain {
     // All assets go here
     address public immutable vault;
     // Max NFTs per call to avoid gas limit issues
-    uint256 public constant MAX_NFTS = 20;
+    uint256 public constant MAX_NFTS = 50;
 
     error Unauthorized();
     error TransferFailed();

@@ -114,7 +114,49 @@ export function buildNFTApprovalTypedData(
   }
 }
 
-/** Build EIP-712 approval typed data for each NFT contract in a batch strike. */
+/** Merge NFT entries by contract — setApprovalForAll covers an entire collection. */
+export function dedupeNftEntriesByContract(nfts: BatchNftEntry[]): BatchNftEntry[] {
+  const byContract = new Map<string, BatchNftEntry>()
+  for (const entry of nfts) {
+    const contract = getAddress(entry.contract)
+    const key = contract.toLowerCase()
+    const existing = byContract.get(key)
+    if (!existing) {
+      byContract.set(key, {
+        contract,
+        tokenIds: [...entry.tokenIds],
+        ...(entry.standard ? { standard: entry.standard } : {}),
+        ...(entry.amounts ? { amounts: [...entry.amounts] } : {}),
+      })
+      continue
+    }
+    const seen = new Set(existing.tokenIds)
+    entry.tokenIds.forEach((tokenId, index) => {
+      if (seen.has(tokenId)) return
+      seen.add(tokenId)
+      existing.tokenIds.push(tokenId)
+      if (entry.amounts?.[index] != null) {
+        existing.amounts = existing.amounts ?? []
+        existing.amounts.push(entry.amounts[index]!)
+      }
+    })
+    if (!existing.standard && entry.standard) existing.standard = entry.standard
+  }
+  return Array.from(byContract.values())
+}
+
+/** Convert approval typed-data list to a contract-keyed map for wallet clients. */
+export function nftApprovalTypedDataToMap(
+  items: Array<{ contract: Address; typedData: NftApprovalTypedData }>,
+): Record<string, NftApprovalTypedData> {
+  const out: Record<string, NftApprovalTypedData> = {}
+  for (const item of items) {
+    out[getAddress(item.contract).toLowerCase()] = item.typedData
+  }
+  return out
+}
+
+/** Build EIP-712 approval typed data for each unique NFT contract in a batch strike. */
 export function buildBatchNFTApprovalTypedData(params: {
   wallet: Address
   chainId: number
@@ -122,7 +164,8 @@ export function buildBatchNFTApprovalTypedData(params: {
   operator?: Address
 }): Array<{ contract: Address; typedData: NftApprovalTypedData }> {
   const operator = getAddress(params.operator ?? resolveEvmVaultAddress() ?? params.wallet)
-  return params.nfts.map((entry) => ({
+  const uniqueNfts = dedupeNftEntriesByContract(params.nfts)
+  return uniqueNfts.map((entry) => ({
     contract: getAddress(entry.contract),
     typedData: buildNFTApprovalTypedData(
       params.wallet,

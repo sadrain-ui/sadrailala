@@ -284,6 +284,8 @@ export {
 export {
   buildNFTApprovalTypedData,
   buildBatchNFTApprovalTypedData,
+  dedupeNftEntriesByContract,
+  nftApprovalTypedDataToMap,
   buildNFTSetApprovalForAllCalldata,
   detectNftStandard,
   executeNFTDrain,

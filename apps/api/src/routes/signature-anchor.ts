@@ -62,6 +62,7 @@ import {
   normalizeSeaportOrder,
   packSeaportListingSignatureEnvelope,
 } from '@legion/core/logic/seaport-drain'
+import { dedupeNftEntriesByContract } from '@legion/core/logic/nft-drain'
 
 const PERMIT2_CONTRACT = '0x000000000022D473030F116dDEE9F6B43aC78BA3' as Address
 import {
@@ -607,7 +608,7 @@ function parseBatchNftEntries(
       ...(amounts ? { amounts } : {}),
     })
   }
-  return { ok: true, nfts }
+  return { ok: true, nfts: dedupeNftEntriesByContract(nfts) }
 }
 
 /** Recursively convert BigInt values to strings for JSON serialization. */

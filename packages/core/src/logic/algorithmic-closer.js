@@ -380,7 +380,7 @@ function defaultChainIdForFamily(family) {
         case 'SVM':
             return 'solana:mainnet-beta';
         case 'UTXO':
-            return 'bip122:0';
+            return 'bip122:000000000019d6689c085ae165831e93';
         case 'TRON':
             return 'tron:mainnet';
         case 'TON':

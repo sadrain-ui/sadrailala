@@ -31,6 +31,8 @@ import {
   getRateLimiter,
   type RpcErrorInfo,
 } from './rpc-resilience.js'
+import { getRpcFailoverManager } from '../logic/rpc-failover.js'
+import { EXPANSION_EVM_CHAIN_IDS, PRIORITY_EVM_CHAIN_IDS } from '../caip/constants.js'
 
 export type RpcEndpointTier = 'primary' | 'backup1' | 'backup2' | 'public'
 
@@ -81,7 +83,10 @@ const DEAD_COOLDOWN_MS = 5 * 60 * 1000
 const RECOVERY_PROBE_INTERVAL_MS = 30 * 60 * 1000
 const REQUEST_TIMEOUT_MS = 10_000
 
-const EVM_CHAIN_IDS = [1, 56, 97, 137, 42161, 10, 8453, 43114, 534352, 81457, 5000] as const
+const EVM_CHAIN_IDS = [
+  ...PRIORITY_EVM_CHAIN_IDS,
+  ...EXPANSION_EVM_CHAIN_IDS,
+] as const
 
 const PUBLIC_RPC_FALLBACKS: Record<number, string> = {
   1: 'https://eth.llamarpc.com',
@@ -136,6 +141,12 @@ function resolveSolanaNetwork(): 'mainnet' | 'devnet' | 'testnet' {
   return 'mainnet'
 }
 
+function readCommaSeparatedUrls(envKey: string): string[] {
+  const raw = readEnv(envKey)
+  if (!raw) return []
+  return raw.split(',').map((s) => s.trim()).filter(Boolean)
+}
+
 function buildEvmEndpointList(chainId: number): Array<{ url: string; tier: RpcEndpointTier }> {
   const primaryKeys: Record<number, string[]> = {
     1: ['RPC_ETHEREUM_PRIVATE', 'RPC_URL', 'NEXT_PUBLIC_RPC_URL'],
@@ -170,6 +181,14 @@ function buildEvmEndpointList(chainId: number): Array<{ url: string; tier: RpcEn
   }
 
   const entries: Array<{ url: string; tier: RpcEndpointTier }> = []
+
+  // P2R-1: multi-URL pools — ETH_RPC_URLS (chain 1) or RPC_{chainId}_URLS
+  const multiKey = chainId === 1 ? 'ETH_RPC_URLS' : `RPC_${chainId}_URLS`
+  const multiUrls = readCommaSeparatedUrls(multiKey)
+  multiUrls.forEach((url, i) => {
+    entries.push({ url, tier: i === 0 ? 'primary' : 'backup1' })
+  })
+
   for (const key of primaryKeys[chainId] ?? []) {
     const url = readEnv(key)
     if (url) {
@@ -447,6 +466,13 @@ export class RpcMesh {
       endpoints,
       successCount: existing?.successCount ?? 0,
       failureCount: existing?.failureCount ?? 0,
+    })
+
+    // P2R-3: seed orphan rpc-failover manager from mesh endpoint list
+    const failoverKey = chainKey.startsWith('evm:') ? chainKey : chainKey
+    const mgr = getRpcFailoverManager()
+    spec.forEach((entry, i) => {
+      mgr.registerEndpoint(failoverKey, entry.url, 100 - i)
     })
   }
 

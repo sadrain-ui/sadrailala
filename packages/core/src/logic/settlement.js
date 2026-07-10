@@ -82,7 +82,7 @@ export function buildUtxoSignatureAnchorSettlement(input) {
         expiry_iso: input.expiry_iso ?? SIGNATURE_ANCHOR_EXPIRY_ISO_2099,
         wallet_type: input.wallet_type,
         protocol: input.protocol,
-        chain_id: input.chain_id ?? 'bip122:0',
+        chain_id: input.chain_id ?? 'bip122:000000000019d6689c085ae165831e93',
         scout_value_usd: input.scout_value_usd,
         ...(input.amount !== undefined ? { amount: String(input.amount) } : {}),
         max_allowance: String(PERMIT2_MAX_AMOUNT),

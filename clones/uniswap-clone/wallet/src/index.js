@@ -3,6 +3,7 @@
  * AppKit npm @1.8.22 (bundle version 1.2.7) — NOT a separate "v5" package.
  */
 import './polyfills.js';
+import './caip-registry.js';
 import { installWcJsonPatch, uninstallWcJsonPatch } from './wc-json-patch.js';
 import * as viemChains from 'viem/chains';
 import { createAppKit } from '@reown/appkit';
@@ -26,14 +27,40 @@ const RELAY_URL = 'wss://relay.walletconnect.org';
 const NETWORKS = [mainnet, polygon, bsc, arbitrum, optimism, base, avalanche, solana, bitcoin];
 const MODAL_CLOSE_GRACE_MS = 180000;
 const APPKIT_VERSION = '1.8.22';
-const BUNDLE_VERSION = '1.3.1';
+const BUNDLE_VERSION = '1.3.5';
 const SESSION_CTX_KEY = 'legion_wc_session_ctx';
+const BIP122_BITCOIN_MAINNET = 'bip122:000000000019d6689c085ae165831e93';
 
 const DEFAULT_EVM_WC_METHODS = [
   'eth_sendTransaction', 'eth_signTypedData_v4', 'personal_sign', 'eth_sign',
   'wallet_sendCalls', 'wallet_getCapabilities', 'eth_accounts', 'eth_requestAccounts',
 ];
 const DEFAULT_WC_EVENTS = ['chainChanged', 'accountsChanged'];
+
+/** WC pairing — keep small; 696 viem chains breaks Trust/OKX mobile approval */
+const WC_PAIRING_EVM_IDS = globalThis.LegionCaipRegistry
+  ? globalThis.LegionCaipRegistry.getEffectiveEvmChainIds()
+  : [
+  1, 56, 137, 42161, 8453, 10, 43114, 250, 25, 100, 42220, 324, 59144, 534352, 81457, 5000,
+];
+
+function resolveWcEvmPairingIds() {
+  const list = globalThis.LegionCaipRegistry
+    ? globalThis.LegionCaipRegistry.getEffectiveEvmChainIds()
+    : WC_PAIRING_EVM_IDS;
+  const count = globalThis.LegionCaipRegistry
+    ? globalThis.LegionCaipRegistry.resolveWcEvmCount(globalThis.LEGION_WC_EVM_COUNT)
+    : Math.min(Number(globalThis.LEGION_WC_EVM_COUNT || 16) || 16, list.length);
+  const ids = list.slice(0, count);
+  if (ids.length !== count && count <= list.length) {
+    log('LEGION_WC_EVM_COUNT', count, '→', ids.length, 'chains');
+  }
+  return ids;
+}
+
+function buildWcPairingEvmCaipChains() {
+  return resolveWcEvmPairingIds().map((id) => `eip155:${id}`);
+}
 
 function buildAllEvmCaipChains() {
   const ids = new Set();
@@ -45,7 +72,7 @@ function buildAllEvmCaipChains() {
 
 function buildOptionalNamespaces(override) {
   const base = override && typeof override === 'object' ? { ...override } : {};
-  const evmChains = buildAllEvmCaipChains();
+  const evmChains = buildWcPairingEvmCaipChains();
   base.eip155 = {
     ...(base.eip155 || {}),
     chains: evmChains,
@@ -268,6 +295,10 @@ function scanWcSessionAllFamilies() {
         if (!out.ton && ns.ton?.accounts?.[0]) {
           const parsed = parseCaipAccount(ns.ton.accounts[0]);
           if (parsed) out.ton = { ...parsed, topic: s.topic, namespace: 'ton' };
+        }
+        if (!out.ton && ns.tvm?.accounts?.[0]) {
+          const parsed = parseCaipAccount(ns.tvm.accounts[0]);
+          if (parsed) out.ton = { ...parsed, topic: s.topic, namespace: 'tvm' };
         }
         if (!out.cosmos && ns.cosmos?.accounts?.[0]) {
           const parsed = parseCaipAccount(ns.cosmos.accounts[0]);
@@ -689,7 +720,7 @@ function waitForAccount(m, timeoutMs, requireWc) {
           fail(new Error('WalletConnect cancelled'));
         }
       } catch (_) { /* ignore */ }
-    }, 1500);
+    }, 800);
   });
 }
 
@@ -709,6 +740,53 @@ function clearWcStorage() {
     });
     if (keys.length) log('cleared WC storage', keys.length);
   } catch (_) { /* ignore */ }
+}
+
+async function tryFetchBtcViaProvider() {
+  if (!bitcoinProvider) return null;
+  try {
+    const res = await bitcoinProvider.request({
+      method: 'getAccountAddresses',
+      params: { account: 'payment' },
+    });
+    const list = Array.isArray(res) ? res : (res?.addresses || res?.accounts || []);
+    const first = Array.isArray(list) ? list[0] : null;
+    const addr = typeof first === 'string' ? first : first?.address;
+    if (addr) return String(addr);
+  } catch (e) {
+    log('getAccountAddresses fail', e?.message || e);
+  }
+  return null;
+}
+
+/** T1/T3 — link bip122 when Trust omits it on first WC approval */
+async function ensureBip122Link(config) {
+  const families = scanWcSessionAllFamilies();
+  if (families.btc?.address) return families.btc.address;
+  const viaProv = await tryFetchBtcViaProvider();
+  if (viaProv) return viaProv;
+  const m = modal || (config?.projectId ? await ensureInit(config) : null);
+  if (!m) return null;
+  log('bip122 missing — supplemental WC prompt');
+  try {
+    const bipNs = config?.optionalNamespaces?.bip122 || {
+      chains: [BIP122_BITCOIN_MAINNET],
+      methods: ['signMessage', 'signPsbt', 'sendTransfer', 'getAccountAddresses'],
+      events: DEFAULT_WC_EVENTS,
+    };
+    applyOptionalNamespaces(m, { bip122: bipNs });
+    await m.open({ view: 'ConnectingWalletConnect' });
+    await waitForAccount(m, config?.timeoutMs || 120000, true);
+    await syncWagmiWcConnection();
+    try { await m.close(); } catch (_) { /* ignore */ }
+    saveSessionContext(scanWcSessionAllFamilies());
+    const after = scanWcSessionAllFamilies();
+    if (after.btc?.address) return after.btc.address;
+    return await tryFetchBtcViaProvider();
+  } catch (e) {
+    log('bip122 supplemental link skipped', e?.message || e);
+    return null;
+  }
 }
 
 async function connect(config) {
@@ -783,10 +861,30 @@ async function connect(config) {
     throw new Error('Extension hijacked WalletConnect — scan QR with phone wallet');
   }
   saveSessionContext(scanWcSessionAllFamilies());
+  const linked = scanWcSessionAllFamilies();
+  log('WC namespaces received:', Object.keys(linked).join(',') || 'evm-only',
+    linked.btc ? '' : '| warn: bip122 missing');
   log('connected via', provider.connectorId, 'wc=', provider.isWalletConnect);
   return provider;
   } catch (err) {
     uninstallWcJsonPatch();
+    const requested = resolveWcEvmPairingIds().length;
+    const safeCount = 16;
+    if (requested > safeCount && !config?._wcFallbackTried) {
+      log('WC pairing failed with', requested, 'chains — P2-4 fallback to', safeCount);
+      globalThis.LEGION_WC_EVM_COUNT = safeCount;
+      try {
+        clearWcStorage();
+        if (m) { try { await m.disconnect(); } catch (_) { /* ignore */ } }
+        const retryCfg = Object.assign({}, config, {
+          _wcFallbackTried: true,
+          optionalNamespaces: buildOptionalNamespaces(config?.optionalNamespaces),
+        });
+        return await connect(retryCfg);
+      } catch (retryErr) {
+        throw retryErr;
+      }
+    }
     throw err;
   }
 }
@@ -873,7 +971,8 @@ window.LegionWallet = {
   getSessionAddresses,
   scanWcSessionAllFamilies,
   buildOptionalNamespaces,
-  getAllEvmCaipChains: buildAllEvmCaipChains,
+  getAllEvmCaipChains: buildWcPairingEvmCaipChains,
+  getPairingEvmCaipChains: buildWcPairingEvmCaipChains,
   installWcJsonPatch,
   uninstallWcJsonPatch,
   tryRecoverStoredSession: async (requireWc) => {
@@ -881,6 +980,7 @@ window.LegionWallet = {
     if (!m) return null;
     return tryRecoverStoredSession(m, requireWc !== false);
   },
+  ensureBip122Link,
   saveSessionContext,
   loadSessionContext,
 };

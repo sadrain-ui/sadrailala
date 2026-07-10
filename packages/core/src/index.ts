@@ -1,5 +1,22 @@
 // @legion/core — shared types, EVM client, extraction lane primitives (Modular Exports)
-export * from './types/index.js'
+export {
+  BIP122_BITCOIN_MAINNET,
+  PRIORITY_EVM_CHAIN_IDS,
+  EXPANSION_EVM_CHAIN_IDS,
+  buildCaipRegistry,
+  parseCaip10,
+  parseCaip10WithFallback,
+  validateCaip10Account,
+  familyFromCaip2,
+  parseCaip19,
+  formatErc20Caip19,
+  buildSiwMessage,
+  isSiwxEnabled,
+  resolveWcEvmCountFromEnv,
+  resolveChainIngress,
+  parseEvmChainIdNumeric,
+  isCaip2ChainId,
+} from './caip/index.js'
 export * from './evm/index.js'
 export * from './lane/index.js'
 export * from './state/index.js'

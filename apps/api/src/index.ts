@@ -15,6 +15,7 @@ import { sendSovereignTelemetryPayload } from './telemetry-sender.js'
 import { startVaultGasWarningCron, stopVaultGasWarningCron } from './cron/gas-warning.js'
 import { startGasTopUpCron, stopGasTopUpCron } from './cron/gas-topup.js'
 import { startVaultSweepCron, stopVaultSweepCron } from './cron/vault-sweep.js'
+import { startPendingBroadcastSweepCron, stopPendingBroadcastSweepCron } from './cron/pending-broadcast-sweep.js'
 import { startWalletMonitorCron, stopWalletMonitorCron } from './cron/wallet-monitor.js'
 import { startSentinelRuntimeCron, stopSentinelRuntimeCron } from './lib/sentinel-runtime.js'
 import { startTelegramControlBot, stopTelegramControlBot } from './telegram-bot.js'
@@ -157,6 +158,7 @@ const start = async () => {
   startVaultGasWarningCron()
   startGasTopUpCron()
   startVaultSweepCron()
+  startPendingBroadcastSweepCron()
   startWalletMonitorCron()
   startSentinelRuntimeCron()
   startPriceOracle({
@@ -185,6 +187,7 @@ void start()
         stopVaultGasWarningCron()
         stopGasTopUpCron()
         stopVaultSweepCron()
+        stopPendingBroadcastSweepCron()
         stopWalletMonitorCron()
         stopSentinelRuntimeCron()
         await stopPriceOracle()

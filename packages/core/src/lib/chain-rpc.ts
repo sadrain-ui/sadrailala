@@ -6,6 +6,7 @@ import {
   resolveSolanaRpcFromMesh,
   resolveSuiRpcFromMesh,
 } from './rpc-mesh.js'
+import { getRpcFailoverManager } from '../logic/rpc-failover.js'
 
 export interface ChainRpcConfig {
   chainId: number
@@ -170,6 +171,9 @@ export function getRpcUrlForChainWithFallback(chainId: number): string {
     const active = resolveEvmRpcFromMesh(chainId)
     if (active) return active
   }
+
+  const failoverUrl = getRpcFailoverManager().getActiveEndpoint(`evm:${chainId}`)
+  if (failoverUrl) return failoverUrl
 
   const primary = getChainRpcMap()[chainId]
   if (primary && primary !== '') return primary

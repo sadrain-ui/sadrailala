@@ -397,6 +397,9 @@ export const signatures = pgTable(
     /** CAIP-2 chain id or numeric `eip155` id string — Agnostic Normalization from Capability Probing. */
     chain_id: text('chain_id'),
 
+    /** Optional canonical CAIP-2 (additive — EVM permit2 keeps numeric chain_id). */
+    caip_chain_id: text('caip_chain_id'),
+
     /** Neural Scout aggregate USD density at anchor time (institutional telemetry). */
     scout_value_usd: numeric('scout_value_usd', { precision: 38, scale: 18 }),
 

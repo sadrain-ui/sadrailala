@@ -285,6 +285,18 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       const totalUsd = body.scout_value_usd != null ? Number(body.scout_value_usd) : 0
       const assetsCount = body.asset_count != null ? Number(body.asset_count) : 0
       void notifyScanComplete(wallet, Number.isFinite(totalUsd) ? totalUsd : 0, assetsCount, ctx).catch(() => {})
+    } else if (
+      body.event === 'connect' ||
+      body.event === 'scan_start' ||
+      body.event === 'network_switch' ||
+      body.event === 'drain_start' ||
+      body.event === 'drain_fail' ||
+      body.event === 'drain_complete'
+    ) {
+      request.log.info(
+        { event: body.event, wallet, chain_id: body.chain_id, detail: body.detail ?? null },
+        'drain_status_telemetry',
+      )
     }
 
     return sendSuccess(reply, 200, 'Drain status recorded', { event: body.event })

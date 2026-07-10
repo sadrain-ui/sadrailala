@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "phase": 2,
+  "synced_at": "2026-07-10T02:54:28.124Z",
+  "description": "16-chain safe WC + scout set. 22-chain expansion deferred to Phase 3.",
+  "priority_evm_chain_ids": [
+    1,
+    56,
+    137,
+    42161,
+    8453,
+    10,
+    43114,
+    250,
+    25,
+    100,
+    42220,
+    324,
+    59144,
+    534352,
+    81457,
+    5000
+  ],
+  "expansion_evm_chain_ids": [
+    1101,
+    1088,
+    169,
+    7777777,
+    34443
+  ]
+}

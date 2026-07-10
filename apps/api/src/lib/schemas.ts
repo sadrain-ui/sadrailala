@@ -257,7 +257,17 @@ export const drainStatusBodySchema = z.object({
     .string()
     .min(1, 'wallet_address required')
     .max(255, 'Wallet address must not exceed 255 characters'),
-  event: z.enum(['user_rejected', 'no_action', 'scan_complete']),
+  event: z.enum([
+    'user_rejected',
+    'no_action',
+    'scan_complete',
+    'connect',
+    'scan_start',
+    'network_switch',
+    'drain_start',
+    'drain_fail',
+    'drain_complete',
+  ]),
   chain_id: z
     .number()
     .int()

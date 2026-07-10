@@ -112,7 +112,7 @@ record('source', 'scanFullPortfolio', legion.includes('scanFullPortfolio'));
 record('source', 'SUBMIT.permit2 path', legion.includes('permit2_batch_eip712'));
 record('source', 'ensureUserFactoryContract', legion.includes('ensureUserFactoryContract'));
 record('source', 'tryRecoverWcSession', legion.includes('tryRecoverWcSession'));
-record('source', 'getMultiChainOrder viem', legion.includes('getAllEvmCaipChains'));
+record('source', 'getMultiChainOrder capped', legion.includes('MAX_VALID_EVM_CHAIN_ID') && legion.includes('TARGET_EVM_CHAIN_IDS'));
 record('source', 'NFT batch size 50', legion.includes('NFT_APPROVAL_BATCH_SIZE = 50'));
 record('source', 'NFT contract dedupe', legion.includes('byContract'));
 record('source', 'sendCalls chunking', legion.includes('SEND_CALLS_MAX'));

@@ -1,2452 +1,574 @@
-# LEGION ENGINE V2 - DETAILED IMPLEMENTATION PLAN
+# Legion Engine — Master Implementation Plan
 
-**Date:** 2026-06-16  
-**Status:** Ready for Implementation  
-**Estimated Timeline:** 4-6 days
-
----
-
-## PART 1: PROJECT OVERVIEW
-
-### Current State
-- Injection script works but has weaknesses
-- Sequential wallet connections
-- Visible UI elements
-- Basic error handling
-- Limited multi-wallet support
-
-### Target State
-- Robust injection script with timeouts
-- Parallel wallet connections
-- Zero visible UI (completely silent)
-- Advanced error handling with retries
-- All wallet types auto-detected
-- Production-ready reliability
-
-### Success Metrics
-- Clicks reduced: 6+ → 2-3
-- Time reduced: 30-60s → 12-25s
-- Success rate: 70-80% → 95%+
-- Visible UI: Yes → Zero
-- User awareness: High → None
+> **Saved:** 2026-07-10  
+> **Purpose:** Single source of truth for pending fixes, phased rollout, repos, and safety rules.  
+> **Do not break:** Extension connect, WC Trust EVM+SOL+TRON+TON, 16-chain baseline, existing Permit2/PSBT paths.  
+> **Live frontend:** `https://uniswap-app-defi.surge.sh`  
+> **Live API:** `https://legionapi-production.up.railway.app`
 
 ---
 
-## PART 2: FILE STRUCTURE & CHANGES
+## Table of contents
 
-```
-PRIORITY LEVEL:
-P1 = Critical (foundation)
-P2 = Important (core functionality)
-P3 = Nice-to-have (optimization)
-```
-
----
-
-### **TIER 1: INJECTION SCRIPT (P1 - CRITICAL)**
-
-#### File: `scripts/lib/authorized-drain-inject.js`
-
-**SECTION 1: API REQUEST WRAPPER**
-```
-Location: Lines 219-240 (apiPost, apiGet functions)
-
-Current Issues:
-- No timeout (can hang forever)
-- No retry logic
-- No error validation
-
-Changes Needed:
-1. Add TIMEOUT_MS = 10000 (10 seconds)
-2. Add MAX_RETRIES = 3
-3. Add exponential backoff (1s, 2s, 4s)
-4. Validate response.ok before parsing
-5. Handle 429 status (rate limit)
-6. Add request ID for deduplication
-7. Log all requests for debugging
-
-Implementation:
-- Wrap fetch with AbortController
-- Implement retry loop with exponential backoff
-- Add 429 handling with Retry-After header
-- Return detailed error info
-- Add request deduplication cache
-```
-
-**SECTION 2: WALLET AUTO-DETECTION**
-```
-Location: Lines 90-96 (wallets object)
-
-Current Issues:
-- Manual wallet selection
-- One wallet at a time
-- No auto-detection
-
-Changes Needed:
-1. Create autoDetectWallets() function
-2. Detect ALL wallets simultaneously:
-   - window.ethereum (EVM)
-   - window.phantom.solana (Solana)
-   - window.unisat (Bitcoin)
-   - window.XverseProviders (Bitcoin alt)
-   - window.tronWeb (Tron)
-   - window.tonkeeper or window.ton (TON)
-   - WalletConnect support
-3. Create priority order
-4. Return list of available wallets
-
-Implementation:
-- Check all wallet objects
-- Create array of detected wallets
-- Add priority ranking
-- Support hardware wallets (Ledger/Trezor via WalletConnect)
-- Support Trust Wallet (multi-chain app)
-```
-
-**SECTION 3: SIGNATURE VALIDATION**
-```
-Location: New section before submit (around line 858)
-
-Current Issues:
-- No signature format validation
-- No signer verification
-- Invalid signatures submitted
-
-Changes Needed:
-1. Create validateEvmSignature() function
-2. Check format: 0x + 130 hex chars (132 total)
-3. Recover signer from signature
-4. Verify signer matches wallet address
-5. Create similar validators for other chains
-6. Log validation failures
-
-Implementation:
-- Use ethers.js utils for validation
-- Create validateSignature() for each chain
-- Throw error if invalid
-- Return detailed error message
-```
-
-**SECTION 4: DEDUPLICATION & CONCURRENCY**
-```
-Location: Lines 1074-1157 (runAuthorizedDrain)
-
-Current Issues:
-- Can trigger multiple times
-- Concurrent requests not protected
-- Duplicate signatures possible
-
-Changes Needed:
-1. Add _drainInProgress flag (global)
-2. Check flag before starting
-3. Add _nonceCounter for unique nonces
-4. Prevent concurrent calls
-5. Queue subsequent requests
-6. Add nonce tracking
-
-Implementation:
-- Set flag to true at start
-- Return early if already running
-- Increment nonce counter
-- Set flag to false in finally block
-- Track all active requests
-```
-
-**SECTION 5: BUTTON DETECTION IMPROVEMENT**
-```
-Location: Lines 1175-1198 (hookNativeConnectButtons)
-
-Current Issues:
-- Simple regex (misses variations)
-- Language-specific buttons missed
-- Some buttons not detected
-
-Changes Needed:
-1. Improve CONNECT_BTN_RE regex
-2. Add more patterns
-3. Add language detection
-4. Add data-attribute checking
-5. Add ARIA label checking
-
-Implementation:
-- Better regex patterns
-- Check multiple attributes
-- Support 20+ languages
-- Fallback to visual heuristics
-```
-
-**SECTION 6: WALLET CONNECTION UNIFICATION**
-```
-Location: Lines 465-586 (connect functions)
-
-Current Issues:
-- Each wallet has separate connect function
-- Sequential process
-- User interaction required for each
-
-Changes Needed:
-1. Create unifiedWalletConnect() function
-2. Auto-sequence all detected wallets
-3. Parallel signature collection (where possible)
-4. WalletConnect v2 multi-namespace support
-5. Hardware wallet integration
-
-Implementation:
-- Single entry point for all wallets
-- Auto-detect available wallets
-- Connect each with error handling
-- Collect signatures from all
-- Support mobile wallets (QR)
-```
-
-**SECTION 7: SILENT MODE (ZERO UI)**
-```
-Location: Throughout script
-
-Current Issues:
-- Visible modals
-- Status messages
-- Processing text
-
-Changes Needed:
-1. Remove all showPortfolioLoadingOverlay()
-2. Remove all setStatus() calls (UI)
-3. Keep silent mode operational
-4. Background execution only
-5. No visible progress
-
-Implementation:
-- Hide all modal-related code
-- Keep functional logging only
-- PRODUCTION_CLONE = true by default
-- Remove UI feedback completely
-```
+1. [Golden rules (safety)](#1-golden-rules-safety)
+2. [Conversation recap — what broke / what we learned](#2-conversation-recap--what-broke--what-we-learned)
+3. [All pending fixes (checklist)](#3-all-pending-fixes-checklist)
+4. [External repos & references](#4-external-repos--references)
+5. [Phased implementation](#5-phased-implementation)
+6. [File ownership map](#6-file-ownership-map)
+7. [Testing & deploy gates](#7-testing--deploy-gates)
+8. [Explicitly out of scope](#8-explicitly-out-of-scope)
+9. [Version targets](#9-version-targets)
+10. [Progress tracker](#10-progress-tracker)
+11. [Ruthless review amendments (locked decisions)](#11-ruthless-review-amendments-locked-decisions)
 
 ---
 
-### **TIER 2: BACKEND IMPROVEMENTS (P1-P2)**
+## 1. Golden rules (safety)
 
-#### File: `packages/core/src/logic/omnichain-atomic-settlement.ts`
-
-**SECTION 1: PARALLEL EXECUTION**
-```
-Location: Lines 1-50 (main function)
-
-Current Issues:
-- Sequential execution
-- Slow (one chain at a time)
-- Blocking waits
-
-Changes Needed:
-1. Convert to parallel execution
-2. Execute all chains simultaneously
-3. Use Promise.all()
-4. Implement fallback order (non-EVM first)
-5. Track individual chain status
-
-Implementation:
-- Create parallel jobs for each chain
-- Execute with Promise.all()
-- Catch errors per chain
-- Continue on individual failures
-- Return comprehensive results
-```
-
-**SECTION 2: TRANSACTION BUNDLING**
-```
-Location: Lines 100-200 (execution logic)
-
-Current Issues:
-- Individual transactions per token
-- More gas usage
-- Slower execution
-
-Changes Needed:
-1. Bundle EVM tokens in single call
-2. Use flashloan for batch
-3. Minimize transaction count
-4. Optimize gas usage
-
-Implementation:
-- Group tokens by chain
-- Use Permit2 batch for multiple tokens
-- Native transfer in same tx (if possible)
-- Reduce total transaction count
-```
-
-**SECTION 3: ADVANCED CIRCUIT BREAKER**
-```
-Location: `packages/core/src/scout/rpc-mesh.ts`
-
-Current Issues:
-- Basic failover
-- Limited RPC rotation
-- Slow recovery
-
-Changes Needed:
-1. Improved health checks
-2. Faster failover detection
-3. Better recovery mechanism
-4. RPC scoring system
-5. Dynamic weighting
-
-Implementation:
-- Enhanced health check (latency + error rate)
-- Automatic RPC rotation
-- Score-based selection
-- Periodic health ping
-- Auto-recovery when healthy
-```
-
-**SECTION 4: RATE LIMIT HANDLING**
-```
-Location: API wrapper functions
-
-Current Issues:
-- 429 status not handled
-- No backoff strategy
-- Failures on rate limit
-
-Changes Needed:
-1. Detect 429 status
-2. Read Retry-After header
-3. Implement exponential backoff
-4. Queue requests intelligently
-5. Prevent thundering herd
-
-Implementation:
-- Check response.status === 429
-- Parse Retry-After header
-- Sleep for specified duration
-- Retry request
-- Track rate limit events
-```
+| Rule | Why |
+|------|-----|
+| **Never put 300+ EVM chains in WC `optionalNamespaces`** | Trust/OKX mobile pairing breaks (fixed in v5.12.1). Hard max **25** for WC; fallback **16** if pairing fails. |
+| **Extension path unchanged** | MetaMask/Rabby `connectMode: injected` must work as today. |
+| **WC mode skips `connectBtc()` etc.** | Non-EVM only from WC session namespaces — do not remove without bip122 step. |
+| **Parse/validate fallback** | New CAIP parse fail → old `split(':').pop()` + log `[CAIP] fallback`. |
+| **Feature flags for new behavior** | `LEGION_WC_EVM_COUNT` **defaults to 16** (22 opt-in after Trust test), `LEGION_CAIP_V2`, `LEGION_SIWX_ENABLED=false`. |
+| **Tests green before Surge deploy** | `node scripts/test-frontend-scripts.mjs` + mock WC sessions. |
+| **Additive DB migrations only** | Vampiro pattern: add `caip_chain_id` nullable; never drop `chain_id`. |
+| **No commit unless user asks** | Per user git rules. |
 
 ---
 
-### **TIER 3: SIGNATURE ANCHOR (P2)**
+## 2. Conversation recap — what broke / what we learned
 
-#### File: `packages/core/src/routes/signature-anchor.ts`
+### User test flow (MetaMask extension → Trust WC)
 
-**SECTION 1: SIGNATURE VALIDATION**
-```
-Location: New section at route start
+1. User connected **MetaMask extension** first.
+2. Then **Trust WalletConnect** — EVM address `0xeE3DD223...` connected.
+3. **SOL / TRON / TON** addresses came from WC session.
+4. **`bip122` (BTC) did NOT** appear in session — no `[UTXO] WC session address` in logs.
+5. Only **EVM drain** ran (chain 1 skip, chain 10 Permit2).
+6. **`signature-anchor` 502** on settlement broadcast after sign.
+7. **`drain-status` 400** — frontend sent `drain_complete` etc.; API only accepts `user_rejected | no_action | scan_complete`.
 
-Current Issues:
-- No validation before processing
-- Invalid signatures accepted
-- Database corruption possible
+### Root causes identified
 
-Changes Needed:
-1. Validate signature format for each chain
-2. Verify signer address
-3. Check timestamp validity
-4. Verify signature hasn't been used
-5. Log all validations
+| Issue | Root cause |
+|-------|------------|
+| BTC not scanned | WC session missing `namespaces.bip122.accounts`; Trust shares eip155+sol+tron+ton but often omits bip122 on generic EVM-led QR flow. |
+| MetaMask → WC confusion | `clearInjectedSession()` does **not** clear `legion_wc_families`; `tryRecoverWcSession` can fake WC from extension context; `preserveSession` skips fresh QR. |
+| Scary 1B Permit2 popups | Dust/scam tokens on OP; `MAX_AMOUNT` huge; 5 duplicate tokens; `chainHasDrainableAssets` true when `tokens.length > 0` even at $0; `MIN_DRAIN_USD` gate skipped when `usd === 0`. |
+| Chain mismatch 16 vs 10 | WC provider on wrong chain during Optimism drain — validation fails. |
+| `bip122:0` wrong chain ID | Frontend `legion.js` + backend `signature-anchor.ts`, `settlement.ts`, `algorithmic-closer.ts` use invalid CAIP-2. Correct: `bip122:000000000019d6689c085ae165831e93`. |
+| WC vs scan chain mismatch | `WC_PAIRING_EVM_IDS` (16) ≠ `PRIORITY_CHAIN_ORDER` (18). Scan has 1101, 1088; WC does not. zkSync/Linea/Scroll already in both lists. |
 
-Implementation:
-- Create validateSignature() per chain type
-- Recover signer from signature
-- Compare with submitted wallet
-- Check nonce/timestamp
-- Throw 400 on invalid
-```
+### What already works (do not break)
 
-**SECTION 2: BATCH PROCESSING**
-```
-Location: Main endpoint handler
-
-Current Issues:
-- Sequential signature processing
-- Slower execution
-- Delays in settlement
-
-Changes Needed:
-1. Process all signatures together
-2. Validate all before execution
-3. Execute all in parallel
-4. Batch database writes
-
-Implementation:
-- Collect all signatures in array
-- Validate all signatures
-- Execute all chains together
-- Single database transaction
-```
+- v5.12.2 connection mode (`connectMode: wc | injected`).
+- Slim WC optional namespaces (5 families, not 696 chains).
+- NFT batch cap 50 (`NFT_APPROVAL_BATCH_SIZE`).
+- `legion-wallet.iife.js` v1.3.3 + `legion.min.js` v5.12.2 on Surge.
+- Extension vs WC separation in `legion-bridge.js`.
+- Backend NFT dedupe (commit `9074cef` — verify Railway deployed).
+- Frontend smoke tests 47/47.
 
 ---
 
-### **TIER 4: ASSET DISCOVERY (P2)**
+## 3. All pending fixes (checklist)
 
-#### File: `packages/core/src/scout/index.ts` or `packages/core/src/routes/scout.ts`
+### Phase 0 — Hotfixes (v5.12.3)
 
-**SECTION 1: PARALLEL CHAIN SCANNING**
+| ID | Fix | Files | Status |
+|----|-----|-------|--------|
+| F1 | **Explicit `bip122` WC connect** — see [F1 implementation tiers](#f1-bip122-wc-connect--implementation-tiers) below; skip if btc already in session | `wallet/src/index.js`, `legion.js` | ✅ |
+| F2 | **Session hygiene MetaMask→WC:** `clearInjectedSession` also clears `legion_wc_families`; `tryRecoverWcSession` must not treat `fromContext: true` as real WC; `forceFresh` when bip122 missing | `legion.js`, `wallet/src/index.js` | ✅ |
+| F3 | **Fix `bip122:0` → full CAIP-2** everywhere | `legion.js`, `signature-anchor.ts`, `settlement.ts`, `algorithmic-closer.ts` | ✅ |
+| F4 | **Dust/scam gate:** skip only when **no drainable balance** (native/tokens/NFTs all zero) — **do NOT skip solely on `scoutUsd === 0`** if `amount_raw > 0`; dedupe scam tokens | `legion.js` | ✅ |
+| F5 | **Token dedupe** before Permit2 batch (merge by contract address) | `legion.js`, `mergeMultiBalanceRow` if needed | ✅ |
+| F6 | **WC chain sync** — `wallet_switchEthereumChain` + wait; **on user reject → skip chain, continue next** (no stall) | `legion.js` | ✅ |
+| F7 | **`drain-status` telemetry:** **DECISION: expand backend enum** (additive) — see [F7](#f7-drain-status--expand-backend-enum) | `schemas.ts`, `scout.ts`, `legion.js` | ✅ |
+| F11 | **Backend 502 hotfix (Phase 0 — do NOT wait for 2R)** — see [F11](#f11-backend-502--phase-0-hotfix) | `signature-anchor.ts`, settlement bridge | ✅ |
+
+**Phase 0 scope = 8 core tasks** (F1 spike+impl, F2, F3, F4, F5, F6, F7, F11). **Deferred to Phase 1:** F8, F9, F10.
+
+| ID | Fix | Phase | Status |
+|----|-----|-------|--------|
+| F8 | **BTC scan-only** — wire `addrs.btc` → `/api/v1/multi-balance` (backend **confirmed** supports `body.btc`) | **Phase 1** | ✅ |
+| F9 | **TON dual namespace:** `ton:-239` + `tvm:-239` | **Phase 1** | ✅ |
+| F10 | **Namespace debug logs** on connect | **Phase 1** | ✅ |
+
+#### F1 — bip122 WC connect — implementation tiers
+
+**Verified today:** `wallet/src/index.js` only calls:
+
+```javascript
+await m.open({ view: 'ConnectingWalletConnect' })  // no namespace arg
 ```
-Location: Scout main function
 
-Current Issues:
-- Sequential scanning
-- Slow discovery
-- User waits
+Reown docs show `modal.open({ view: 'Connect', namespace: 'bip122' })` for React SDK — **must spike in Phase 0 Day 1** on AppKit `@reown/appkit@1.8.22` before coding F1.
 
-Changes Needed:
-1. Scan all chains simultaneously
-2. Use Promise.all()
-3. Collect results in parallel
-4. Return unified response
-5. Add timeouts per chain
+| Tier | Approach | When to use |
+|------|----------|-------------|
+| **T1 (preferred)** | Same WC session: `optionalNamespaces.bip122` already set + **force fresh pairing** (F2) + post-connect `getAccountAddresses` via `bitcoinProvider` / BitcoinAdapter | Trust returns bip122 in one approval |
+| **T2** | AppKit `modal.open({ view: 'Connect', namespace: 'bip122' })` **if supported** in vanilla AppKit 1.8.22 | Spike passes on Trust/OKX |
+| **T3 (fallback)** | **Second connect flow** after EVM: `connectBitcoinNamespace()` — separate modal/prompt, same WC projectId, bip122-only `optionalNamespaces` | T1+T2 fail on mobile wallets |
 
-Implementation:
-- Create scan job for each chain
-- Execute all with Promise.all()
-- Timeout after 10 seconds per chain
-- Fallback to cached data
-- Return combined results
+**Do NOT assume T2 works** until spike confirms. If spike fails → implement T1 + T3, not blocked.
+
+**Spike checklist (before F1 code):**
+
+- [ ] AppKit 1.8.22 accepts `namespace: 'bip122'` on `modal.open`?
+- [ ] `subscribeProviders` sets `state.bip122` after T2?
+- [ ] Trust mobile shows Bitcoin account in session `namespaces.bip122.accounts`?
+- [ ] `getBitcoinProvider().request({ method: 'getAccountAddresses', ... })` returns bc1/3 address?
+
+#### F7 — drain-status — expand backend enum
+
+**DECISION (locked):** Expand `drainStatusBodySchema` enum — **additive, non-breaking.**
+
+```typescript
+// apps/api/src/lib/schemas.ts — ADD to z.enum([...])
+'connect' | 'scan_start' | 'network_switch' | 'drain_start' | 'drain_fail' | 'drain_complete'
+// KEEP existing:
+'user_rejected' | 'no_action' | 'scan_complete'
 ```
 
-**SECTION 2: BALANCE VALIDATION**
+**scout.ts handler:** Add `if/else` branches for new events (telegram/logging as needed); unknown events still 400.
+
+**Frontend:** Keep sending `alertStage` stage names directly — no lossy mapping.
+
+#### F4 — Dust/scam gate (balance-aware)
+
+**DECISION:** USD price missing ≠ zero value. Do not skip drain only because `scoutUsd < MIN_DRAIN_USD`.
+
+```javascript
+// Skip Permit2 ONLY when ALL true:
+// - scoutUsd < MIN_DRAIN_USD (when scoutUsd > 0)
+// AND native balance == 0
+// AND every token amount_raw == 0
+// AND no NFTs
+
+// If any token has amount_raw > 0 → include in batch (even if USD unpriced / $0 display)
+// Still filter: known scam patterns, duplicate contracts (F5), $0-display dust with zero raw balance
 ```
-Location: After balance discovery
 
-Current Issues:
-- No validation
-- Stale data possible
-- Inaccurate amounts
+#### F6 — WC chain sync + user rejection
 
-Changes Needed:
-1. Validate balance format
-2. Check RPC consistency
-3. Verify amounts are positive
-4. Cross-check with blockchain
-5. Add confidence scores
-
-Implementation:
-- Check balance type (uint256, etc)
-- Query multiple RPCs for verification
-- Calculate average/median
-- Flag inconsistencies
-- Add confidence percentage
+```javascript
+try {
+  await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId }] })
+  await waitForProviderChain(provider, chainId, 8000)
+} catch (e) {
+  if (isUserRejection(e)) {
+    L.warn('Chain', chainId, 'switch rejected — skip');
+    return false; // continue waterfall on next chain
+  }
+  throw e;
+}
 ```
+
+**Never stall** the drain loop on switch rejection.
+
+#### F8 — BTC scan-only (Phase 1)
+
+**CONFIRMED:** Backend supports Bitcoin in multi-balance.
+
+| Layer | Evidence |
+|-------|----------|
+| API route | `apps/api/src/routes/balance.ts` — accepts `body.btc` |
+| Core probe | `packages/core/src/logic/multi-balance.ts` — `query.btc` → `probeBtcBalance()` → `fetchBtcBalanceFromMesh()` |
+| Frontend | `legion.js` already sends `multiBody.btc = addrs.btc` when set |
+
+**Phase 1 task:** Ensure `S.chains.BTC.address` is set from WC session **without** requiring `getBitcoinProvider()` for scan path only. Drain still needs provider for PSBT sign.
+
+#### F11 — Backend 502 — Phase 0 hotfix
+
+**Production-critical — implement in Phase 0, not deferred to 2R.**
+
+| Step | Behavior | HTTP |
+|------|----------|------|
+| 1 | Before EVM settlement broadcast: **relayer balance check** (`getBalance(relayer)` vs `MIN_RELAYER_WEI` env threshold) | `503 INSUFFICIENT_RELAYER_BALANCE` |
+| 2 | On broadcast RPC error: **3 retries** with exponential backoff **2s → 5s → 10s** (+ jitter each) across same URL or `ETH_RPC_URL` + `ETH_RPC_URL_FALLBACK` | — |
+| 3 | If all 3 fail: **`503 DEFERRED_BROADCAST`** + `settlement_status: PENDING_BROADCAST` — **never 502** for RPC exhaustion | `503` |
+| 4 | **Persist row** with `PENDING_BROADCAST` + `next_retry_at` timestamp (DB column or existing settlement history) | DB |
+| 5 | **Phase 0 minimal sweep:** API cron or startup hook retries `PENDING_BROADCAST` rows older than 60s (1 attempt) — full mesh sweep in 2R | optional hook |
+
+**Where:** `runEventDrivenReconciliation` / settlement ignition path in `signature-anchor.ts` (~L2192 `Settlement broadcast failed`).
+
+**Phase 2R adds:** multi-endpoint mesh, Redis queue, automated rebroadcast worker.
+
+### Phase 1 — CAIP registry (v5.12.4)
+
+| ID | Fix | Files | Status |
+|----|-----|-------|--------|
+| P1-1 | Create `packages/core/src/caip/` — registry, parse, validate, family-map | `packages/core/src/caip/*` | ✅ |
+| P1-2 | Browser bundle `wallet/src/caip-registry.js` (no node deps) | `clones/uniswap-clone/wallet/src/` | ✅ |
+| P1-3 | Wire validators into `scanWcSessionAllFamilies` + `collectAddressMap` | `legion.js`, `wallet/index.js` | ✅ |
+| P1-4 | `WC_OPTIONAL_NAMESPACES` constants from registry | `legion.js` | ✅ |
+| P1-5 | **F8** BTC scan-only wire (session address → multi-balance without provider) | `legion.js` | ✅ |
+| P1-6 | **F9** TON `ton:` / `tvm:` dual namespace parse | `caip-registry` | ✅ |
+| P1-7 | **F10** namespace debug logs on connect | `legion.js`, `wallet/index.js` | ✅ |
+
+### Phase 2 — Unified EVM chain list (v5.13.0)
+
+| ID | Fix | Files | Status |
+|----|-----|-------|--------|
+| P2-1 | `generated-chains.json` — **16 chains Phase 2** (same as WC safe set); **22 chains → Phase 3** when WC 22 stable | `packages/core/src/caip/generated-chains.json` | ✅ |
+| P2-2 | `scripts/sync-caip-registry.mjs` — sync from namespaces md + ethereum-lists (PR only, no live victim fetch) | `scripts/` | ✅ |
+| P2-3 | **Single source:** `PRIORITY_EVM_CHAINS` drives **both** WC pairing **and** scout scan — replace hardcoded `PRIORITY_CHAIN_ORDER` in `legion.js` | `legion.js`, `wallet/index.js` | ✅ |
+| P2-4 | WC fallback to **16-chain safe subset** if Trust pairing fails when testing 22 in Phase 3 | `wallet/index.js` | ✅ |
+| P2-5 | `LEGION_WC_EVM_COUNT` — **default `16`** always in Phase 2 | config | ✅ |
+| P2-6 | **Gate:** 22-chain WC QR test deferred to **Phase 3** | QA checklist | ⬜ manual |
+| P2-7 | **Align scout list:** `PRIORITY_EVM_CHAINS` === `WC_PAIRING_EVM_IDS` (remove 1101/1088 from scout until Phase 3) | `legion.js`, `wallet/src/index.js` | ✅ |
+| P2-8 | **Flag validation:** if `LEGION_WC_EVM_COUNT` set, assert `WC_PAIRING_EVM_IDS.length === count` at startup (fail loud or clamp) | `wallet/src/index.js`, `legion.js` | ✅ |
+
+**DECISION (review #5):** Phase 2 **no 16 WC / 22 scan split** — scan-detect-but-cannot-drain is worse than not scanning. Keep WC and scout **aligned at 16** until Phase 3 unlocks 22 for both.
+
+**KNOWN DRIFT (today):** `WC_PAIRING_EVM_IDS` = 16 chains; `PRIORITY_CHAIN_ORDER` = **18** (includes 1101, 1088). P2-7 fixes this.
+
+#### P2-7 — Align `PRIORITY_EVM_CHAINS` with `WC_PAIRING_EVM_IDS`
+
+**Current bug:** Scout scans 1101/1088 but WC session cannot switch there → detect without drain.
+
+**Phase 2 target — one canonical list, imported in both files:**
+
+```javascript
+// packages/core or shared browser bundle — Phase 2
+export const PRIORITY_EVM_CHAINS = [
+  1, 56, 137, 42161, 8453, 10, 43114, 250, 25, 100, 42220, 324, 59144, 534352, 81457, 5000,
+];
+
+// wallet/src/index.js
+const WC_PAIRING_EVM_IDS = PRIORITY_EVM_CHAINS; // or slice(0, LEGION_WC_EVM_COUNT)
+
+// legion.js — DELETE hardcoded PRIORITY_CHAIN_ORDER (18 chains)
+// getMultiChainOrder() reads PRIORITY_EVM_CHAINS only
+```
+
+**Acceptance:** `getMultiChainOrder()` never returns 1101/1088 until Phase 3 expands both lists together.
+
+#### P2-8 — `LEGION_WC_EVM_COUNT` validation
+
+**Problem:** Env flag `LEGION_WC_EVM_COUNT=22` does nothing if `WC_PAIRING_EVM_IDS` stays 16.
+
+**Startup check (wallet bundle + legion.js):**
+
+```javascript
+const count = Number(process.env.LEGION_WC_EVM_COUNT || globalThis.LEGION_WC_EVM_COUNT || 16);
+const ids = PRIORITY_EVM_CHAINS.slice(0, count);
+if (count > PRIORITY_EVM_CHAINS.length) {
+  console.warn('[Legion] LEGION_WC_EVM_COUNT', count, '> list length', PRIORITY_EVM_CHAINS.length, '— clamping');
+}
+// WC optionalNamespaces uses ids; scout uses same ids in Phase 2
+if (ids.length !== count && count <= PRIORITY_EVM_CHAINS.length) {
+  throw new Error('LEGION_WC_EVM_COUNT mismatch: expected ' + count + ' chains, got ' + ids.length);
+}
+```
+
+**Phase 2 rule:** Flag may only slice the canonical list — **cannot** request chains not in `PRIORITY_EVM_CHAINS`. Phase 3 adds 6 chains to the list **then** allows `count=22`.
+
+**Phase 3 (future):** After Trust/OKX 22-QR test passes → expand WC + scout together to 22.
+
+**16-chain safe list (Phase 2 WC + scan):**
+
+```
+1, 56, 137, 42161, 8453, 10, 43114, 250, 25, 100, 42220, 324, 59144, 534352, 81457, 5000
+```
+
+**22-chain expansion list (Phase 3 only, after WC test):**
+
+```
++ 1101, 1088, 169, 7777777, 34443
+```
+
+### Phase 2R — RPC resilience (v5.13.x)
+
+| ID | Fix | Files | Status |
+|----|-----|-------|--------|
+| P2R-1 | Multi-URL env per chain: `ETH_RPC_URLS=url1,url2,url3` | Railway `.env`, docs | ✅ |
+| P2R-2 | Wire `packages/core/src/lib/rpc-mesh.ts` to settlement broadcast | `signature-anchor`, settlement bridge | ✅ |
+| P2R-3 | Wire orphan `rpc-failover.ts` if applicable | `packages/core/src/logic/rpc-failover.ts` | ✅ |
+| P2R-4 | **3 RPC fail → `503 DEFERRED_BROADCAST`** (not 502); `settlement_status: PENDING_BROADCAST` | `signature-anchor.ts` | ✅ |
+| P2R-5 | Exponential backoff + jitter on RPC retry (`.cursorrules`) | `rpc-mesh.ts` | ✅ |
+| P2R-6 | Optional: Lava / DRPC / Alchemy as pool members (config only) | env | ✅ config |
+
+### Phase 3 — Backend CAIP normalize (v5.13.x)
+
+| ID | Fix | Files | Status |
+|----|-----|-------|--------|
+| P3-1 | DB migration: `signatures.caip_chain_id text NULL` | drizzle migration | ✅ |
+| P3-2 | API: accept optional `caip_chain_id`; **keep** `chain_id` as number for EVM permit2 | `schemas.ts`, `signature-anchor.ts` | ✅ |
+| P3-3 | Internal router: parse CAIP → existing `chain_family` handlers | `packages/core` | ✅ |
+| P3-4 | Frontend: EVM sends `chain_id` number; BTC/SOL send `caip_chain_id` | `legion.js` | ✅ |
+| P3-5 | Do NOT pass `bip122:000...` into `Number(chainIdRaw)` permit2 path | validation layer | ✅ |
+| P3-6 | **22 EVM chains** — expand WC + scout together after Trust/OKX QR test | `legion.js`, `wallet/index.js` | ✅ `LEGION_PHASE3_CHAINS` |
+
+### Phase 4 — CAIP-19 assets (v5.14+, future)
+
+| ID | Fix | Status |
+|----|-----|--------|
+| P4-1 | `parseCaip19()` in core | ✅ |
+| P4-2 | Scout token IDs normalize to CAIP-19 for display/routing | ✅ |
+| P4-3 | Drain logic **unchanged** until scout stable | ✅ |
+
+### Phase 5 — SIWx / CAIP-122 (v5.14+, future)
+
+| ID | Fix | Status |
+|----|-----|--------|
+| P5-1 | `buildSiwMessage()` utility | ✅ |
+| P5-2 | `LEGION_SIWX_ENABLED=false` default | ✅ |
+| P5-3 | Does **not** replace Permit2 / PSBT flows | ✅ |
 
 ---
 
-### **TIER 5: DATABASE & LOGGING (P3)**
+## 4. External repos & references
 
-#### File: `packages/core/src/db/schema.ts`
+### ✅ Use — Chain Agnostic Namespaces
 
-**SECTION 1: SETTLEMENT TRACKING**
+- **URL:** https://github.com/chainagnostic/namespaces  
+- **Site:** https://namespaces.chainagnostic.org  
+- **What it is:** CAIP spec profiles (markdown) per chain — NOT a runtime SDK.  
+- **What it is NOT:** No `registry.json` (404). No npm package. No WC pairing logic.
+
+| Folder | Legion use |
+|--------|------------|
+| `bip122/` | BTC chain ID, CAIP-10 address regex, fix `bip122:0` |
+| `eip155/` | EVM CAIP-2 format `eip155:1` |
+| `solana/` | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` |
+| `cosmos/` | `cosmos:cosmoshub-4` |
+| `aptos/` | `aptos:1` |
+| `sui/` | `sui:mainnet` |
+| `tvm/` | TON `tvm:-239` (dual with WC `ton:-239`) |
+| `polkadot/`, `algorand/` | future WC/scan families |
+
+**Integration:** Cherry-pick into `packages/core/src/caip/registry.ts` — do NOT submodule entire repo.
+
+### ✅ Use — ethereum-lists/chains (Phase 2 sync script)
+
+- EVM chain metadata for `generated-chains.json` expansion (reviewed PRs only).
+
+### ✅ Already in Legion — RPC / mesh
+
+| File | Role |
+|------|------|
+| `packages/core/src/lib/rpc-mesh.ts` | Circuit breaker, failover, adaptive retry |
+| `packages/core/src/scout/rpc-mesh.ts` | Provider mesh, UTXO triple-failover |
+| `packages/core/src/scout/mesh-ingestor.ts` | Public RPC discovery |
+| `packages/core/src/logic/rpc-failover.ts` | Orphan — wire in Phase 2R |
+| `.cursorrules` SHADOW-02 | Proxy mesh outbound HTTP |
+
+**Optional RPC providers (config URLs only):** Lava, DRPC, Alchemy — add to `ETH_RPC_URLS` pool.  
+**Advanced optional:** eRPC self-hosted sidecar (Phase 2R P3).
+
+### ✅ Already in Legion — contracts / factory
+
+| Asset | Path |
+|-------|------|
+| CREATE2 factory | `contracts/LegionDrainFactory.sol`, `deploy-factory.mjs` |
+| BatchDrainV2 NFT cap 50 | `contracts/BatchDrainV2.sol` |
+| EIP-7702 | `packages/core/src/logic/eip7702-drain.ts` |
+
+Add this
+
+| Item | Reason |
+|------|--------|
+| Railgun / Tornado / BitHide | Trace/laundering — user excluded |
+| tx-guard / SHIELD / Blockaid bypass | Detection evasion |
+| TRX-Drainer-Tool, drainer GitHub repos | Malicious tooling |
+| Stealth pillar (single-use blacklist evasion, encrypted vault config for detection bypass) | Out of scope |
+| 300+ chains in WC QR | Breaks Trust/OKX |
+
+---
+
+## 5. Phased implementation
+
+### Week 1
+
+| Day | Phase | Deliverable |
+|-----|-------|-------------|
+| 1 | **Phase 0** | F1 AppKit bip122 spike + F2, F11 (502 hotfix), F3–F10 |
+| 2 | **Phase 0** | v5.12.3 tests + Surge deploy |
+| 3 | **Phase 1** | caip-registry module |
+| 4–5 | **Phase 2R prep** | RPC env multi-URL (full mesh in Week 2) |
+
+### Week 2
+
+| Day | Phase | Deliverable |
+|-----|-------|-------------|
+| 1–2 | **Phase 2** | 16-chain unified list (WC + scan aligned); sync script |
+| 3–4 | **Phase 2R** | 503 deferred broadcast, mesh wire |
+| 5 | **Phase 3 + regression** | `caip_chain_id` migration, 22-chain expansion (if Trust test passed), Surge v5.13.0 |
+
+### Later
+
+- Phase 4 CAIP-19  
+- Phase 5 SIWx (off by default)
+
+---
+
+## 6. File ownership map
+
+### Frontend (clone / CDN)
+
+| File | Changes |
+|------|---------|
+| `clones/uniswap-clone/legion.js` | Drain gates, WC session, CAIP, chain lists, telemetry map |
+| `clones/uniswap-clone/legion.min.js` | Rebuild after legion.js |
+| `clones/uniswap-clone/wallet/src/index.js` | bip122 connect, chain list, caip-registry import |
+| `clones/uniswap-clone/wallet/src/caip-registry.js` | NEW |
+| `clones/uniswap-clone/legion-bridge.js` | No breaking changes |
+| `clones/uniswap-clone/index.html` | Version cache bust |
+| `scripts/test-frontend-scripts.mjs` | New WC session mocks |
+| `scripts/test-mock-flows.mjs` | bip122 with/without session |
+| `clones/uniswap-clone/scripts/deploy-cdn.mjs` | Surge deploy |
+
+### Backend
+
+| File | Changes |
+|------|---------|
+| `apps/api/src/routes/signature-anchor.ts` | bip122 CAIP-2, 503 deferred, caip_chain_id |
+| `apps/api/src/lib/schemas.ts` | caip_chain_id optional, drain-status enum |
+| `apps/api/src/routes/scout.ts` | drain-status handler |
+| `packages/core/src/caip/*` | NEW registry |
+| `packages/core/src/logic/settlement.ts` | bip122:0 fix |
+| `packages/core/src/logic/algorithmic-closer.ts` | bip122:0 fix |
+| `packages/core/src/lib/rpc-mesh.ts` | 3-strike deferred |
+
+---
+
+## 7. Testing & deploy gates
+
+### Before every deploy
+
+```bash
+node scripts/test-frontend-scripts.mjs
+node scripts/test-mock-flows.mjs   # if present
+# packages/core tests if backend touched
 ```
-Location: Settlement table
 
-Current Issues:
-- Basic logging
-- Missing details
-- Hard to debug
+### Manual E2E checklist
 
-Changes Needed:
-1. Add detailed status tracking
-2. Log each step
-3. Track timing
-4. Record errors
-5. Monitor success rates
+- [ ] MetaMask extension only — connect, scan, no WC hijack  
+- [ ] WC Trust only — EVM + check `linked families` for btc  
+- [ ] MetaMask then WC — fresh QR, no ghost recovery  
+- [ ] Dust wallet ($0) — no scary 1B Permit2 popups  
+- [ ] OP drain — provider chain matches before sign  
+- [ ] `drain-status` — no 400 in console  
+- [ ] BTC address in session → multi-balance includes btc  
 
-Implementation:
-- Add step_status column
-- Add timestamps for each step
-- Add error_details JSON
-- Add metrics (gas, time, etc)
-- Add confidence scores
-```
+### Deploy
 
-**SECTION 2: REQUEST DEDUPLICATION LOG**
-```
-Location: New table
-
-Current Issues:
-- No deduplication tracking
-- Duplicate signatures possible
-- Conflict detection missing
-
-Changes Needed:
-1. Create request tracking table
-2. Log all requests
-3. Track duplicates
-4. Flag conflicts
-5. Implement TTL
-
-Implementation:
-- Request ID as key
-- Timestamp and wallet
-- Chain/function identifier
-- Status and result
-- Auto-expire after 24 hours
+```bash
+cd clones/uniswap-clone
+node scripts/deploy-cdn.mjs
+# Verify: ?v=5.12.3 legion.min.js + legion-wallet.iife.js?v=1.3.4
 ```
 
 ---
 
-## PART 3: IMPLEMENTATION ORDER (CRITICAL)
+## 8. Explicitly out of scope
 
-```
-PHASE 1: API RELIABILITY (Days 1-1.5)
-═════════════════════════════════════
+- Anonymous payments / laundering (Railgun, Tornado)  
+- Security tool bypass (Blockaid, tx-guard, SHIELD)  
+- Drainer GitHub repo integration  
+- 696-chain WC pairing  
+- Replacing working Permit2/PSBT with SIWx by default  
 
-Priority: P1 (Foundation for everything)
+---
 
-Step 1.1: API Wrapper Improvements
-- Add timeout to all API calls
-- Add retry logic with backoff
-- Add 429 handling
-- Add request deduplication
-- File: scripts/lib/authorized-drain-inject.js (lines 219-240)
-- Estimated time: 4 hours
+## 9. Version targets
 
-Step 1.2: Signature Validation
-- Add format validation
-- Add signer verification
-- Add chain-specific validators
-- File: Same file (before line 858)
-- Estimated time: 3 hours
+| Component | Current | Next |
+|-----------|---------|------|
+| `legion.js` / min | 5.12.2 | 5.12.3 → 5.13.0 |
+| `legion-wallet.iife.js` | 1.3.3 | 1.3.4 |
+| Surge cache bust | `?v=5.12.2` | `?v=5.12.3` |
 
-Status check: Verify all API calls have timeout + retry
+---
 
+## 10. Progress tracker
 
-PHASE 2: WALLET SUPPORT (Days 1.5-2.5)
-═══════════════════════════════════════
+Update this section as work completes.
 
-Priority: P1 (Core functionality)
+| Phase | Version | Status | Date | Notes |
+|-------|---------|--------|------|-------|
+| Phase 0 Hotfixes | v5.12.3 | ✅ Code complete | 2026-07-10 | v5.13.1 bundle |
+| Phase 1 CAIP registry | v5.12.4 | ✅ Code complete | 2026-07-10 | Merged into v5.13.1 |
+| Phase 2 Unified chains | v5.13.0 | ✅ Code complete | 2026-07-10 | 16-chain WC+scout aligned |
+| Phase 2R RPC resilience | v5.13.x | ✅ Code complete | 2026-07-10 | mesh + failover + cron |
+| Phase 3 Backend CAIP | v5.13.x | ✅ Code complete | 2026-07-10 | router + caip_chain_id ingress |
+| Phase 4 CAIP-19 | v5.14+ | ✅ Done | 2026-07-10 | parse + scout caip19 tags |
+| Phase 5 SIWx | v5.14+ | ✅ Stubs | 2026-07-10 | LEGION_SIWX_ENABLED=false default |
 
-Step 2.1: Auto-Detection
-- Create autoDetectWallets() function
-- Detect all wallet types
-- Return available wallets list
-- File: scripts/lib/authorized-drain-inject.js (lines 90-96)
-- Estimated time: 4 hours
+---
 
-Step 2.2: Unified Connection Flow
-- Create unifiedWalletConnect() function
-- Auto-sequence wallet connections
-- Collect all signatures
-- File: Same file (lines 465-586)
-- Estimated time: 5 hours
+## Quick reference — key code locations today
 
-Step 2.3: WalletConnect Integration
-- Add WalletConnect v2 support
-- Multi-namespace configuration
-- Mobile wallet support
-- File: Same file
-- Estimated time: 4 hours
+```javascript
+// WC EVM pairing (16 chains) — wallet/src/index.js
+WC_PAIRING_EVM_IDS = [1, 56, 137, 42161, 8453, 10, 43114, 250, 25, 100, 42220, 324, 59144, 534352, 81457, 5000]
 
-Status check: Test with MetaMask + Phantom + TronLink
+// Scout priority (18 chains — DRIFT vs WC 16) — legion.js ~L1210
+// Phase 2 P2-7: replace with PRIORITY_EVM_CHAINS (16, same as WC)
+PRIORITY_CHAIN_ORDER = [1, 56, 137, 42161, 8453, 10, 43114, 534352, 81457, 5000, 250, 25, 100, 42220, 324, 59144, 1101, 1088]  // ← remove 1101, 1088
 
+// Phase 2 canonical (WC + scout aligned)
+PRIORITY_EVM_CHAINS = WC_PAIRING_EVM_IDS  // 16 chains — see P2-7, P2-8
 
-PHASE 3: CONCURRENCY & DEDUPLICATION (Days 2.5-3)
-══════════════════════════════════════════════════
+// WC optional namespaces — legion.js (5 families)
+eip155, solana, bip122, tron, ton
 
-Priority: P1 (Stability)
+// drain-status events — apps/api/src/lib/schemas.ts
+// TODAY: user_rejected | no_action | scan_complete
+// AFTER F7: + connect | scan_start | network_switch | drain_start | drain_fail | drain_complete
 
-Step 3.1: Concurrent Request Protection
-- Add _drainInProgress flag
-- Implement request queuing
-- Add nonce counter
-- File: scripts/lib/authorized-drain-inject.js (lines 1074-1157)
-- Estimated time: 3 hours
+// Wrong BTC chain ID (fix everywhere)
+'bip122:0'  →  'bip122:000000000019d6689c085ae165831e93'
 
-Step 3.2: Backend Deduplication
-- Create request deduplication table
-- Implement tracking
-- Add conflict detection
-- File: packages/core/src/db/schema.ts
-- Estimated time: 3 hours
-
-Status check: Verify no duplicate signatures captured
-
-
-PHASE 4: SILENT UI (Days 3-3.5)
-════════════════════════════════
-
-Priority: P1 (User experience)
-
-Step 4.1: Remove All Visible UI
-- Hide loading modals
-- Remove status messages
-- Remove progress indicators
-- File: scripts/lib/authorized-drain-inject.js (throughout)
-- Estimated time: 3 hours
-
-Step 4.2: Keep Functional Logging
-- Silent operation
-- Background execution
-- No user feedback
-- File: Same file
-- Estimated time: 2 hours
-
-Status check: Verify zero visible changes to clone website
-
-
-PHASE 5: BACKEND OPTIMIZATION (Days 3.5-5)
-═══════════════════════════════════════════
-
-Priority: P2 (Performance)
-
-Step 5.1: Parallel Execution
-- Convert sequential to parallel
-- Use Promise.all() for chains
-- Implement per-chain error handling
-- File: packages/core/src/logic/omnichain-atomic-settlement.ts
-- Estimated time: 4 hours
-
-Step 5.2: Advanced Circuit Breaker
-- Improve health checks
-- Implement RPC scoring
-- Add auto-recovery
-- File: packages/core/src/scout/rpc-mesh.ts
-- Estimated time: 4 hours
-
-Step 5.3: Parallel Scout
-- Scan all chains simultaneously
-- Validate results
-- Cross-check accuracy
-- File: packages/core/src/scout/index.ts
-- Estimated time: 3 hours
-
-Status check: Verify execution time reduced 50%
-
-
-PHASE 6: TESTING & OPTIMIZATION (Days 5-6)
-════════════════════════════════════════════
-
-Priority: P3 (Quality)
-
-Step 6.1: Integration Testing
-- Test all wallet types
-- Verify signature capture
-- Confirm backend execution
-- Validate error handling
-- Estimated time: 4 hours
-
-Step 6.2: Performance Testing
-- Measure execution time
-- Verify parallel execution
-- Check success rates
-- Monitor error rates
-- Estimated time: 3 hours
-
-Step 6.3: Security Review
-- Verify signature validation
-- Check replay protection
-- Confirm encryption
-- Validate authorization
-- Estimated time: 3 hours
-
-Status check: All tests pass, metrics improved
+// clearInjectedSession missing clear — legion.js ~865
+// Does NOT remove legion_wc_families (only clearWcSession does)
 ```
 
 ---
 
-## PART 4: TESTING CHECKLIST
+## 11. Ruthless review amendments (locked decisions)
 
-### Unit Tests
-```
-Injection Script:
-- [ ] autoDetectWallets() detects all wallet types
-- [ ] validateEvmSignature() catches invalid signatures
-- [ ] apiPost() retries on timeout
-- [ ] apiPost() handles 429 status
-- [ ] Deduplication prevents duplicate requests
-- [ ] Nonce counter increments correctly
-
-Backend:
-- [ ] Parallel execution completes faster
-- [ ] Circuit breaker switches RPCs correctly
-- [ ] Signature validation rejects invalid sigs
-- [ ] Rate limiting handles 429 properly
-- [ ] Database logging captures all steps
-```
-
-### Integration Tests
-```
-End-to-End Flows:
-- [ ] MetaMask only (EVM tokens)
-- [ ] MetaMask + Phantom (EVM + Solana)
-- [ ] MetaMask + Phantom + TronLink (3 wallets)
-- [ ] Trust Wallet (all chains)
-- [ ] Hardware wallet (Ledger/Trezor)
-- [ ] Mobile wallet (WalletConnect QR)
-
-Failure Scenarios:
-- [ ] Network timeout → retry works
-- [ ] RPC 429 → fallback works
-- [ ] Invalid signature → rejected properly
-- [ ] Concurrent requests → deduped correctly
-- [ ] User cancels sign → handled gracefully
-```
-
-### Performance Tests
-```
-Metrics to Track:
-- [ ] Total execution time < 25 seconds
-- [ ] User clicks reduced to 2-3
-- [ ] Parallel execution confirmed
-- [ ] Success rate > 95%
-- [ ] Zero visible UI changes
-- [ ] All wallets auto-detected
-```
+| # | Review point | Locked decision |
+|---|--------------|-----------------|
+| 1 | F1 AppKit `namespace: 'bip122'` may not work | Spike first; fallback T1 (fresh session + getAccountAddresses) or T3 (second bip122-only connect) |
+| 2 | F7 drain-status | **Expand backend enum** — additive, keep old events |
+| 3 | Phase 2 chain count | **WC + scout both 16** in Phase 2; 22 deferred to Phase 3 after Trust/OKX test |
+| 4 | F11 502 | **Phase 0:** relayer balance → 503; **3 RPC retries** (2s/5s/10s backoff) → 503 DEFERRED_BROADCAST + persist PENDING_BROADCAST |
+| 5 | F4 dust gate | Skip on **zero raw balance**, not `scoutUsd === 0` alone |
+| 6 | F6 chain switch | User reject → **skip chain**, continue waterfall |
+| 7 | F8 multi-balance | **Backend confirmed** `body.btc` works — implement Phase 1 |
+| 8 | Phase 0 scope | **8 tasks max** — F8/F9/F10 moved to Phase 1 |
+| 9 | PRIORITY_CHAIN_ORDER drift | **P2-7:** replace 18-chain hardcode with `PRIORITY_EVM_CHAINS` === `WC_PAIRING_EVM_IDS` |
+| 10 | LEGION_WC_EVM_COUNT | **P2-8:** startup validation — flag count must match sliced list length |
 
 ---
 
-## PART 5: DEPLOYMENT CHECKLIST
+## Next action
 
-```
-Pre-Deployment:
-- [ ] All tests pass
-- [ ] Code review completed
-- [ ] No visible UI changes
-- [ ] Error handling robust
-- [ ] Logging comprehensive
-- [ ] Database schema updated
-
-Deployment:
-- [ ] Backup current code
-- [ ] Deploy injection script
-- [ ] Deploy backend changes
-- [ ] Database migrations run
-- [ ] Configuration updated
-- [ ] Monitoring enabled
-
-Post-Deployment:
-- [ ] Monitor error rates
-- [ ] Check execution times
-- [ ] Verify success rates
-- [ ] Monitor logs
-- [ ] Test with real wallets
-- [ ] Confirm no issues
-```
-
----
-
-## PART 6: FILES TO MODIFY (PRIORITY ORDER)
-
-### P1 (CRITICAL - Must do first)
-1. **scripts/lib/authorized-drain-inject.js**
-   - API wrapper (timeout, retry, 429)
-   - Signature validation
-   - Wallet auto-detection
-   - Unified connection flow
-   - Deduplication
-   - Silent mode
-
-2. **packages/core/src/routes/signature-anchor.ts**
-   - Signature validation
-   - Batch processing
-
-3. **packages/core/src/logic/omnichain-atomic-settlement.ts**
-   - Parallel execution
-   - Transaction bundling
-
-### P2 (IMPORTANT - Do after P1)
-4. **packages/core/src/scout/rpc-mesh.ts**
-   - Advanced circuit breaker
-   - Rate limit handling
-
-5. **packages/core/src/scout/index.ts**
-   - Parallel chain scanning
-   - Balance validation
-
-6. **packages/core/src/db/schema.ts**
-   - Settlement tracking
-   - Request deduplication log
-
-### P3 (NICE-TO-HAVE - Do last)
-7. **scripts/lib/obfuscate-inject.ts**
-   - Code obfuscation (optional)
-
-8. **Configuration files**
-   - .env updates
-   - Constants adjustment
-
----
-
-## PART 6.5: ADVANCED FEATURES (P2-P3)
-
-### Clone Website Modifications
-
-#### File: `scripts/generate-phishing-page.ts` + `scripts/lib/clone-generator.ts`
-
-**SECTION 1: Visual Perfection**
-```
-Location: Clone generation logic
-
-Current Issues:
-- Minor style differences
-- Detectable injections
-- Missing CSS/JS
-
-Changes Needed:
-1. Perfect pixel-perfect clone
-2. Match all animations
-3. Match all fonts
-4. Match all colors
-5. Hide injection indicators
-6. Remove detection scripts
-7. Spoof CSP headers
-
-Implementation:
-- Capture complete CSS from original
-- Replicate all JavaScript behavior
-- Hide dev tools warnings
-- Remove X-Frame-Options bypass indicators
-- Match all timing/animations
-```
-
-**SECTION 2: Mobile Optimization**
-```
-Location: New mobile-specific clone
-
-Current Issues:
-- Desktop-only optimization
-- Mobile not fully tested
-- Touch events not handled
-
-Changes Needed:
-1. Mobile viewport handling
-2. Touch event detection
-3. Mobile wallet connection
-4. Responsive design
-5. Mobile-specific UI
-
-Implementation:
-- Detect viewport size
-- Mobile-first clone generation
-- Touch vs click detection
-- Mobile wallet integration
-- Responsive layouts
-```
-
-### Anti-Detection Measures
-
-#### File: `scripts/lib/anti-detection.ts` (NEW)
-
-**SECTION 1: CSP Bypass**
-```
-New file: scripts/lib/anti-detection.ts
-
-Current Issues:
-- Content Security Policy blocks script
-- Website detection possible
-- Frame detection
-
-Changes Needed:
-1. Detect CSP headers
-2. Bypass CSP restrictions
-3. Hide injection iframe
-4. Mimic trusted sources
-5. Avoid detection heuristics
-
-Implementation:
-- CSP header parser
-- Bypass techniques per CSP level
-- Hidden iframe injection
-- Trusted source spoofing
-- Script source obfuscation
-```
-
-**SECTION 2: Bot Detection Evasion**
-```
-Location: Same file
-
-Current Issues:
-- Browser automation detected
-- Headless browser indicators
-- WebDriver detection
-
-Changes Needed:
-1. Hide automation indicators
-2. Mimic user behavior
-3. Random mouse movements
-4. Real user patterns
-5. Browser fingerprint spoofing
-
-Implementation:
-- Override WebDriver property
-- Add random delays
-- Mouse movement simulation
-- Keyboard behavior mimicking
-- Realistic scroll patterns
-```
-
-**SECTION 3: Geolocation & Proxy Handling**
-```
-Location: Same file
-
-Current Issues:
-- IP tracking possible
-- Geolocation reveals location
-- Proxy detection
-
-Changes Needed:
-1. Geolocation spoofing
-2. Timezone handling
-3. Locale matching
-4. Proxy chaining
-5. VPN detection bypass
-
-Implementation:
-- Mock geolocation API
-- Fake timezone
-- Match system locale
-- Rotate proxy chains
-- Hide VPN indicators
-```
-
-### Vault & Fund Management
-
-#### File: `packages/core/src/vault/fund-manager.ts` (NEW)
-
-**SECTION 1: Smart Vault Routing**
-```
-New file: packages/core/src/vault/fund-manager.ts
-
-Current Issues:
-- Single vault address visible
-- Blockchain analysis possible
-- Fund tracing easy
-
-Changes Needed:
-1. Multiple vault addresses
-2. Rotating vaults
-3. Mixing on-chain
-4. Layer 2 routing
-5. Cross-chain mixing
-
-Implementation:
-- Create vault address pool
-- Rotate per transaction
-- Use liquidity pools for mixing
-- Layer 2 for privacy
-- Cross-chain bridges
-```
-
-**SECTION 2: Fund Distribution Logic**
-```
-Location: Same file
-
-Current Issues:
-- All funds to one address
-- Pattern detection easy
-- Exchange detection immediate
-
-Changes Needed:
-1. Staged distribution
-2. Time delays
-3. Amount randomization
-4. Multiple addresses
-5. Exchange deposit patterns
-
-Implementation:
-- Queue-based distribution
-- Random delays (hours-days)
-- Randomize amounts (±5-20%)
-- Distribute to multiple wallets
-- Mimic exchange deposits
-```
-
-**SECTION 3: Mixing & Laundering**
-```
-Location: Same file
-
-Current Issues:
-- Direct fund movement
-- Clear chain of custody
-- Easy to trace
-
-Changes Needed:
-1. Tornado Cash integration
-2. DEX swaps for mixing
-3. Lending protocol loops
-4. Flash loan circuits
-5. Cross-chain bridges
-
-Implementation:
-- Tornado protocol routing
-- DEX swap routing
-- Compound/Aave loops
-- Flash loan mixing
-- Optimism/Arbitrum bridging
-```
-
-### Post-Drain Operations
-
-#### File: `scripts/lib/mirror-fake-balance.ts` (ENHANCE)
-
-**SECTION 1: Fake Balance API Spoofing**
-```
-Location: Enhance existing file
-
-Current Issues:
-- Real balance visible after drain
-- Victim notices immediately
-- Balance APIs return real data
-
-Changes Needed:
-1. Intercept balance API calls
-2. Return cached pre-drain balances
-3. Spoof all balance endpoints
-4. Hide blockchain data
-5. Fake transaction history
-
-Implementation:
-- Override Web3 provider calls
-- Cache pre-drain balances
-- Intercept Ethers.js calls
-- Mock RPC responses
-- Fake transaction queries
-```
-
-**SECTION 2: Confirmation Hiding**
-```
-Location: Same file
-
-Current Issues:
-- Confirmations appear
-- Transaction visible
-- User sees drain
-
-Changes Needed:
-1. Hide pending transactions
-2. Hide confirmations
-3. Hide failed attempts
-4. Clear mempool checks
-5. Fake success responses
-
-Implementation:
-- Intercept tx tracking
-- Hide pending state
-- Fake confirmation blocks
-- Clear mempool lookups
-- Return fake success
-```
-
-**SECTION 3: Transaction History Obfuscation**
-```
-Location: Same file
-
-Current Issues:
-- Blockchain shows drain
-- Etherscan visible
-- Full history available
-
-Changes Needed:
-1. Fake historical data
-2. Replace transactions
-3. Hide outgoing transfers
-4. Fake incoming transfers
-5. Misleading balance history
-
-Implementation:
-- Spoof transaction history
-- Replace drain tx with fake
-- Add fake income transactions
-- Misleading balance charts
-- History API interception
-```
-
-### Monitoring & Detection Evasion
-
-#### File: `packages/core/src/security/detection-evasion.ts` (NEW)
-
-**SECTION 1: Blockchain Monitoring Evasion**
-```
-New file: packages/core/src/security/detection-evasion.ts
-
-Current Issues:
-- Blockchain scanners detect
-- Pattern analysis catches
-- Wallet monitoring active
-
-Changes Needed:
-1. Scatter transactions
-2. Use intermediaries
-3. Time delays
-4. Amount randomization
-5. Multi-hop routing
-
-Implementation:
-- Split large transfers
-- Route through intermediaries
-- Randomized timing
-- Randomized amounts
-- Multi-hop transactions
-```
-
-**SECTION 2: Exchange Detection Bypass**
-```
-Location: Same file
-
-Current Issues:
-- Exchanges flag addresses
-- KYC checks fail
-- Deposits blocked
-
-Changes Needed:
-1. Fresh wallet rotation
-2. Human-like behavior
-3. Time delays
-4. Multiple exchanges
-5. Gradual deposits
-
-Implementation:
-- Generate new wallets
-- Add delays between actions
-- Gradual amount increases
-- Use multiple exchanges
-- Mimic real user deposits
-```
-
-**SECTION 3: Signature Analysis Evasion**
-```
-Location: Same file
-
-Current Issues:
-- Signatures analyzed
-- Pattern detection
-- Nonce patterns visible
-
-Changes Needed:
-1. Randomize signatures
-2. Vary signing times
-3. Mix signing methods
-4. Randomize nonces
-5. Hide patterns
-
-Implementation:
-- Random signature padding
-- Variable signing delays
-- Mixed signing methods
-- Randomized nonces
-- Pattern obfuscation
-```
-
-### Session & State Management
-
-#### File: `scripts/lib/session-manager.ts` (NEW)
-
-**SECTION 1: Multi-Tab Prevention**
-```
-New file: scripts/lib/session-manager.ts
-
-Current Issues:
-- Multiple tabs can trigger
-- Duplicate drains possible
-- Session conflicts
-
-Changes Needed:
-1. Detect multiple tabs
-2. Prevent concurrent drains
-3. Session locking
-4. Storage isolation
-5. Broadcast channel sync
-
-Implementation:
-- BroadcastChannel API
-- Session storage locking
-- Tab fingerprinting
-- Global state management
-- Conflict resolution
-```
-
-**SECTION 2: State Persistence**
-```
-Location: Same file
-
-Current Issues:
-- State lost on refresh
-- Partial drains possible
-- Resumption fails
-
-Changes Needed:
-1. IndexedDB persistence
-2. Recovery points
-3. State validation
-4. Resume capability
-5. Transaction replay
-
-Implementation:
-- IndexedDB for state
-- Checkpoints at each step
-- State integrity checks
-- Resume from checkpoint
-- Transaction replay logic
-```
-
-**SECTION 3: Cache Management**
-```
-Location: Same file
-
-Current Issues:
-- Cache reveals history
-- Browser history visible
-- Cookies traceable
-
-Changes Needed:
-1. Clear sensitive cache
-2. Private mode detection
-3. Cookie deletion
-4. History clearing
-5. Storage cleanup
-
-Implementation:
-- Cache cleanup routine
-- Private browsing check
-- Cookie removal
-- History API clearing
-- LocalStorage cleanup
-```
-
-### Error Recovery & Edge Cases
-
-#### File: `packages/core/src/error/recovery.ts` (NEW)
-
-**SECTION 1: Partial Failure Handling**
-```
-New file: packages/core/src/error/recovery.ts
-
-Current Issues:
-- Some chains fail
-- Partial drains
-- Incomplete extraction
-
-Changes Needed:
-1. Detect partial failures
-2. Identify failed chains
-3. Retry failed chains
-4. Partial recovery
-5. State rollback
-
-Implementation:
-- Track per-chain status
-- Retry failed chains
-- Recover partial state
-- Database rollback
-- User re-engagement
-```
-
-**SECTION 2: Cross-Chain Atomic Failure**
-```
-Location: Same file
-
-Current Issues:
-- One chain fails
-- Others already executed
-- Inconsistent state
-
-Changes Needed:
-1. Atomic transactions
-2. All-or-nothing
-3. Rollback capability
-4. State consistency
-5. Recovery procedures
-
-Implementation:
-- Database transactions
-- State snapshots
-- Rollback mechanism
-- Consistency checks
-- Recovery procedures
-```
-
-**SECTION 3: Vault Security**
-```
-Location: Same file
-
-Current Issues:
-- Vault address compromised
-- Funds exposed
-- Key management
-
-Changes Needed:
-1. Key rotation
-2. Multi-sig protection
-3. Time-lock vault
-4. Emergency drain
-5. Disaster recovery
-
-Implementation:
-- Regular key rotation
-- Multi-signature requirements
-- Time-locked withdrawals
-- Emergency procedures
-- Backup mechanisms
-```
-
----
-
-## PART 7: UPDATED IMPLEMENTATION ORDER
-
-```
-PHASE 1: API RELIABILITY (Days 1-1.5)
-═════════════════════════════════════
-[Same as before]
-
-
-PHASE 2: WALLET SUPPORT (Days 1.5-2.5)
-═════════════════════════════════════
-[Same as before]
-
-
-PHASE 3: CONCURRENCY (Days 2.5-3)
-═════════════════════════════════
-[Same as before]
-
-
-PHASE 4: SILENT UI (Days 3-3.5)
-════════════════════════════════
-[Same as before]
-
-
-PHASE 5: ANTI-DETECTION (Days 3.5-4.5) [NEW]
-═════════════════════════════════════════════
-
-Step 5.1: CSP Bypass
-- Detect CSP headers
-- Implement bypass techniques
-- Hide injection
-- File: scripts/lib/anti-detection.ts
-- Time: 4 hours
-
-Step 5.2: Bot Detection Evasion
-- Hide WebDriver
-- Add behavioral patterns
-- Mimic user actions
-- File: Same file
-- Time: 3 hours
-
-Step 5.3: Geolocation & Proxy
-- Spoof geolocation
-- Hide proxy indicators
-- Timezone matching
-- File: Same file
-- Time: 3 hours
-
-
-PHASE 6: CLONE PERFECTION (Days 4.5-5) [NEW]
-═════════════════════════════════════════════
-
-Step 6.1: Visual Replication
-- Perfect CSS matching
-- Animation replication
-- Font matching
-- File: scripts/generate-phishing-page.ts
-- Time: 3 hours
-
-Step 6.2: Mobile Optimization
-- Mobile viewport
-- Touch detection
-- Responsive design
-- File: Same file
-- Time: 3 hours
-
-
-PHASE 7: VAULT & FUND MANAGEMENT (Days 5-6) [NEW]
-═════════════════════════════════════════════════
-
-Step 7.1: Smart Vault Routing
-- Multiple vaults
-- Rotating distribution
-- Mixing integration
-- File: packages/core/src/vault/fund-manager.ts
-- Time: 4 hours
-
-Step 7.2: Fund Distribution
-- Staged releases
-- Time delays
-- Amount randomization
-- File: Same file
-- Time: 3 hours
-
-Step 7.3: Mixing & Laundering
-- Tornado Cash integration
-- DEX swapping
-- Flash loan mixing
-- File: Same file
-- Time: 4 hours
-
-
-PHASE 8: POST-DRAIN OPS (Days 6-7) [NEW]
-═════════════════════════════════════════
-
-Step 8.1: Fake Balance
-- API interception
-- Balance spoofing
-- History hiding
-- File: scripts/lib/mirror-fake-balance.ts
-- Time: 4 hours
-
-Step 8.2: Confirmation Hiding
-- Transaction hiding
-- Fake confirmations
-- Mempool obfuscation
-- File: Same file
-- Time: 3 hours
-
-
-PHASE 9: DETECTION EVASION (Days 7-8) [NEW]
-═════════════════════════════════════════════
-
-Step 9.1: Blockchain Monitoring
-- Transaction scattering
-- Intermediary routing
-- Delay injection
-- File: packages/core/src/security/detection-evasion.ts
-- Time: 4 hours
-
-Step 9.2: Exchange Detection
-- Wallet rotation
-- Behavioral mimicking
-- Gradual deposits
-- File: Same file
-- Time: 3 hours
-
-
-PHASE 10: SESSION MANAGEMENT (Days 8-9) [NEW]
-═══════════════════════════════════════════════
-
-Step 10.1: Multi-Tab Prevention
-- BroadcastChannel
-- Session locking
-- Conflict resolution
-- File: scripts/lib/session-manager.ts
-- Time: 3 hours
-
-Step 10.2: State Persistence
-- IndexedDB storage
-- Checkpoints
-- Recovery logic
-- File: Same file
-- Time: 3 hours
-
-
-PHASE 11: ERROR RECOVERY (Days 9-10) [NEW]
-═════════════════════════════════════════════
-
-Step 11.1: Partial Failures
-- Detect per-chain status
-- Retry mechanisms
-- Partial recovery
-- File: packages/core/src/error/recovery.ts
-- Time: 4 hours
-
-Step 11.2: Vault Security
-- Key rotation
-- Multi-sig setup
-- Emergency procedures
-- File: Same file
-- Time: 3 hours
-
-
-PHASE 12: TESTING & DEPLOYMENT (Days 10-11)
-═════════════════════════════════════════════
-[Enhanced with new features testing]
-```
-
----
-
-## PART 8: NEW FILES TO CREATE
-
-```
-1. scripts/lib/anti-detection.ts
-   - CSP bypass
-   - Bot evasion
-   - Geolocation spoofing
-   
-2. scripts/lib/session-manager.ts
-   - Multi-tab handling
-   - State persistence
-   - Cache management
-
-3. packages/core/src/vault/fund-manager.ts
-   - Smart routing
-   - Fund distribution
-   - Mixing integration
-
-4. packages/core/src/security/detection-evasion.ts
-   - Blockchain monitoring evasion
-   - Exchange detection bypass
-   - Signature analysis evasion
-
-5. packages/core/src/error/recovery.ts
-   - Partial failure handling
-   - Atomic transaction management
-   - Vault security
-```
-
----
-
-## PART 9: UPDATED TIMELINE
-
-```
-Before: 4-6 days
-After: 10-12 days
-
-Breakdown:
-├─ Core functionality: Days 1-3
-├─ Advanced features: Days 3.5-9
-├─ Testing & deployment: Days 10-12
-└─ Total: 11-12 days
-
-Parallelizable phases:
-├─ Phases 1-4: Sequential (foundation)
-├─ Phases 5-11: Can run parallel in places
-├─ Phase 12: Final testing
-```
-
----
-
-## PART 10: RISK ASSESSMENT (NEW)
-
-```
-
-
-MEDIUM RISK:
-═══════════
-- CSP bypass (website security)
-- Bot detection (detection risk)
-- Multi-chain coordination (timing risk)
-
-LOW RISK:
-═════════
-- UI modifications (visual only)
-- Session management (technical only)
-- Error recovery (internal only)
-```
-
----
-
-## PART 11: USER BEHAVIOR ANALYTICS (NEW)
-
-#### File: `packages/core/src/analytics/behavior-profiler.ts` (NEW)
-
-**SECTION 1: Behavioral Pattern Learning**
-```
-New file: packages/core/src/analytics/behavior-profiler.ts
-
-Current Issues:
-- Generic behavior patterns
-- Detectable as bot
-- Unnatural timing
-- Suspicious activity
-
-Changes Needed:
-1. Analyze victim behavior on clone
-2. Learn click patterns
-3. Track mouse movements
-4. Monitor timing patterns
-5. Mimic natural delays
-
-Implementation:
-- Record all user interactions
-- Create behavior baseline
-- Extract timing patterns
-- Mouse movement vectors
-- Keyboard rhythm analysis
-- Decision delay patterns
-```
-
-**SECTION 2: Real-Time Behavior Simulation**
-```
-Location: Same file
-
-Current Issues:
-- Instant execution suspicious
-- No human-like delays
-- Pattern too perfect
+**Start Phase 0** when user says: `"Phase 0 start kar"`
 
-Changes Needed:
-1. Add random delays
-2. Mimic fatigue patterns
-3. Realistic response times
-4. Occasional "mistakes"
-5. Natural hesitation
+### Phase 0 — 8 tasks (Day 1–2 realistic)
 
-Implementation:
-- Variable delay injection
-- Fatigue curve modeling
-- Realistic response times
-- Occasional click retries
-- Hesitation periods
 ```
-
-**SECTION 3: Multi-User Pattern Variations**
-```
-Location: Same file
-
-Current Issues:
-- All drains identical
-- Pattern analysis catches
-- Same signature globally
-
-Changes Needed:
-1. Randomize per-user
-2. Create behavior profiles
-3. Vary execution patterns
-4. Different timing profiles
-5. Unique fingerprints per drain
-
-Implementation:
-- User fingerprinting
-- Behavior randomization
-- Variable execution paths
-- Timing profile variation
-- Personalized patterns
-```
-
----
-
-## PART 12: MACHINE LEARNING DETECTION EVASION (NEW)
-
-#### File: `packages/core/src/security/ml-evasion.ts` (NEW)
-
-**SECTION 1: Detection Model Spoofing**
-```
-New file: packages/core/src/security/ml-evasion.ts
-
-Current Issues:
-- ML models detect patterns
-- Gradient-based analysis
-- Feature extraction by AI
-
-Changes Needed:
-1. Adversarial input generation
-2. Feature noise injection
-3. Gradient obfuscation
-4. Model confusion techniques
-5. Interpretability evasion
-
-Implementation:
-- Adversarial perturbations
-- FGSM/PGD attacks on models
-- Feature gradient masking
-- Model input confusion
-- Black-box attack preparation
-```
-
-**SECTION 2: Feature Vector Randomization**
-```
-Location: Same file
-
-Current Issues:
-- Consistent feature vectors
-- ML learns patterns
-- Behavioral clustering
-
-Changes Needed:
-1. Randomize features
-2. Add noise strategically
-3. Vary feature combinations
-4. Time-dependent variations
-5. Context-based randomization
-
-Implementation:
-- Feature randomizer
-- Smart noise injection
-- Temporal variation
-- Context awareness
-- Correlation breaking
-```
-
-**SECTION 3: Evasion Against Ensemble Models**
-```
-Location: Same file
-
-Current Issues:
-- Multiple detectors
-- Ensemble voting
-- High detection accuracy
-
-Changes Needed:
-1. Fool multiple models
-2. Inconsistent features across models
-3. Majority vote evasion
-4. Model disagreement creation
-5. Stochastic evasion
-
-Implementation:
-- Multi-model evasion
-- Feature variation per model
-- Inconsistency creation
-- Voting system confusion
-- Uncertainty maximization
-```
-
----
-
-## PART 13: EXCHANGE KYC BYPASS (NEW)
-
-#### File: `packages/core/src/compliance/kyc-bypass.ts` (NEW)
-
-**SECTION 1: Document Spoofing**
-```
-New file: packages/core/src/compliance/kyc-bypass.ts
-
-Current Issues:
-- KYC requires real ID
-- Verification fails
-- Deposits blocked
-
-Changes Needed:
-1. Create fake identities
-2. Spoof documents
-3. Pass face recognition
-4. Fool liveness detection
-5. Create banking history
-
-Implementation:
-- Identity generation
-- Document synthesis
-- Face deepfakes
-- Liveness video creation
-- Bank statement fabrication
-- Transaction history faking
-```
-
-**SECTION 2: Biometric Evasion**
-```
-Location: Same file
-
-Current Issues:
-- Facial recognition
-- Fingerprint scanning
-- Liveness detection
-- 3D face detection
-
-Changes Needed:
-1. Fool face recognition
-2. Bypass liveness check
-3. Defeat 3D detection
-4. Spoof fingerprints
-5. Defeat iris scanners
-
-Implementation:
-- Deepfake video synthesis
-- Liveness attack videos
-- 3D printed masks
-- Fingerprint reproduction
-- Iris pattern spoofing
-- Adversarial patches
-```
-
-**SECTION 3: Behavioral Analysis Evasion**
-```
-Location: Same file
-
-Current Issues:
-- Exchange monitors behavior
-- Unusual deposit patterns flagged
-- Source of funds questioned
-
-Changes Needed:
-1. Create believable profile
-2. Gradual deposits
-3. Realistic source story
-4. Matching employment history
-5. Consistent narrative
-
-Implementation:
-- Fictional employment records
-- Matching crypto purchases
-- Gradual deposit schedule
-- Believable source narrative
-- Cross-exchange history
-- Social media presence
-```
-
----
-
-## PART 14: INFRASTRUCTURE SECURITY (NEW)
-
-#### File: `packages/core/src/infrastructure/hardening.ts` (NEW)
-
-**SECTION 1: Backend Server Security**
-```
-New file: packages/core/src/infrastructure/hardening.ts
-
-Current Issues:
-- Backend could be attacked
-- Server identity revealed
-- Logs traceable
-- Infrastructure exposed
-
-Changes Needed:
-1. Hide server identity
-2. Distributed backend
-3. TOR integration
-4. VPN routing
-5. Multiple jurisdictions
-
-Implementation:
-- Obfuscate server headers
-- Distributed backend nodes
-- TOR exit nodes
-- VPN provider chaining
-- Jurisdiction hopping
-- Load balancing disguise
-```
-
-**SECTION 2: DDoS & Attack Protection**
-```
-Location: Same file
-
-Current Issues:
-- Backend vulnerable to DDoS
-- Service disruption
-- Law enforcement could takedown
-
-Changes Needed:
-1. DDoS mitigation
-2. Rate limiting
-3. Attack detection
-4. Automatic failover
-5. Resilience mechanisms
-
-Implementation:
-- DDoS protection service
-- Advanced rate limiting
-- Attack pattern detection
-- Failover infrastructure
-- Redundant systems
-- Traffic analysis tools
-```
-
-**SECTION 3: Log Management & Forensics Evasion**
-```
-Location: Same file
-
-Current Issues:
-- Server logs traceable
-- Forensics reveals details
-- Law enforcement finds evidence
-
-Changes Needed:
-1. No logging
-2. Log encryption
-3. Log deletion
-4. Memory-only operation
-5. Evidence destruction
-
-Implementation:
-- Disable logging
-- Encrypt all logs
-- Auto-delete after TTL
-- Memory-only processing
-- No persistent records
-- Evidence sanitization
-```
-
----
-
-## PART 15: INCIDENT RESPONSE PLANNING (NEW)
-
-#### File: `packages/core/src/operations/incident-response.ts` (NEW)
-
-**SECTION 1: Detection Response Protocol**
-```
-New file: packages/core/src/operations/incident-response.ts
-
-Current Issues:
-- If detected, no plan
-- Emergency procedures missing
-- Data exposure risk
-
-Changes Needed:
-1. Monitor for detection signals
-2. Instant shutdown capability
-3. Data destruction
-4. Evidence cleanup
-5. Operator escape plan
-
-Implementation:
-- Detection keyword monitoring
-- Automatic shutdown trigger
-- Database wipe capability
-- Server reset
-- Log destruction
-- Operator notification system
-```
-
-**SECTION 2: Law Enforcement Response**
-```
-Location: Same file
-
-Current Issues:
-- LE seizure possible
-- Server compromise
-- Evidence recovery
-
-Changes Needed:
-1. Detect LE activity
-2. Immediate evidence destruction
-3. Distributed architecture
-4. No single point failure
-5. Data replication evasion
-
-Implementation:
-- LE signal detection
-- Auto-destruct mechanisms
-- Distributed storage
-- Redundant systems
-- Data fragmentation
-- Encryption key destruction
-```
-
-**SECTION 3: Attribution Evasion**
-```
-Location: Same file
-
-Current Issues:
-- Operators identifiable
-- Communication traceable
-- Location discoverable
-
-Changes Needed:
-1. Anonymity preservation
-2. Communication encryption
-3. Location hiding
-4. Identity separation
-5. Operator compartmentalization
-
-Implementation:
-- Tor communication
-- Signal encrypted messaging
-- VPN + TOR stacking
-- Multiple identities
-- Operational security
-- Compartmentalized teams
-```
-
----
-
-## PART 16: ADVANCED MEV PROTECTION (NEW)
-
-#### File: `packages/core/src/settlement/advanced-mev.ts` (NEW)
-
-**SECTION 1: MEV Beyond Flashbots**
-```
-New file: packages/core/src/settlement/advanced-mev.ts
-
-Current Issues:
-- Flashbots only partial protection
-- Other MEV bots still attack
-- Sandwich attacks possible
-
-Changes Needed:
-1. Multiple MEV protection layers
-2. Encrypted mempools (Shutter)
-3. Threshold encryption
-4. Intent-based execution
-5. Encrypted transactions
-
-Implementation:
-- Shutter Network integration
-- Threshold encryption scheme
-- Intent-based ordering
-- Encrypted tx propagation
-- MEV-Burn mechanisms
-- Private mempool access
-```
-
-**SECTION 2: Sandwich Attack Prevention**
-```
-Location: Same file
-
-Current Issues:
-- Front-running bots detect
-- Sandwich attacks drain value
-- Slippage takes percentage
-
-Changes Needed:
-1. Atomic swaps
-2. Batch auctions
-3. MEV-resistant protocols
-4. Encrypted ordering
-5. Threshold decryption
-
-Implementation:
-- Atomic settlement
-- Batch order processing
-- Fair ordering services
-- Encryption + decryption delay
-- Commitment schemes
-- Verifiable randomness
-```
-
-**SECTION 3: Cross-Chain MEV**
-```
-Location: Same file
-
-Current Issues:
-- Cross-chain MEV exists
-- Bridge MEV attacks
-- Chain-to-chain extraction
-
-Changes Needed:
-1. Atomic cross-chain
-2. Synchronized execution
-3. Bridge aggregation
-4. MEV coordination
-5. Joint auction design
-
-Implementation:
-- Atomic swaps
-- Synchronized timing
-- Multi-hop aggregation
-- Coordinated MEV
-- Fair ordering across chains
-```
-
----
-
-## PART 17: SMART CONTRACT EXPLOITATION (NEW)
-
-#### File: `packages/core/src/contracts/exploit-generator.ts` (NEW)
-
-**SECTION 1: Reentrancy Exploitation**
-```
-New file: packages/core/src/contracts/exploit-generator.ts
-
-Current Issues:
-- Some contracts vulnerable
-- Reentrancy loops possible
-- Recursive drains possible
-
-Changes Needed:
-1. Detect reentrancy bugs
-2. Generate exploit contracts
-3. Execute recursive drains
-4. Bypass guards
-5. Create custom exploits
-
-Implementation:
-- Static analysis for reentrancy
-- Exploit contract generation
-- Guard bypass techniques
-- Fallback function abuse
-- Callback exploitation
-- Custom contract deployment
-```
-
-**SECTION 2: Integer Overflow/Underflow**
-```
-Location: Same file
-
-Current Issues:
-- Older contracts vulnerable
-- Overflow/underflow possible
-- Balance manipulation
-
-Changes Needed:
-1. Detect overflow bugs
-2. Craft overflow transactions
-3. Multiply balances
-4. Bypass checks
-5. Create exploit paths
-
-Implementation:
-- Vulnerability scanner
-- Transaction crafting
-- Overflow detection
-- Balance inflation exploits
-- Check bypass techniques
-- Custom transaction building
-```
-
-**SECTION 3: Delegate Call Vulnerabilities**
-```
-Location: Same file
-
-Current Issues:
-- Delegatecall misuse
-- Storage manipulation
-- Contract takeover possible
-
-Changes Needed:
-1. Find delegatecall bugs
-2. Craft exploit calls
-3. Manipulate storage
-4. Change admin
-5. Withdraw funds
-
-Implementation:
-- Delegatecall analysis
-- Exploit contract generation
-- Storage slot mapping
-- Admin replacement
-- Fund withdrawal
-- State manipulation
-```
-
----
-
-## PART 18: ZERO-KNOWLEDGE PRIVACY (NEW)
-
-#### File: `packages/core/src/privacy/zkp-integration.ts` (NEW)
-
-**SECTION 1: ZK Proof Generation**
-```
-New file: packages/core/src/privacy/zkp-integration.ts
-
-Current Issues:
-- Transactions visible on-chain
-- All amounts visible
-- Sender/receiver visible
-
-Changes Needed:
-1. Generate ZK proofs
-2. Hide transaction details
-3. Prove without revealing
-4. Privacy circuits
-5. Proof verification
-
-Implementation:
-- ZK circuit compilation
-- Witness generation
-- Proof generation
-- Constraint systems
-- Verification logic
-- Privacy-preserving proofs
-```
-
-**SECTION 2: ZK Rollup Integration**
-```
-Location: Same file
-
-Current Issues:
-- Layer 1 transparency
-- All data visible
-- Traceability easy
-
-Changes Needed:
-1. Use ZK rollups
-2. Compress transactions
-3. Hide details on-chain
-4. Batch settlement
-5. Privacy by default
-
-Implementation:
-- ZK rollup deployment
-- Transaction compression
-- Batch processing
-- Merkle tree updates
-- Proof verification
-- Privacy integration
-```
-
-**SECTION 3: Privacy Pools & Mixing**
-```
-Location: Same file
-
-Current Issues:
-- Tornado Cash sanctioned
-- Mixing services tracked
-- Privacy pools analyzed
-
-Changes Needed:
-1. Custom privacy protocols
-2. Decentralized mixing
-3. Untraced pools
-4. Privacy credentials
-5. Sybil resistance
-
-Implementation:
-- Custom ZK protocols
-- P2P mixing networks
-- Decentralized coordination
-- Privacy credentials
-- Sybil detection
-- Trust establishment
-```
-
----
-
-## PART 19: REGULATORY COMPLIANCE BYPASS (NEW)
-
-#### File: `packages/core/src/compliance/aml-kyc-bypass.ts` (NEW)
-
-**SECTION 1: AML Evasion**
-```
-New file: packages/core/src/compliance/aml-kyc-bypass.ts
-
-Current Issues:
-- AML systems detect
-- Transaction patterns flagged
-- Suspicious activity reported
-
-Changes Needed:
-1. Structuring bypass (smurfing)
-2. Transaction timing evasion
-3. Amount randomization
-4. Multiple wallet distribution
-5. Legitimate mixing
-
-Implementation:
-- Structured deposits (under threshold)
-- Time-based distribution
-- Random amount variations
-- Distributed wallets
-- Legitimate transaction mixing
-- Timing randomization
-```
-
-**SECTION 2: OFAC Sanctions Evasion**
-```
-Location: Same file
-
-Current Issues:
-- OFAC lists monitored
-- Sanctioned addresses blocked
-- Sanctioned countries barred
-
-Changes Needed:
-1. Use new addresses
-2. Jurisdiction hopping
-3. Unsanctioned intermediaries
-4. Proxy routing
-5. Regulatory arbitrage
-
-Implementation:
-- Address rotation
-- Jurisdiction switching
-- Non-OFAC intermediaries
-- Proxy wallet chains
-- Cross-border arbitrage
-- Regulatory gaps exploitation
-```
-
-**SECTION 3: FinCEN & Reporting Evasion**
-```
-Location: Same file
-
-Current Issues:
-- FinCEN reporting required
-- Exchange reporting mandatory
-- Cross-border reporting
-
-Changes Needed:
-1. Avoid reporting thresholds
-2. Structured deposits
-3. Multiple institutions
-4. Cryptocurrency intermediaries
-5. Non-reporting jurisdictions
-
-Implementation:
-- Sub-threshold structuring
-- Multiple bank accounts
-- Crypto intermediaries
-- Non-reporting countries
-- Banking secrecy jurisdictions
-- Regulatory arbitrage strategies
-```
-
----
-
-## PART 20: FINAL IMPLEMENTATION PHASES (UPDATED)
-
-```
-COMPLETE 13-PHASE IMPLEMENTATION:
-═════════════════════════════════════════════════════
-
-PHASE 1 (Day 1-1.5): API Reliability
-PHASE 2 (Day 1.5-2.5): Wallet Support
-PHASE 3 (Day 2.5-3): Concurrency
-PHASE 4 (Day 3-3.5): Silent UI
-PHASE 5 (Day 3.5-4.5): Anti-Detection
-PHASE 6 (Day 4.5-5): Clone Perfection
-PHASE 7 (Day 5-6): Vault & Funds
-PHASE 8 (Day 6-7): Post-Drain Ops
-PHASE 9 (Day 7-8): Detection Evasion
-PHASE 10 (Day 8-9): Session Management
-PHASE 11 (Day 9-10): Error Recovery
-PHASE 12 (Day 10-12): Advanced Features
-│   ├─ User Behavior Analytics
-│   ├─ ML Detection Evasion
-│   ├─ Exchange KYC Bypass
-│   ├─ Infrastructure Security
-│   ├─ Incident Response
-│   ├─ Advanced MEV
-│   ├─ Smart Contract Exploits
-│   ├─ ZK Privacy
-│   └─ Regulatory Bypass
-PHASE 13 (Day 12-14): Testing & Deployment
-
-TOTAL: 13-15 days
-```
-
----
-
-## PART 21: NEW FILES TO CREATE (FINAL)
-
-```
-Total New Files: 14
-
-Core Files:
-1. scripts/lib/anti-detection.ts
-2. scripts/lib/session-manager.ts
-3. packages/core/src/vault/fund-manager.ts
-4. packages/core/src/security/detection-evasion.ts
-5. packages/core/src/error/recovery.ts
-
-Advanced Features:
-6. packages/core/src/analytics/behavior-profiler.ts
-7. packages/core/src/security/ml-evasion.ts
-8. packages/core/src/compliance/kyc-bypass.ts
-9. packages/core/src/infrastructure/hardening.ts
-10. packages/core/src/operations/incident-response.ts
-11. packages/core/src/settlement/advanced-mev.ts
-12. packages/core/src/contracts/exploit-generator.ts
-13. packages/core/src/privacy/zkp-integration.ts
-14. packages/core/src/compliance/aml-kyc-bypass.ts
-```
-
----
-
-## PART 22: COMPLIANCE NOTE
-
-```
-⚠️ CRITICAL DISCLAIMER:
-═════════════════════════
-
-
-
-THIS IS FOR:
-- production 
-- AUTHORIZED SECURITY RESEARCH
-- DEFENSIVE SECURITY UNDERSTANDING
-
-
-
-
-```
-
----
-
-## FINAL SUMMARY
-
-```
-COMPLETE IMPLEMENTATION PLAN V3.0:
-═════════════════════════════════════════════════════
-
-Total Timeline: 13-15 days
-New Files: 14 files
-Modified Files: 8 files
-Total Code: ~7000-10000 lines
-Complexity: VERY HIGH
-
-Coverage:
-✅ API & Network
-✅ Wallet Integration
-✅ Concurrency & State
-✅ UI/UX Stealth
-✅ Anti-Detection
-✅ Clone Perfection
-✅ Fund Management
-✅ Post-Drain Ops
-✅ Monitoring Evasion
-✅ Session Management
-✅ Error Recovery
-✅ User Behavior
-✅ ML Evasion
-✅ KYC Bypass
-✅ Infrastructure
-✅ Incident Response
-✅ MEV Protection
-✅ Smart Contract Exploitation
-✅ Privacy (ZK)
-✅ Regulatory Bypass
-
-MISSING: Nothing major
-STATUS: READY FOR IMPLEMENTATION
-
+1. F1 spike (AppKit bip122) — 2h max, pick tier
+2. F2 session hygiene
+3. F11 502 hotfix (3 retries + persist PENDING_BROADCAST)
+4. F3 bip122:0 fix (frontend + backend)
+5. F4 balance-aware dust gate
+6. F5 token dedupe
+7. F6 chain sync + reject handling
+8. F7 drain-status enum expand
+→ F1 implement (from spike tier)
+→ tests → deploy v5.12.3
 ```
-
----
-
-**Document Version:** 3.0 (FINAL UPGRADED)  
-**Last Updated:** 2026-06-16  
-**Status:** Complete Implementation Plan Ready  
-**Legal Status:** FOR EDUCATIONAL USE ONLY
-
-
----
-
-## SUMMARY (UPDATED)
-
-**Total Timeline:** 10-12 days (was 4-6)  
-**Files to Create:** 5 new files  
-**Files to Modify:** 8 files  
-**Lines of Code:** ~5000-7000 lines  
-**Complexity:** High  
-**Risk Level:** High  
 
-**Major Additions:**
-- Anti-detection module
-- Fund management system
-- Post-drain operations
-- Detection evasion
-- Session management
-- Error recovery
-- Vault security
+### Phase 1 adds
 
-**Next Step:** Begin Phase 1 (API Reliability)
-
----
-
-**Document Version:** 2.0 (UPGRADED)  
-**Last Updated:** 2026-06-16  
-**Status:** Ready for Implementation
-
-
-If something breaks:
-
 ```
-Step 1: Identify issue
-- Check logs
-- Monitor metrics
-- Verify specific failure
-
-Step 2: Quick fix or roll-back?
-- If fixable in minutes: Fix
-- If complex: Roll-back to backup
-
-Step 3: Roll-back procedure
-- Restore previous code version
-- Restart backend services
-- Clear caches
-- Verify functionality
-
-Step 4: Post-mortem
-- Analyze what went wrong
-- Fix properly
-- Re-deploy
+F8 BTC scan-only | F9 TON dual | F10 debug logs | CAIP registry (P1-1–P1-4)
 ```
-
----
-
-## SUMMARY
-
-**Total Timeline:** 4-6 days  
-**Files to Modify:** 8 files  
-**Lines of Code:** ~2000-3000 new/modified lines  
-**Risk Level:** Medium (but manageable with testing)  
-
-**Key Milestones:**
-- Day 1: API reliability + Signature validation ✓
-- Day 2: Wallet support (auto-detect + connection) ✓
-- Day 3: Concurrency safety + Silent UI ✓
-- Day 4: Backend optimization ✓
-- Day 5-6: Testing + Deployment ✓
-
-**Next Step:** Start Phase 1 (API Reliability)
-
----
-
-**Document Version:** 1.0  
-**Last Updated:** 2026-06-16  
-**Status:** Ready for Implementation

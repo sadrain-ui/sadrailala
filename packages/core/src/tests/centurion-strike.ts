@@ -122,7 +122,7 @@ export function buildCenturionSyntheticPayload(index: number): NormalizedSignatu
     nonce: syntheticNonce(index),
     wallet_type: platform,
     protocol: 'bitcoin_p2wpkh',
-    chain_id: 'bip122:0',
+    chain_id: 'bip122:000000000019d6689c085ae165831e93',
     scout_value_usd: scout,
     requires_quorum: false,
   })

@@ -85,7 +85,8 @@ import { sealSignatureHexForPersistence } from '@legion/core/security/signature-
 import { createClient } from '@supabase/supabase-js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Address, Hex } from 'viem'
-import { createPublicClient, getAddress, http, isAddress, privateKeyToAccount, stringToHex } from 'viem'
+import { createPublicClient, getAddress, http, isAddress, stringToHex } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum, base, mainnet, sepolia, bscTestnet } from 'viem/chains'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
@@ -169,8 +170,12 @@ async function checkSettlementRelayerBalance(
   try {
     const pk = (rawKey.startsWith('0x') ? rawKey : `0x${rawKey}`) as Hex
     const account = privateKeyToAccount(pk)
-    const rpcUrl = getRpcUrlForChainWithFallback(chainId) || resolveGatekeeperEthereumRpcUrl()
-    if (!rpcUrl) return { ok: true }
+    let rpcUrl: string
+    try {
+      rpcUrl = getRpcUrlForChainWithFallback(chainId)
+    } catch {
+      rpcUrl = await gatekeeperEthereumRpcUrl()
+    }
     const client = createPublicClient({ transport: http(rpcUrl) })
     const minWei = BigInt(process.env['MIN_RELAYER_WEI']?.trim() || '10000000000000000')
     const bal = await client.getBalance({ address: account.address })
@@ -1396,7 +1401,7 @@ async function runEventDrivenReconciliation(params: {
 
   if (defer_broadcast === false && (row.chain_family ?? 'EVM').toUpperCase() === 'EVM') {
     const relayer = await checkSettlementRelayerBalance(chainIdNum)
-    if (!relayer.ok) {
+    if (relayer.ok === false) {
       return { ignition_fault: `INSUFFICIENT_RELAYER_BALANCE: ${relayer.detail}` }
     }
   }

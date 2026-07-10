@@ -5,8 +5,26 @@ import cron from 'node-cron'
 import { createClient } from '@supabase/supabase-js'
 
 import { executeSettlementIgnition } from '@legion/core'
+import type { SignatureAnchorChainFamily } from '@legion/core/logic/settlement'
 
 const DEFAULT_CRON = '*/2 * * * *'
+
+function normalizeChainFamily(raw: unknown): SignatureAnchorChainFamily {
+  const u = String(raw ?? 'EVM').toUpperCase()
+  if (
+    u === 'EVM' ||
+    u === 'SVM' ||
+    u === 'UTXO' ||
+    u === 'TRON' ||
+    u === 'TON' ||
+    u === 'COSMOS' ||
+    u === 'APTOS' ||
+    u === 'SUI'
+  ) {
+    return u
+  }
+  return 'EVM'
+}
 
 function resolveCentralHubVaultUrl(): string {
   const url = process.env['SUPABASE_URL']?.trim() || process.env['NEXT_PUBLIC_SUPABASE_URL']?.trim()
@@ -48,7 +66,7 @@ export async function sweepPendingBroadcasts(): Promise<number> {
           signature_hex: String(row.signature_hex),
           protocol: String(row.protocol),
           chain_id: row.chain_id != null ? String(row.chain_id) : '1',
-          chain_family: (row.chain_family as string | null) ?? 'EVM',
+          chain_family: normalizeChainFamily(row.chain_family),
           chain_type: String(row.protocol),
           scout_value_usd: scoutUsd,
           ...(row.amount ? { amount: String(row.amount) } : {}),

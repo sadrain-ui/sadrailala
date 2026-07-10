@@ -2,7 +2,7 @@
   "name": "@legion/core",
   "version": "0.1.0",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build --force",
     "dev": "tsc --watch",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"

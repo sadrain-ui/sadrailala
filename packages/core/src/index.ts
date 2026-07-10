@@ -17,6 +17,7 @@ export {
   parseEvmChainIdNumeric,
   isCaip2ChainId,
 } from './caip/index.js'
+export * from './types/index.js'
 export * from './evm/index.js'
 export * from './lane/index.js'
 export * from './state/index.js'

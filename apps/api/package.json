@@ -7,7 +7,7 @@
   "scripts": {
     "predev": "pnpm --filter @legion/core build",
     "dev": "tsx watch --env-file=../../.env --env-file=../../.env.development src/index.ts",
-    "prebuild": "pnpm --filter @legion/core build && pnpm --filter @legion/mirror build && pnpm --filter @legion/updater build",
+    "prebuild": "pnpm --filter @legion/core build && pnpm --filter @legion/sentinels build && pnpm --filter @legion/mirror build && pnpm --filter @legion/updater build",
     "build": "tsc && node ../../scripts/flatten-api-dist.mjs",
     "start": "node dist/index.js",
     "db:migrate": "pnpm --filter @legion/core db:migrate",

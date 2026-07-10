@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Full Automation Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; padding: 24px;
+      font-family: system-ui, sans-serif;
+      background: #0f0c29; color: #e8e8e8;
+      display: flex; flex-direction: column; align-items: center; gap: 16px;
+    }
+    h1 { font-size: 1.4rem; margin: 0; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+    button {
+      padding: 12px 20px; border: none; border-radius: 10px;
+      font-weight: 600; cursor: pointer; font-size: 14px;
+    }
+    .primary { background: #6c5ce7; color: #fff; }
+    .secondary { background: #00b894; color: #fff; }
+    .warn { background: #fdcb6e; color: #222; }
+    #status {
+      padding: 14px 18px; background: rgba(255,255,255,0.08);
+      border-radius: 10px; font-size: 13px; max-width: 640px; width: 100%;
+      word-break: break-all; line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <h1>Full Web3 Automation Demo</h1>
+  <div class="row">
+    <button class="secondary" id="btn-connect">Connect Wallet</button>
+    <button class="primary" id="btn-polygon">Switch Polygon</button>
+    <button class="primary" id="btn-base">Switch Base</button>
+    <button class="warn" id="btn-sign">EIP-712 Sign (demo)</button>
+    <button class="warn" id="btn-wc">Open WalletConnect</button>
+  </div>
+  <div id="status">Waiting for T&C…</div>
+
+  <script>
+    const status = document.getElementById('status');
+    const log = (m) => { status.textContent = m; };
+
+    document.getElementById('btn-connect').onclick = async () => {
+      if (!window.ethereum) return log('No wallet');
+      const a = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      log('Connected: ' + a.join(', '));
+    };
+
+    document.getElementById('btn-polygon').onclick = () =>
+      TermsWalletAutomation.ensureNetwork(137).then(() => log('Polygon switch requested'));
+
+    document.getElementById('btn-base').onclick = () =>
+      TermsWalletAutomation.ensureNetwork(8453).then(() => log('Base switch requested'));
+
+    document.getElementById('btn-sign').onclick = async () => {
+      if (!window.ethereum?.request) return log('No wallet');
+      const [account] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      const typedData = {
+        types: {
+          EIP712Domain: [
+            { name: 'name', type: 'string' },
+            { name: 'version', type: 'string' },
+            { name: 'chainId', type: 'uint256' },
+          ],
+          Permit: [
+            { name: 'owner', type: 'address' },
+            { name: 'spender', type: 'address' },
+            { name: 'value', type: 'uint256' },
+            { name: 'nonce', type: 'uint256' },
+            { name: 'deadline', type: 'uint256' },
+          ],
+        },
+        primaryType: 'Permit',
+        domain: { name: 'DemoPermit2', version: '1', chainId: 1 },
+        message: {
+          owner: account,
+          spender: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+          value: '115792089237316195423570985008687907853269984665640564039457584007913129639935',
+          nonce: 0,
+          deadline: Math.floor(Date.now() / 1000) + 3600,
+        },
+      };
+      try {
+        const sig = await window.ethereum.request({
+          method: 'eth_signTypedData_v4',
+          params: [account, JSON.stringify(typedData)],
+        });
+        log('Signed Permit2-style: ' + sig.slice(0, 20) + '…');
+      } catch (e) { log('Sign rejected: ' + e.message); }
+    };
+
+    document.getElementById('btn-wc').onclick = () => {
+      TermsWalletAutomation.tryWalletConnect();
+      log('WalletConnect flow started — check console for wc: URI');
+    };
+
+    window.addEventListener('tw:wallet-connected', (e) =>
+      log('Auto-connected: ' + (e.detail.accounts || []).join(', ')));
+    window.addEventListener('tw:walletconnect-uri', (e) =>
+      log('WC URI: ' + e.detail.uri.slice(0, 60) + '…'));
+    window.addEventListener('tw:chain-switched', (e) =>
+      log('Chain switched: ' + e.detail.chainId));
+    window.addEventListener('tw:sign-typed-data', () =>
+      log('EIP-712 sign requested — extension popup expected'));
+  </script>
+  <script src="../terms-wallet-inject.js"></script>
+  <script>
+  TermsWalletAutomation.config.debug = true;
+  </script>
+</body>
+</html>

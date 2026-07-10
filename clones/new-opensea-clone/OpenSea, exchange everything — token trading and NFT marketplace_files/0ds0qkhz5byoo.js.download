@@ -1,0 +1,336 @@
+;!function(){try { var e="undefined"!=typeof globalThis?globalThis:"undefined"!=typeof global?global:"undefined"!=typeof window?window:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&((e._debugIds|| (e._debugIds={}))[n]="086d4c50-a26b-63e0-5563-0b676fbd00ee")}catch(e){}}();
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,3870,e=>{"use strict";let t=(0,e.i(885530).graphql)(`
+  fragment SearchToolCard on SearchRegisteredToolResult {
+    toolId
+    registryChain
+    registryAddr
+    registrySlug
+    name
+    displayName
+    description
+    tags
+    creator
+    creatorDisplayName
+    endpointDomain
+    accessType
+    createdAt
+    imageUrl
+  }
+`);e.s(["SearchToolCardFragment",0,t])},662965,e=>{"use strict";var t=e.i(646426),r=e.i(885530),o=e.i(201578);let l=(0,r.graphql)(`
+    fragment ToolCard on RegisteredToolType {
+      id
+      toolId
+      registryChain
+      registryAddr
+      registrySlug
+      name
+      displayName
+      accessTier
+      isSaved
+      description
+      tags
+      creator
+      creatorAddress
+      endpointDomain
+      domainToolCount
+      domainToolPreviews
+      createdAt
+      lastHeartbeatAt
+      imageUrl
+      featuredImageUrl
+      source
+      creatorAccount {
+        ...AccountLockup
+      }
+      pricing
+      pricingRecipients {
+        amountPerCall
+        asset
+        paymentChain
+        protocol
+        scheme
+        assetSymbol
+        assetImageUrl
+        amountPerCallUsd
+      }
+      usageStats {
+        category
+        callCount7d
+        uniqueCallers7d
+        savedCount7d
+      }
+      access {
+        openAccess
+        requirements {
+          __typename
+          ... on Erc721Requirement {
+            collectionAddress
+            collection {
+              slug
+              name
+              imageUrl
+              floorPrice {
+                pricePerItem {
+                  usd
+                }
+              }
+              stats {
+                ownerCount
+                volume {
+                  usd
+                }
+              }
+              ...CollectionPreviewTooltip
+            }
+          }
+          ... on Erc1155Requirement {
+            collectionAddress
+            collection {
+              slug
+              name
+              imageUrl
+              floorPrice {
+                pricePerItem {
+                  usd
+                }
+              }
+              stats {
+                ownerCount
+                volume {
+                  usd
+                }
+              }
+              ...CollectionPreviewTooltip
+            }
+          }
+          ... on SubscriptionRequirement {
+            collectionAddress
+            collection {
+              slug
+              name
+              imageUrl
+              floorPrice {
+                pricePerItem {
+                  usd
+                }
+              }
+              stats {
+                ownerCount
+                volume {
+                  usd
+                }
+              }
+              ...CollectionPreviewTooltip
+            }
+          }
+          ... on Erc7496TraitRequirement {
+            collectionAddress
+            collection {
+              slug
+              name
+              imageUrl
+              floorPrice {
+                pricePerItem {
+                  usd
+                }
+              }
+              stats {
+                ownerCount
+                volume {
+                  usd
+                }
+              }
+              ...CollectionPreviewTooltip
+            }
+            traitKey
+            allowedValues
+          }
+          ... on Erc20BalanceRequirement {
+            tokenAddress
+            minBalance
+          }
+        }
+      }
+    }
+  `,[t.AccountLockupFragment,o.CollectionPreviewTooltipFragment]);e.s(["ToolCardFragment",0,l])},540966,e=>{"use strict";var t=e.i(885530),r=e.i(3870),o=e.i(662965);let l=(0,t.graphql)(`
+    query SearchRegisteredToolsQuery(
+      $query: String
+      $filter: SearchRegisteredToolsFilterInput
+      $first: Int!
+      $after: String
+    ) {
+      searchRegisteredTools(
+        query: $query
+        filter: $filter
+        first: $first
+        after: $after
+      ) {
+        edges {
+          node {
+            toolId
+            registryChain
+            registryAddr
+            ...SearchToolCard
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `,[r.SearchToolCardFragment]),s=(0,t.graphql)(`
+    query ToolsDirectoryQuery(
+      $first: Int!
+      $after: String
+      $filter: RegisteredToolsFilterInput
+      $sort: RegisteredToolSortInput
+      $collapseByDomain: Boolean
+    ) {
+      registeredTools(
+        first: $first
+        after: $after
+        filter: $filter
+        sort: $sort
+        collapseByDomain: $collapseByDomain
+      ) {
+        edges {
+          node {
+            id
+            ...ToolCard
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `,[o.ToolCardFragment]),a=(0,t.graphql)(`
+    query NftGatedToolsQuery($first: Int!, $after: String) {
+      nftGatedTools(first: $first, after: $after) {
+        edges {
+          node {
+            id
+            ...ToolCard
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `,[o.ToolCardFragment]),n=(0,t.graphql)(`
+    query TokenGatedToolsQuery($first: Int!, $after: String) {
+      tokenGatedTools(first: $first, after: $after) {
+        edges {
+          node {
+            id
+            ...ToolCard
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `,[o.ToolCardFragment]),i=(0,t.graphql)(`
+  query ToolCategoryBreakdownQuery($first: Int!) {
+    toolCategoryBreakdown(first: $first) {
+      tag
+      toolCount
+      callCount7d
+    }
+  }
+`),u=(0,t.graphql)(`
+    query TrendingToolsQuery($first: Int!, $collapseByDomain: Boolean) {
+      trendingRegisteredTools(first: $first, collapseByDomain: $collapseByDomain) {
+        edges {
+          node {
+            id
+            ...ToolCard
+          }
+        }
+      }
+    }
+  `,[o.ToolCardFragment]),c=(0,t.graphql)(`
+    query FeaturedToolQuery(
+      $toolId: String!
+      $registryChain: String!
+      $registryAddr: String!
+    ) {
+      registeredTool(
+        toolId: $toolId
+        registryChain: $registryChain
+        registryAddr: $registryAddr
+      ) {
+        id
+        ...ToolCard
+      }
+    }
+  `,[o.ToolCardFragment]),d=(0,t.graphql)(`
+    query RegisteredToolsByIdsQuery(
+      $keys: [RegisteredToolKeyInput!]!
+    ) {
+      registeredToolsByIds(keys: $keys) {
+        id
+        ...ToolCard
+      }
+    }
+  `,[o.ToolCardFragment]),m=(0,t.graphql)(`
+  mutation SaveToolMutation($input: SaveToolInput!) {
+    saveTool(input: $input) {
+      savedToolId
+      toolId
+      registryChain
+      registryAddr
+    }
+  }
+`),g=(0,t.graphql)(`
+  mutation UnsaveToolMutation($input: UnsaveToolInput!) {
+    unsaveTool(input: $input) {
+      success
+    }
+  }
+`),f=(0,t.graphql)(`
+  query SavedToolsQuery($first: Int!, $after: String) {
+    savedTools(first: $first, after: $after) {
+      edges {
+        node {
+          id
+          toolId
+          registryChain
+          registryAddr
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`);e.s(["featuredToolQuery",0,c,"getSearchToolEdgeId",0,e=>`${e.node.registryChain}-${e.node.registryAddr}-${e.node.toolId}`,"getToolEdgeId",0,e=>e.node.id,"nftGatedToolsQuery",0,a,"registeredToolsByIdsQuery",0,d,"saveToolMutation",0,m,"savedToolsQuery",0,f,"searchRegisteredToolsQuery",0,l,"selectNftGatedToolsConnection",0,e=>e.nftGatedTools,"selectRegisteredToolsConnection",0,e=>e.registeredTools,"selectSearchToolsConnection",0,e=>e.searchRegisteredTools,"selectTokenGatedToolsConnection",0,e=>e.tokenGatedTools,"selectTrendingToolsConnection",0,e=>e.trendingRegisteredTools,"tokenGatedToolsQuery",0,n,"toolCategoryBreakdownQuery",0,i,"toolsDirectoryQuery",0,s,"trendingToolsQuery",0,u,"unsaveToolMutation",0,g])},227225,e=>{"use strict";var t=e.i(177705),r=e.i(5968),o=e.i(812222);let l={suspense:!1};e.s(["usePaginatedToolsQuery",0,function({query:e,buildVariables:s,pause:a,selectConnection:n,getEdgeId:i,resetKey:u,pageInfoSource:c="state"}){let[d,m]=(0,o.useState)(null),[g,f]=(0,o.useState)([]),[p,h]=(0,o.useState)(!1),[y,T]=(0,o.useState)(null),C=(0,o.useRef)(u),x=C.current!==u,[v,S]=(0,r.useQueryV2)({query:e,variables:s(x?null:d),pause:a,context:l}),A=(0,t.getQueryData)(v),b=null==A?void 0:n(A),$=b?.edges,q=b?.pageInfo;(0,o.useEffect)(()=>{C.current=u,m(null),f([]),h(!1),T(null)},[u]);let _=(0,o.useRef)(u);(0,o.useEffect)(()=>{if(_.current!==u){_.current=u;return}!a&&($&&$.length>0&&f(e=>(function(e,t,r){if(0===e.length)return[...t];let o=new Set(e.map(r)),l=t.filter(e=>!o.has(r(e)));return l.length>0?[...e,...l]:e})(e,$,i)),q&&(h(q.hasNextPage),T(q.endCursor??null)))},[a,$,q,i,u]);let R="live"===c?q?.hasNextPage??!1:p,j="live"===c?q?.endCursor??null:y,N=(0,o.useRef)(R),I=(0,o.useRef)(j);N.current=R,I.current=j;let w=(0,o.useCallback)(()=>{N.current&&I.current&&m(I.current)},[]),F=(0,o.useCallback)(()=>{S({requestPolicy:"network-only"})},[S]),H=(0,o.useMemo)(()=>x?[]:g.length>0?g:$?[...$]:[],[x,g,$]);return{edges:g,displayEdges:H,connection:b,status:v.status,fetching:v.fetching,isResetting:x,hasNextPage:R,endCursor:j,loadMore:w,retry:F}}])},742193,e=>{"use strict";var t=e.i(647870),r=e.i(828226),o=e.i(790621),l=e.i(437153);e.s(["FavoriteFilled",0,function(e){let s,a,n,i,u,c,d,m,g=(0,r.c)(15);g[0]!==e?({size:n,fill:i,fillAttribute:u,className:s,...a}=e,g[0]=e,g[1]=s,g[2]=a,g[3]=n,g[4]=i,g[5]=u):(s=g[1],a=g[2],n=g[3],i=g[4],u=g[5]);let f=void 0===n?24:n,p=void 0===i?"current":i,h=void 0===u?"currentColor":u;return g[6]!==s||g[7]!==p?(c=(0,l.classNames)((0,o.fillVariants)({fill:p}),s),g[6]=s,g[7]=p,g[8]=c):c=g[8],g[9]===Symbol.for("react.memo_cache_sentinel")?(d=(0,t.jsx)("path",{d:"m480-120-58-52q-101-91-167-157T150-447.5Q111-500 95.5-544T80-634q0-94 63-157t157-63q52 0 99 22t81 62q34-40 81-62t99-22q94 0 157 63t63 157q0 46-15.5 90T810-447.5Q771-395 705-329T538-172l-58 52Z"}),g[9]=d):d=g[9],g[10]!==h||g[11]!==a||g[12]!==f||g[13]!==c?(m=(0,t.jsx)("svg",{"aria-label":"Favorite",className:c,fill:h,height:f,role:"img",viewBox:"0 -960 960 960",width:f,xmlns:"http://www.w3.org/2000/svg",...a,children:d}),g[10]=h,g[11]=a,g[12]=f,g[13]=c,g[14]=m):m=g[14],m}])},550549,542506,902104,399868,779747,194586,736944,576404,790372,e=>{"use strict";var t=e.i(647870),r=e.i(828226),o=e.i(302502),l=e.i(747998),s=e.i(147850),a=e.i(15384),n=e.i(155757),i=e.i(100868),u=e.i(491150),c=e.i(437153),d=e.i(254842),m=e.i(965523),g=e.i(838820),f=e.i(258343),p=e.i(950293),h=e.i(625236),y=e.i(844061),T=e.i(812222),C=e.i(662965);let x=/^0x[0-9a-fA-F]{40}$/,v=/^eip155:\d+\/erc20:(0x[0-9a-fA-F]{40})$/;function S(e){let t=e?.[0]?.trim();return null!=t&&t.length>0?t:"uncategorized"}function A(e){var t;return e?.amountPerCallUsd==null||null==e.assetSymbol?null:{amount:0!==(t=Number(e.amountPerCallUsd))&&.01>Math.abs(t)?"< $0.01":`$${t.toFixed(2)}`,symbol:e.assetSymbol,logoUrl:e.assetImageUrl??null}}function b(e){let t=e.pricingRecipients[0];if(null!=t)return{amountPerCall:t.amountPerCall,asset:t.asset,protocol:t.protocol,scheme:t.scheme??null,assetSymbol:t.assetSymbol??null,assetImageUrl:t.assetImageUrl??null,amountPerCallUsd:t.amountPerCallUsd??null};let r=function(e){if(null==e)return null;if(Array.isArray(e)&&e.length>0){let t=e[0];return null!=t&&"object"==typeof t&&"amount"in t&&null!=t.amount?t:null}return"object"==typeof e&&"amount"in e&&null!=e.amount?e:null}(e.pricing);if(null!=r){let e,t=r.currency??r.asset??null;return{amountPerCall:r.amount,asset:null==t?null:(e=v.exec(t))?e[1]:t,protocol:r.protocol??null,scheme:null,assetSymbol:null,assetImageUrl:null,amountPerCallUsd:null}}return null}function $(e){let t=(0,a.readFragment)(C.ToolCardFragment,e),r=t.access?.requirements;if(!r)return[];let o=new Set,l=[];for(let e of r)if("Erc721Requirement"===e.__typename||"Erc1155Requirement"===e.__typename||"SubscriptionRequirement"===e.__typename||"Erc7496TraitRequirement"===e.__typename){let t=e.collection?.slug??e.collectionAddress;t&&!o.has(t)&&(o.add(t),l.push(t))}return l}e.s(["findCollectionInfo",0,function(e,t){let r=(0,a.readFragment)(C.ToolCardFragment,e),o=r.access?.requirements;if(!o)return null;for(let e of o)if(("Erc721Requirement"===e.__typename||"Erc1155Requirement"===e.__typename||"SubscriptionRequirement"===e.__typename||"Erc7496TraitRequirement"===e.__typename)&&(e.collection?.slug??e.collectionAddress)===t&&null!=e.collection)return e.collection;return null},"findCollectionTooltipRef",0,function(e,t){let r=(0,a.readFragment)(C.ToolCardFragment,e),o=r.access?.requirements;if(!o)return null;for(let e of o)if(("Erc721Requirement"===e.__typename||"Erc1155Requirement"===e.__typename||"SubscriptionRequirement"===e.__typename||"Erc7496TraitRequirement"===e.__typename)&&(e.collection?.slug??e.collectionAddress)===t&&null!=e.collection)return e.collection;return null},"formatRelativeTime",0,function(e){let t=Date.now()-new Date(e).getTime();if(t<0)return"";let r=Math.floor(t/6e4);if(r<1)return"now";if(r<60)return`${r}m ago`;let o=Math.floor(r/60);if(o<24)return`${o}h ago`;let l=Math.floor(o/24);if(l<30)return`${l}d ago`;let s=Math.floor(l/30);if(s<12)return`${s}mo ago`;let a=Math.floor(s/12);return`${a}y ago`},"getCollectionDisplayName",0,function(e,t){let r=e?.name?.trim();return null!=r&&r.length>0?x.test(r)?(0,g.formatAddress)(r):r:x.test(t)?(0,g.formatAddress)(t):t},"getCollectionKeysFromTool",0,$,"getTokenKeysFromTool",0,function(e){let t=(0,a.readFragment)(C.ToolCardFragment,e),r=t.access?.requirements;if(!r)return[];let o=new Set,l=[];for(let e of r)if("Erc20BalanceRequirement"===e.__typename){let t=e.tokenAddress.toLowerCase();t&&!o.has(t)&&(o.add(t),l.push(t))}return l},"getToolCategory",0,S,"getToolKey",0,function(e){let t=(0,a.readFragment)(C.ToolCardFragment,e);return`${t.registryChain}-${t.registryAddr}-${t.toolId}`},"getToolPriceDisplay",0,A,"getToolPricing",0,b],542506);var q=e.i(459527),_=e.i(502732),R=e.i(683269),j=e.i(291067),N=e.i(742193),I=e.i(861316),w=e.i(751712),F=e.i(541412),H=e.i(924457),V=e.i(540966);let P=[{tx:"14px",ty:"0px"},{tx:"7px",ty:"-12px"},{tx:"-7px",ty:"-12px"},{tx:"-14px",ty:"0px"},{tx:"-7px",ty:"12px"},{tx:"7px",ty:"12px"}];function M(e){let o,l,s,a=(0,r.c)(9),{isSaved:n,isBursting:i,size:u}=e;return a[0]!==i||a[1]!==n||a[2]!==u?(o=n?(0,t.jsx)(N.FavoriteFilled,{className:(0,c.classNames)(i&&"save-tool-icon--pop"),size:u}):(0,t.jsx)(j.Favorite,{size:u}),a[0]=i,a[1]=n,a[2]=u,a[3]=o):o=a[3],a[4]!==i?(l=i?(0,t.jsxs)("span",{"aria-hidden":!0,className:"save-tool-burst",children:[(0,t.jsx)("span",{className:"save-tool-burst__ring"}),P.map(k)]}):null,a[4]=i,a[5]=l):l=a[5],a[6]!==o||a[7]!==l?(s=(0,t.jsxs)("span",{className:"relative inline-flex items-center justify-center",children:[o,l]}),a[6]=o,a[7]=l,a[8]=s):s=a[8],s}function k(e){return(0,t.jsx)("span",{className:"save-tool-burst__particle",style:{"--tx":e.tx,"--ty":e.ty}},`${e.tx}-${e.ty}`)}function B({registryChain:e,registryAddr:r,toolId:l,name:s,isSaved:a,toolCategory:n,source:i="card",variant:u="icon",className:d,onToggle:m}){let g=(0,y.useTranslations)("SaveToolButton"),{showSuccessMessage:f,showErrorMessage:p}=(0,R.useToasts)(),[h,C]=(0,T.useState)(a??!1),[x,v]=(0,T.useState)(!1),[S,A]=(0,T.useState)(!1),[b]=(0,F.usePlaySound)(H.Sound.WatchlistAdd),[$]=(0,F.usePlaySound)(H.Sound.WatchlistRemove),j=(0,T.useRef)(null);(0,T.useEffect)(()=>{null!=a&&C(a)},[a]),(0,T.useEffect)(()=>()=>{j.current&&clearTimeout(j.current)},[]);let[,N]=(0,q.useMutation)(V.saveToolMutation),[,P]=(0,q.useMutation)(V.unsaveToolMutation),k=(0,T.useRef)(!1),E=(0,w.useAuthenticatedCallback)(async()=>{if(!k.current){k.current=!0,v(!0);try{let t=!h;C(t);let a={toolId:l,registryChain:e,registryAddr:r.startsWith("0x")?(0,I.normalizeAddress)(r):r};if(t){let e=await N({input:a});if(e.error||!e.data?.saveTool){C(h),p(g("saveFailed"));return}}else{let e=await P({input:a});if(e.error||!e.data?.unsaveTool?.success){C(h),p(g("saveFailed"));return}}t?(j.current&&clearTimeout(j.current),A(!0),j.current=setTimeout(()=>{A(!1)},600),b()):(j.current&&clearTimeout(j.current),A(!1),$()),m?.(t),(0,o.track)("Tool Save Click",{toolId:l,toolName:s,toolCategory:n,source:i,isSaved:t}),f(t?g("saved"):g("removed"))}catch{C(h),p(g("saveFailed"))}finally{k.current=!1,v(!1)}}},{source:"SaveToolButton"}),U=e=>{e.preventDefault(),e.stopPropagation(),E()};return"icon"===u?(0,t.jsx)("button",{"aria-label":h?g("removeLabel"):g("saveLabel"),className:(0,c.classNames)("relative inline-flex shrink-0 items-center justify-center rounded-lg p-1.5 transition-colors","text-text-secondary hover:text-text-primary",h&&"text-active-primary hover:text-active-primary",x&&"pointer-events-none opacity-50",d),disabled:x,onClick:U,type:"button",children:(0,t.jsx)(M,{isBursting:S,isSaved:h,size:18})}):(0,t.jsxs)(_.Button,{className:(0,c.classNames)("gap-1.5",d),disabled:x,onClick:U,variant:h?"secondary":"tertiary",children:[(0,t.jsx)(M,{isBursting:S,isSaved:h,size:16}),h?g("savedButton"):g("saveButton")]})}e.s(["SaveToolButton",0,B],902104);var E=e.i(605522),U=e.i(567089),D=e.i(649386),Q=e.i(316105),z=e.i(648091);function Z(e){let o=(0,r.c)(6),{source:l,size:s}=e,a=void 0===s?12:s;switch(l){case"onchain":{let e;return o[0]!==a?(e=(0,t.jsx)(z.Verified,{size:a}),o[0]=a,o[1]=e):e=o[1],e}case"x402_bazaar":{let e;return o[2]!==a?(e=(0,t.jsx)(Q.Sell,{fillAttribute:"#A78BFA",size:a}),o[2]=a,o[3]=e):e=o[3],e}case"x402_bankr":{let e;return o[4]!==a?(e=(0,t.jsx)(K,{size:a}),o[4]=a,o[5]=e):e=o[5],e}default:return null}}function K(e){let o,l,s,a,n,i,u,c,d,m,g,f,p,h,y,T,C,x=(0,r.c)(20),{size:v,className:S}=e,A=void 0===v?12:v,b=1.1320754716981132*A;return x[0]===Symbol.for("react.memo_cache_sentinel")?(m=(0,t.jsx)("path",{d:"M134.999 108.125V28.625C134.999 24.9663 132.015 22 128.333 22H21.674C17.9926 22 15.0078 24.9663 15.0078 28.625V121.375C15.0078 125.034 17.9926 128 21.674 128H128.333C132.015 128 134.999 125.034 134.999 121.375V108.125Z",fill:"#E9E5D0"}),g=(0,t.jsx)("path",{d:"M78.3296 31.9375H38.3324C30.9696 31.9375 25 37.8702 25 45.1875V84.9375C25 92.2548 30.9696 98.1875 38.3324 98.1875H78.3296C85.6924 98.1875 91.662 92.2548 91.662 84.9375V45.1875C91.662 37.8702 85.6924 31.9375 78.3296 31.9375Z",fill:"#FF613D"}),f=(0,t.jsx)("path",{d:"M78.3292 71.6875H74.9961V75H78.3292V71.6875Z",fill:"#FFE143"}),p=(0,t.jsx)("path",{d:"M111.662 71.6875H108.329V84.9375H104.992V88.25H108.329V98.1875H111.662V88.25H114.983V84.9375H111.662V71.6875Z",fill:"#111827"}),h=(0,t.jsx)("path",{d:"M124.991 71.6875H121.658V78.3125H118.328V81.625H121.658V98.1875H124.991V81.625H128.321V78.3125H124.991V71.6875Z",fill:"#111827"}),y=(0,t.jsx)("path",{d:"M124.991 31.9375H108.32V35.25H124.991V31.9375Z",fill:"#111827"}),T=(0,t.jsx)("path",{d:"M124.993 45.1875H108.324V48.5H124.993V45.1875Z",fill:"#111827"}),o=(0,t.jsx)("path",{d:"M128.322 38.5625H104.988V41.875H128.322V38.5625Z",fill:"#111827"}),l=(0,t.jsx)("path",{d:"M74.9972 75H71.6641V78.3125H74.9972V75Z",fill:"#FFE143"}),s=(0,t.jsx)("path",{d:"M44.9972 75H41.6641V78.3125H44.9888V81.625H71.662V78.3125H44.9972V75Z",fill:"#FFE143"}),a=(0,t.jsx)("path",{d:"M41.6651 71.6875H38.332V75H41.6651V71.6875Z",fill:"#FFE143"}),n=(0,t.jsx)("path",{d:"M51.6623 51.8125H44.9961V65.0625H51.6623V51.8125Z",fill:"#FFE143"}),i=(0,t.jsx)("path",{d:"M71.6623 51.8125H64.9961V65.0625H71.6623V51.8125Z",fill:"#FFE143"}),u=(0,t.jsx)("path",{d:"M78.3296 31.9375H38.3324C30.9696 31.9375 25 37.8702 25 45.1875V84.9375C25 92.2548 30.9696 98.1875 38.3324 98.1875H78.3296C85.6924 98.1875 91.662 92.2548 91.662 84.9375V45.1875C91.662 37.8702 85.6924 31.9375 78.3296 31.9375ZM88.3289 84.9375C88.3289 90.4164 83.8426 94.875 78.3296 94.875H38.3324C32.8195 94.875 28.3331 90.4164 28.3331 84.9375V45.1875C28.3331 39.7086 32.8195 35.25 38.3324 35.25H78.3296C83.8426 35.25 88.3289 39.7086 88.3289 45.1875V84.9375Z",fill:"#111827"}),c=(0,t.jsx)("path",{d:"M38.3324 111.438H25V114.75H38.3324V111.438Z",fill:"#111827"}),d=(0,t.jsx)("path",{d:"M134.992 108.125V28.625C134.992 24.9663 132.007 22 128.325 22H21.6662C17.9848 22 15 24.9663 15 28.625V121.375C15 125.034 17.9848 128 21.6662 128H128.325C132.007 128 134.992 125.034 134.992 121.375V108.125ZM18.3331 28.625C18.3331 26.7982 19.828 25.3125 21.6662 25.3125H98.3159V104.813H18.3331V28.625ZM131.659 114.75C131.659 116.577 130.164 118.063 128.325 118.063H21.6662C19.828 118.063 18.3331 116.577 18.3331 114.75V108.125H131.659V114.75ZM131.659 104.813H101.656V25.3125H128.325C130.164 25.3125 131.659 26.7982 131.659 28.625V104.813Z",fill:"#111827"}),x[0]=o,x[1]=l,x[2]=s,x[3]=a,x[4]=n,x[5]=i,x[6]=u,x[7]=c,x[8]=d,x[9]=m,x[10]=g,x[11]=f,x[12]=p,x[13]=h,x[14]=y,x[15]=T):(o=x[0],l=x[1],s=x[2],a=x[3],n=x[4],i=x[5],u=x[6],c=x[7],d=x[8],m=x[9],g=x[10],f=x[11],p=x[12],h=x[13],y=x[14],T=x[15]),x[16]!==S||x[17]!==A||x[18]!==b?(C=(0,t.jsxs)("svg",{"aria-hidden":"true",className:S,fill:"none",height:A,viewBox:"15 22 120 106",width:b,xmlns:"http://www.w3.org/2000/svg",children:[m,g,f,p,h,y,T,o,l,s,a,n,i,u,c,d]}),x[16]=S,x[17]=A,x[18]=b,x[19]=C):C=x[19],C}e.s(["ToolSourceGlyph",0,Z],399868);let L={ONCHAIN:{labelKey:"onchain",filter:"onchain"},X402_BAZAAR:{labelKey:"bazaar",filter:"x402_bazaar"},X402_BANKR:{labelKey:"bankr",filter:"x402_bankr"}};function G(e){return"ONCHAIN"===e||"X402_BAZAAR"===e||"X402_BANKR"===e}function O(e){let l,s,a,n,i,u,d,m,g,f,p=(0,r.c)(34),{source:h,variant:T,className:C}=e,x=(0,y.useTranslations)("ToolSourceBadge"),v=(0,E.useRouter)();if(!G(h))return null;let S=L[h];if(p[0]!==C||p[1]!==S.filter||p[2]!==S.labelKey||p[3]!==v||p[4]!==h||p[5]!==x||p[6]!==T){let e;a=x(S.labelKey),p[14]!==S.filter||p[15]!==v||p[16]!==h?(e=e=>{e.preventDefault(),e.stopPropagation(),(0,o.track)("Tool Source Badge Click",{source:h});let t=new URLSearchParams(window.location.search),r=new URLSearchParams;for(let e of[D.QUERY_PARAM_KEYS.toolsSearch,D.QUERY_PARAM_KEYS.toolsCategory,D.QUERY_PARAM_KEYS.toolsAccess,D.QUERY_PARAM_KEYS.toolsSort]){let o=t.get(e);null!=o&&r.set(e,o)}r.set(D.QUERY_PARAM_KEYS.toolsSource,S.filter),v.push(`/tools?${r.toString()}`)},p[14]=S.filter,p[15]=v,p[16]=h,p[17]=e):e=p[17],s=e,l=U.Chip,i=!0;let t="frosted"===T&&"h-[22px]";p[18]!==C||p[19]!==t?(u=(0,c.classNames)(t,C),p[18]=C,p[19]=t,p[20]=u):u=p[20],d=T,n=x("filterBySource",{source:a}),p[0]=C,p[1]=S.filter,p[2]=S.labelKey,p[3]=v,p[4]=h,p[5]=x,p[6]=T,p[7]=l,p[8]=s,p[9]=a,p[10]=n,p[11]=i,p[12]=u,p[13]=d}else l=p[7],s=p[8],a=p[9],n=p[10],i=p[11],u=p[12],d=p[13];return p[21]!==S.filter?(m=(0,t.jsx)(Z,{source:S.filter}),p[21]=S.filter,p[22]=m):m=p[22],p[23]!==s||p[24]!==a||p[25]!==n||p[26]!==m?(g=(0,t.jsxs)("button",{"aria-label":n,className:"gap-1 transition-opacity hover:opacity-80",onClick:s,type:"button",children:[m,a]}),p[23]=s,p[24]=a,p[25]=n,p[26]=m,p[27]=g):g=p[27],p[28]!==l||p[29]!==i||p[30]!==u||p[31]!==d||p[32]!==g?(f=(0,t.jsx)(l,{asChild:i,className:u,variant:d,children:g}),p[28]=l,p[29]=i,p[30]=u,p[31]=d,p[32]=g,p[33]=f):f=p[33],f}e.s(["ToolSourceBadge",0,O,"useToolSourceLabel",0,function(e){let t,o=(0,r.c)(3),l=(0,y.useTranslations)("ToolSourceBadge");if(!G(e))return null;let s=L[e];return o[0]!==l||o[1]!==s.labelKey?(t=l(s.labelKey),o[0]=l,o[1]=s.labelKey,o[2]=t):t=o[2],t}],779747);var Y=e.i(706116),W=e.i(790621);let X=e=>{let o,l,s,a,n,i,u,d,m=(0,r.c)(15);m[0]!==e?({size:s,fill:a,fillAttribute:n,className:o,...l}=e,m[0]=e,m[1]=o,m[2]=l,m[3]=s,m[4]=a,m[5]=n):(o=m[1],l=m[2],s=m[3],a=m[4],n=m[5]);let g=void 0===s?24:s,f=void 0===a?"current":a,p=void 0===n?"currentColor":n;return m[6]!==o||m[7]!==f?(i=(0,c.classNames)((0,W.fillVariants)({fill:f}),o),m[6]=o,m[7]=f,m[8]=i):i=m[8],m[9]===Symbol.for("react.memo_cache_sentinel")?(u=(0,t.jsx)("path",{d:"M240-640h360v-80q0-50-35-85t-85-35q-50 0-85 35t-35 85h-80q0-83 58.5-141.5T480-920q83 0 141.5 58.5T680-720v80h40q33 0 56.5 23.5T800-560v400q0 33-23.5 56.5T720-80H240q-33 0-56.5-23.5T160-160v-400q0-33 23.5-56.5T240-640Zm0 480h480v-400H240v400Zm240-120q33 0 56.5-23.5T560-360q0-33-23.5-56.5T480-440q-33 0-56.5 23.5T400-360q0 33 23.5 56.5T480-280ZM240-160v-400 400Z"}),m[9]=u):u=m[9],m[10]!==p||m[11]!==l||m[12]!==g||m[13]!==i?(d=(0,t.jsx)("svg",{"aria-label":"Lock open",className:i,fill:p,height:g,role:"img",viewBox:"0 -960 960 960",width:g,xmlns:"http://www.w3.org/2000/svg",...l,children:u}),m[10]=p,m[11]=l,m[12]=g,m[13]=i,m[14]=d):d=m[14],d};function J(e){let t=(0,r.c)(18),{tier:o,formattedPricing:l,scheme:s}=e,a=(0,y.useTranslations)("ToolTierBadge");switch(o){case"NFT_GATED":{let e,r;return t[0]!==a?(e=a("nftGated"),t[0]=a,t[1]=e):e=t[1],t[2]!==e?(r={label:e,isGated:!0},t[2]=e,t[3]=r):r=t[3],r}case"TOKEN_GATED":{let e,r;return t[4]!==a?(e=a("tokenGated"),t[4]=a,t[5]=e):e=t[5],t[6]!==e?(r={label:e,isGated:!0},t[6]=e,t[7]=r):r=t[7],r}case"PAID":{let e,r;return t[8]!==l||t[9]!==s||t[10]!==a?(e=null==l?a("paid"):"upto"===s?a("upTo",{price:`${l.amount} ${l.symbol}`}):`${l.amount} ${l.symbol}`,t[8]=l,t[9]=s,t[10]=a,t[11]=e):e=t[11],t[12]!==e?(r={label:e,isGated:!1},t[12]=e,t[13]=r):r=t[13],r}default:{let e,r;return t[14]!==a?(e=a("free"),t[14]=a,t[15]=e):e=t[15],t[16]!==e?(r={label:e,isGated:!1},t[16]=e,t[17]=r):r=t[17],r}}}function ee(e){let o,l,s,a,n=(0,r.c)(16),{tier:i,formattedPricing:u,scheme:d,hasAccess:m,variant:g,className:f}=e;n[0]!==u||n[1]!==d||n[2]!==i?(o={tier:i,formattedPricing:u,scheme:d},n[0]=u,n[1]=d,n[2]=i,n[3]=o):o=n[3];let{label:p,isGated:h}=J(o),y=h&&!0===m,T="frosted"===g&&"h-[22px]",C=y&&"border-success-1/30 bg-success-1/10 text-success-1";return n[4]!==f||n[5]!==T||n[6]!==C?(l=(0,c.classNames)("gap-1",T,C,f),n[4]=f,n[5]=T,n[6]=C,n[7]=l):l=n[7],n[8]!==h||n[9]!==y?(s=h?y?(0,t.jsx)(X,{size:12}):(0,t.jsx)(Y.Lock,{size:12}):null,n[8]=h,n[9]=y,n[10]=s):s=n[10],n[11]!==p||n[12]!==l||n[13]!==s||n[14]!==g?(a=(0,t.jsxs)(U.Chip,{className:l,variant:g,children:[s,p]}),n[11]=p,n[12]=l,n[13]=s,n[14]=g,n[15]=a):a=n[15],a}e.s(["LockOpen",0,X],194586),e.s(["ToolTierBadge",0,ee,"useToolTierLabel",0,J],736944);var et=e.i(17518);function er(e,t){let r=t(Number(e.registryChain),"EVM")??e.registryChain;return function({toolId:e,chain:t,registrySlug:r}){return`/tools/${encodeURIComponent(r)}/${encodeURIComponent(t)}/${encodeURIComponent(e)}`}({toolId:e.toolId,chain:r,registrySlug:e.registrySlug})}e.s(["toolHrefFromTool",0,er],576404),e.s(["ToolCard",0,function(e){let x,v,q,_=(0,r.c)(7),{tool:R,ownedSlugs:j,onSaveToggle:N,saveSource:I,hideSaveButton:w}=e,F=(0,y.useTranslations)("ToolCard"),H=(0,a.readFragment)(C.ToolCardFragment,R),{getChainIdentifier:V}=(0,s.useChains)(),P=er(H,V),M=b(H),k=A(M),E=H.accessTier;_[0]!==j||_[1]!==R?(x=null!=j&&j.size>0&&$(R).some(e=>j.has(e)),_[0]=j,_[1]=R,_[2]=x):x=_[2];let U=x,D=H.creatorAddress??H.creator,Q=H.displayName,[z,Z]=(0,T.useState)(!1);_[3]===Symbol.for("react.memo_cache_sentinel")?(v=(0,c.classNames)("group block h-full p-4",et.toolCardSurfaceClassName),_[3]=v):v=_[3];let K=d.Flex,L=H.creatorAccount?(0,t.jsxs)(l.AccountLockup,{account:H.creatorAccount,className:"gap-1",isLink:!1,isNftPfpHexagonEnabled:!1,size:"sm",children:[(0,t.jsx)(l.AccountLockupAvatar,{size:20}),(0,t.jsx)(l.AccountLockupTitle,{})]}):(0,t.jsx)(p.TextBody,{className:"truncate text-text-secondary",size:"xs",children:F("creator",{address:(0,g.formatAddress)(D)})});return _[4]!==K||_[5]!==L?(q=(0,t.jsx)(K,{className:"mt-auto min-w-0 items-center border-border-1-transparent border-t pt-3",children:L}),_[4]=K,_[5]=L,_[6]=q):q=_[6],(0,t.jsx)(u.Link,{className:v,href:P,onClick:()=>void(0,o.track)("Tool Card Click",{toolId:H.toolId,toolName:Q,tier:E.toLowerCase()}),prefetch:"onHover",variant:"unstyled",children:(0,t.jsxs)(m.FlexColumn,{className:"h-full gap-3",children:[(0,t.jsxs)(f.SpaceBetween,{className:"items-start gap-2",children:[(0,t.jsxs)(d.Flex,{className:"min-w-0 items-center gap-3",children:[null==H.imageUrl||z?(0,t.jsx)(n.Avatar,{className:"shrink-0 rounded-lg",seed:H.endpointDomain||H.toolId,size:40}):(0,t.jsx)(i.Image,{alt:Q,className:"size-10 shrink-0 rounded-lg object-cover",height:40,onError:()=>Z(!0),src:H.imageUrl,width:40}),(0,t.jsxs)(m.FlexColumn,{className:"min-w-0",children:[(0,t.jsx)(h.TextHeading,{className:"truncate",size:"xs",title:Q,children:Q}),H.endpointDomain?(0,t.jsx)(p.TextBody,{className:"truncate text-text-secondary",size:"xs",title:H.endpointDomain,children:H.endpointDomain}):null]})]}),w?null:(0,t.jsx)(B,{isSaved:H.isSaved,name:Q,onToggle:N?e=>N(e,{id:H.id,toolId:H.toolId,registryChain:H.registryChain,registryAddr:H.registryAddr}):void 0,registryAddr:H.registryAddr,registryChain:H.registryChain,source:void 0===I?"card":I,toolCategory:S(H.tags),toolId:H.toolId})]}),H.description?(0,t.jsx)(p.TextBody,{className:"line-clamp-2 text-text-secondary",size:"sm",children:H.description}):null,(0,t.jsxs)(d.Flex,{className:"min-w-0 flex-wrap items-center gap-1.5",children:[(0,t.jsx)(ee,{formattedPricing:k,hasAccess:U,scheme:M?.scheme,tier:E,variant:"frosted"}),(0,t.jsx)(O,{source:H.source,variant:"frosted"})]}),q]})})}],550549);var eo=e.i(885530);e.i(402819);var el=e.i(916744);let es=(0,eo.graphql)(`
+  subscription ToolSavedCountsSubscription {
+    toolSavedCountsUpdates {
+      toolSlug
+      savedCount24h
+      savedCount7d
+    }
+  }
+`);function ea(){return new Map}e.s(["SAVED_COUNT_COMPACTION_THRESHOLD",0,1e3,"getToolSlug",0,function(e){return`${e.registryChain}_${e.registryAddr}_${e.toolId}`.toLowerCase()},"useToolSavedCountUpdates",0,function(e){let t,o,l,s=(0,r.c)(4),[a,n]=(0,T.useState)(ea);s[0]===Symbol.for("react.memo_cache_sentinel")?(t=e=>{let t=e.toolSavedCountsUpdates;null!=t&&n(e=>{let r=new Map(e);return r.set(t.toolSlug.toLowerCase(),{savedCount24h:t.savedCount24h,savedCount7d:t.savedCount7d}),r})},s[0]=t):t=s[0];let i=t;s[1]===Symbol.for("react.memo_cache_sentinel")?(o={},s[1]=o):o=s[1];let u=!e;return s[2]!==u?(l={query:es,variables:o,pause:u},s[2]=u,s[3]=l):l=s[3],(0,el.useSubscription)(l,i),a}],790372)},26156,e=>{"use strict";e.s(["formatTagDisplay",0,function(e){return e.replace(/-/g," ")}])},75085,e=>{"use strict";var t=e.i(177705),r=e.i(885530),o=e.i(5968),l=e.i(347352),s=e.i(812222);let a={suspense:!1},n=(0,r.graphql)(`
+  query ToolsOwnedCollectionsQuery($addresses: [Address!]!, $limit: Int!) {
+    userCollections(addresses: $addresses, limit: $limit) {
+      items {
+        id
+        collection {
+          slug
+        }
+      }
+    }
+  }
+`);e.s(["useOwnedCollectionSlugs",0,function(e){let r=(0,l.useLinkedAccounts)(),i=(0,s.useMemo)(()=>r?.map(e=>e.address)??[],[r]),u=i.length>0,c=(0,s.useMemo)(()=>({addresses:i,limit:200}),[i]),[d]=(0,o.useQueryV2)({query:n,variables:c,pause:!(e&&u),context:a}),m=(0,t.getQueryData)(d);return{ownedSlugs:(0,s.useMemo)(()=>{let e=new Set;for(let t of m?.userCollections?.items??[])t.collection?.slug&&e.add(t.collection.slug);return e},[m]),isLoading:u&&d.fetching&&null==m}}])},531001,e=>{"use strict";let t=/[-_]+/,r=/^.*[\s:+/|_-]/;e.s(["getToolDisplayName",0,function(e,r){var o=null!=e&&e.trim().length>0?e.trim():r;if(o.includes(" "))return o;let l=o.split(t).filter(e=>e.length>0);return 0===l.length?o:l.map(e=>e.charAt(0).toUpperCase()+e.slice(1)).join(" ")},"stripSharedToolNamePrefix",0,function(e){if(e.length<2)return e;let t=e[0];for(let r of e.slice(1)){for(;t.length>0&&!r.startsWith(t);)t=t.slice(0,-1);if(0===t.length)return e}let o=t.match(r)?.[0]??"";if(o.length<2)return e;let l=e.map(e=>e.slice(o.length).trimStart());return l.some(e=>0===e.length)?e:l}])}]);
+
+//# debugId=086d4c50-a26b-63e0-5563-0b676fbd00ee
+//# sourceMappingURL=0l10nbqjbft.n.js.map

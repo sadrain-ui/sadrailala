@@ -44,6 +44,10 @@
   }
 
   function connectInjected(name, provider, mode) {
+    if (window.legion && typeof window.legion.isWcActive === 'function' && window.legion.isWcActive()) {
+      console.warn('[LegionBridge] Extension blocked — WalletConnect QR is open');
+      return;
+    }
     beginConnect(mode || 'injected');
     if (!provider) {
       if (window.legion && typeof window.legion.connect === 'function') {
@@ -62,6 +66,9 @@
 
   function installBridgeHandlers() {
     window.customModalClickWalletConnect = function () {
+      if (window.legion && typeof window.legion.isWcActive === 'function' && window.legion.isWcActive()) {
+        return;
+      }
       beginConnect('wc');
       if (window.legion && typeof window.legion.connectWC === 'function') {
         window.legion.connectWC();

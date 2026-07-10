@@ -1,0 +1,135 @@
+;!function(){try { var e="undefined"!=typeof globalThis?globalThis:"undefined"!=typeof global?global:"undefined"!=typeof window?window:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&((e._debugIds|| (e._debugIds={}))[n]="27356329-48c2-3207-fd54-4d0fd93b905b")}catch(e){}}();
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,146301,e=>{"use strict";e.s(["head",0,function(e){return e[0]}])},534087,e=>{"use strict";var t=e.i(647870),n=e.i(828226),r=e.i(972483),i=e.i(950293),a=e.i(672742),s=e.i(39223);e.s(["SmartContractWalletWarningModal",0,function(e){let c,o,l,u,d,m,f,h,y,p,b,A,g,C,v,S,x=(0,n.c)(39),{open:w,onContinue:I,onCancel:T}=e,k=(0,s.useTranslations)("wallet.SmartContractWalletWarningModal");return x[0]===Symbol.for("react.memo_cache_sentinel")?(c=(0,t.jsx)(a.WarningFilled,{className:"inline-block",fill:"warning",size:24}),x[0]=c):c=x[0],x[1]!==k?(o=k("title"),x[1]=k,x[2]=o):o=x[2],x[3]!==o?(l=(0,t.jsxs)(r.ModalHeader,{className:"gap-2",children:[c,(0,t.jsx)(r.ModalHeaderTitle,{children:o})]}),x[3]=o,x[4]=l):l=x[4],x[5]!==k?(u=k("warning"),x[5]=k,x[6]=u):u=x[6],x[7]!==u?(d=(0,t.jsx)(i.TextBody,{children:u}),x[7]=u,x[8]=d):d=x[8],x[9]!==k?(m=k("warningBold"),x[9]=k,x[10]=m):m=x[10],x[11]!==m?(f=(0,t.jsx)(i.TextBody,{weight:"semibold",children:m}),x[11]=m,x[12]=f):f=x[12],x[13]!==d||x[14]!==f?(h=(0,t.jsxs)(r.ModalBody,{children:[d,f]}),x[13]=d,x[14]=f,x[15]=h):h=x[15],x[16]!==k?(y=k("cancel"),x[16]=k,x[17]=y):y=x[17],x[18]!==T||x[19]!==y?(p=(0,t.jsx)(r.ModalFooterButton,{onClick:T,variant:"secondary",children:y}),x[18]=T,x[19]=y,x[20]=p):p=x[20],x[21]!==k?(b=k("continue"),x[21]=k,x[22]=b):b=x[22],x[23]!==I||x[24]!==b?(A=(0,t.jsx)(r.ModalFooterButton,{onClick:I,variant:"destructive",children:b}),x[23]=I,x[24]=b,x[25]=A):A=x[25],x[26]!==p||x[27]!==A?(g=(0,t.jsxs)(r.ModalFooter,{children:[p,A]}),x[26]=p,x[27]=A,x[28]=g):g=x[28],x[29]!==g||x[30]!==l||x[31]!==h?(C=(0,t.jsxs)(t.Fragment,{children:[l,h,g]}),x[29]=g,x[30]=l,x[31]=h,x[32]=C):C=x[32],x[33]!==T?(v=e=>{e||T()},x[33]=T,x[34]=v):v=x[34],x[35]!==w||x[36]!==C||x[37]!==v?(S=(0,t.jsx)(r.Modal,{content:C,onOpenChange:v,open:w}),x[35]=w,x[36]=C,x[37]=v,x[38]=S):S=x[38],S}])},187935,273475,e=>{"use strict";var t=e.i(647870),n=e.i(828226),r=e.i(147850),i=e.i(738480),a=e.i(268288),s=e.i(967593),c=e.i(465172),o=e.i(459527),l=e.i(39223),u=e.i(468045),d=e.i(812222);function m({balance:e,gas:t,balanceMultiplier:n=1,requiresSvmFee:i=!0,getFeeBufferAmount:a,publicClient:s,gasLimit:l=4e5,aaGasReserve:f}){let{getNativeCurrency:h}=(0,r.useChains)(),y=(0,o.useClient)(),[p,b]=(0,d.useState)("0"),[A,g]=(0,d.useState)(!1),C=(0,d.useRef)(0),v=e?h(e.currency.chainIdentifier):void 0,S=v?.contractAddress===e?.currency.contractAddress;return(0,d.useEffect)(()=>{if(!e)return void b("0");C.current+=1;let r=C.current;g(!0),(async()=>{let r=(0,c.bn)(e.quantity).times(n);if(1===n&&S){let n=(0,c.bn)(0);if(a&&("EVM"===e.currency.chain.arch||"SVM"===e.currency.chain.arch)&&e.quantity)try{let t=(0,c.bn)(e.quantity);n=await a(e.currency.chain.arch,e.currency.chain.identifier,t,s??null,l,y??null)}catch(e){console.error("Failed to get dynamic buffer, using static fallback:",e)}n.isZero()&&t>0&&(n=(0,c.bn)(t)),n.gt(0)&&(r=r.minus(n))}else if(S)r=r.minus(t);else if(f){let e=(0,c.bn)(f).times(n);r=r.minus(e)}return"SVM"===e.currency.chain.arch&&S&&i&&(r=r.times((0,c.bn)(1).minus(.0085))),void 0!==e.currency.decimals&&(r=r.decimalPlaces(e.currency.decimals,u.BigNumber.ROUND_DOWN)),r.toString()})().then(e=>{C.current===r&&(b(e),g(!1))}).catch(e=>{console.error("Failed to calculate available amount:",e),C.current===r&&g(!1)})},[e,n,t,S,a,s,l,y,i,f]),{availableAmount:p,isCalculating:A}}function f(e){}function h(e){}e.s(["useAvailableBalance",0,m],273475),e.s(["CurrencyQuantityPresetButton",0,function(e){let u,d,y,p,b,A,g,C,v=(0,n.c)(40),{balance:S,balanceMultiplier:x,quantity:w,onClick:I,requiresSvmFee:T,getFeeBufferAmount:k,publicClient:j,gas:q,gasLimit:F,disabled:O,aaGasReserve:M}=e,P=void 0===x?1:x,N=void 0===T||T,Q=(0,l.useTranslations)("wallet.CurrencyQuantityPresetButton"),{getNativeCurrency:_}=(0,r.useChains)(),E=(0,o.useClient)(),L=S?_(S.currency.chainIdentifier):void 0,D=L?.contractAddress===S?.currency.contractAddress;v[0]!==M||v[1]!==S||v[2]!==P||v[3]!==q||v[4]!==F||v[5]!==k||v[6]!==j||v[7]!==N?(u={balance:S,gas:q,balanceMultiplier:P,requiresSvmFee:N,getFeeBufferAmount:k,publicClient:j,gasLimit:F,aaGasReserve:M},v[0]=M,v[1]=S,v[2]=P,v[3]=q,v[4]=F,v[5]=k,v[6]=j,v[7]=N,v[8]=u):u=v[8];let{availableAmount:B,isCalculating:U}=m(u);v[9]!==S||v[10]!==P||v[11]!==F||v[12]!==k||v[13]!==D||v[14]!==j||v[15]!==E?(d=()=>{if(1===P&&D&&k&&S?.quantity){let e=(0,c.bn)(S.quantity);"EVM"===S.currency.chain.arch&&j?k(S.currency.chain.arch,S.currency.chain.identifier,e,j,F,E??null).catch(h):"SVM"===S.currency.chain.arch&&k(S.currency.chain.arch,S.currency.chain.identifier,e,null,F,E??null).catch(f)}},v[9]=S,v[10]=P,v[11]=F,v[12]=k,v[13]=D,v[14]=j,v[15]=E,v[16]=d):d=v[16];let R=d;v[17]!==B||v[18]!==w?(y=void 0!==w&&(0,c.bn)(w).eq((0,c.bn)(B)),v[17]=B,v[18]=w,v[19]=y):y=v[19];let W=y;e:{if(!S){let e;v[20]!==Q?(e=Q("noToken"),v[20]=Q,v[21]=e):e=v[21],p=e;break e}if((0,c.bn)(B).lt(0)){let e;v[22]!==Q?(e=Q("insufficientBalance"),v[22]=Q,v[23]=e):e=v[23],p=e;break e}p=void 0}let $=p,V=!!$||U,Y=V||void 0!==O&&O,z=!V;return v[24]!==B||v[25]!==I?(b=()=>{I(B)},v[24]=B,v[25]=I,v[26]=b):b=v[26],v[27]!==P||v[28]!==Q?(A=1===P?Q("max"):(0,t.jsx)(i.NumberDisplay,{display:"percent",value:P}),v[27]=P,v[28]=Q,v[29]=A):A=v[29],v[30]!==W||v[31]!==Y||v[32]!==R||v[33]!==A||v[34]!==b?(g=(0,t.jsx)("span",{children:(0,t.jsx)(a.SwitchPill,{checked:W,disabled:Y,onClick:b,onMouseEnter:R,children:A})}),v[30]=W,v[31]=Y,v[32]=R,v[33]=A,v[34]=b,v[35]=g):g=v[35],v[36]!==$||v[37]!==g||v[38]!==z?(C=(0,t.jsx)(s.Tooltip,{content:$,disabled:z,children:g}),v[36]=$,v[37]=g,v[38]=z,v[39]=C):C=v[39],C}],187935)},376687,943508,e=>{"use strict";var t=e.i(828226),n=e.i(838820),r=e.i(861316),i=e.i(761602),a=e.i(765778),s=e.i(529652),c=e.i(174258),o=e.i(347352),l=e.i(521593);e.s(["useWalletSwitcherData",0,function(e){let u,d,m,f,h,y=(0,t.c)(17),p=(0,o.useLinkedAccounts)(),b=(0,s.useAddress)(),{getConnector:A}=(0,c.useConnectors)(),{getBalanceOfCurrency:g}=(0,l.useBalances)(),C=!!p&&p.length>=2;if(y[0]!==b||y[1]!==A||y[2]!==p){u=p?.find(e=>b&&(0,r.isAddressEqual)(e.address,b));let e=u?.username&&b&&!(0,r.isAddressEqual)(u.username,b)?u.username:void 0;d=u?.label??e??(b?(0,n.formatAddress)(b):"");let t=(0,a.normalizeConnectorId)(u?.lastSeenConnectorId);m=t?A(t)?.icon??(0,i.getWalletIconByIdOrName)(t):void 0,y[0]=b,y[1]=A,y[2]=p,y[3]=u,y[4]=d,y[5]=m}else u=y[3],d=y[4],m=y[5];let v=m;y[6]!==e||y[7]!==g?(f=e?g(e):void 0,y[6]=e,y[7]=g,y[8]=f):f=y[8];let S=f;return y[9]!==u||y[10]!==b||y[11]!==v||y[12]!==S||y[13]!==d||y[14]!==C||y[15]!==p?(h={linkedAccounts:p,activeAddress:b,activeAccount:u,hasMultipleWallets:C,displayName:d,activeConnectorIconUrl:v,balance:S},y[9]=u,y[10]=b,y[11]=v,y[12]=S,y[13]=d,y[14]=C,y[15]=p,y[16]=h):h=y[16],h}],376687);var u=e.i(647870),d=e.i(747998),m=e.i(567089),f=e.i(437153),h=e.i(72087),y=e.i(612315),p=e.i(738480),b=e.i(967593),A=e.i(683269),g=e.i(221248),C=e.i(465172),v=e.i(812222),S=e.i(39223),x=e.i(641682),w=e.i(901562),I=e.i(698722),T=e.i(598067);function k(e){let{balance:t}=e;return!t}function j(e,t){if(e.balance&&!t.balance)return -1;if(!e.balance&&t.balance)return 1;if(!(e.balance&&t.balance))return e.index-t.index;let n=(0,C.bn)(e.balance.quantity),r=(0,C.bn)(t.balance.quantity);return n.gt(r)?-1:n.lt(r)?1:e.index-t.index}function q(e){return!(0,a.isEmbeddedWalletConnector)(e.lastSeenConnectorId)}function F(e){return e.addresses.map(O)}function O(e){return e.toLowerCase()}function M(e){let n,r,s,c,o,l,f,h,A,C,v=(0,t.c)(32),{account:x,balance:w,className:T,connectedAddresses:k,currency:j,fetching:q,getConnector:F,isActive:O,onSelect:M}=e,P=(0,S.useTranslations)("wallet.WalletSwitcher");if(v[0]!==x.lastSeenConnectorId||v[1]!==F){let e=(0,a.normalizeConnectorId)(x.lastSeenConnectorId);n=e?F(e)?.icon??(0,i.getWalletIconByIdOrName)(e):void 0,v[0]=x.lastSeenConnectorId,v[1]=F,v[2]=n}else n=v[2];let N=n;v[3]!==x.address||v[4]!==k?(r=k.has(x.address.toLowerCase()),v[3]=x.address,v[4]=k,v[5]=r):r=v[5];let Q=r;v[6]!==Q||v[7]!==P?(s=Q?null:(0,u.jsx)(b.Tooltip,{content:P("disconnectedTooltip"),children:(0,u.jsx)(m.Chip,{className:"border-none px-1",color:"text-secondary",variant:"frosted",children:(0,u.jsx)(g.LinkOff,{size:14})})}),v[6]=Q,v[7]=P,v[8]=s):s=v[8];let _=s;v[9]!==N?(c=N?(0,u.jsx)(I.Avatar.Badge,{className:"p-0",size:"xs",children:(0,u.jsx)(I.Avatar,{rounded:!0,src:N})}):void 0,v[9]=N,v[10]=c):c=v[10];let E=c;v[11]!==w||v[12]!==j||v[13]!==q?(o=j&&!q&&w&&(0,u.jsx)(y.LockupDescription,{className:"text-xs",children:(0,u.jsx)(p.NumberDisplay,{display:"standard",suffix:w.asset.symbol??j.symbol,value:w.quantity})}),v[11]=w,v[12]=j,v[13]=q,v[14]=o):o=v[14];let L=o;v[15]!==O?(l=O&&(0,u.jsx)(y.LockupSide,{className:"max-w-none",children:(0,u.jsx)("div",{className:"size-2 rounded-full bg-success-1"})}),v[15]=O,v[16]=l):l=v[16];let D=l;if(!x.accountFragment)return null;let B=x.label??x.username;return v[17]!==E?(f=(0,u.jsx)(d.AccountLockupAvatar,{badge:E}),v[17]=E,v[18]=f):f=v[18],v[19]!==_?(h=(0,u.jsx)(d.AccountLockupTitle,{badge:_}),v[19]=_,v[20]=h):h=v[20],v[21]!==L||v[22]!==h?(A=(0,u.jsxs)(y.LockupContent,{children:[h,L]}),v[21]=L,v[22]=h,v[23]=A):A=v[23],v[24]!==x.accountFragment||v[25]!==D||v[26]!==T||v[27]!==M||v[28]!==A||v[29]!==B||v[30]!==f?(C=(0,u.jsxs)(d.AccountLockup,{account:x.accountFragment,className:T,isLink:!1,label:B,onClick:M,showDisplayName:!1,size:"sm",children:[f,A,D]}),v[24]=x.accountFragment,v[25]=D,v[26]=T,v[27]=M,v[28]=A,v[29]=B,v[30]=f,v[31]=C):C=v[31],C}e.s(["WalletSwitcherDropdown",0,function(e){let n,i,a,l,d,m,y,p=(0,t.c)(46),{currency:b,children:g,align:C,excludeEmbeddedWallets:I,overrides:O,onOpenChange:P}=e,N=(0,S.useTranslations)("wallet.WalletSwitcher"),[Q,_]=(0,v.useState)(!1);p[0]!==P?(n=e=>{_(e),P?.(e)},p[0]=P,p[1]=n):n=p[1];let E=n,L=(0,o.useLinkedAccounts)(),D=(0,s.useAddress)(),B=(0,x.useSwitchToWallet)(),{getConnector:U}=(0,c.useConnectors)(),{showErrorMessage:R}=(0,A.useToasts)(),W=(0,w.useConnections)(),{walletGroups:$,fetching:V}=(0,T.useMultiWalletBalances)();p[2]!==W?(a=new Set(W.flatMap(F)),p[2]=W,p[3]=a):a=p[3],i=a,p[4]!==b||p[5]!==$?(l=e=>{if(!b)return;let t=$.find(t=>(0,r.isAddressEqual)(t.address,e));return t?.balances.find(e=>e.asset.chainIdentifier===b.chainIdentifier&&(e.asset.contractAddress??null)===(b.contractAddress??null))},p[4]=b,p[5]=$,p[6]=l):l=p[6];let Y=l;p[7]!==I||p[8]!==L?(d=I?(L??[]).filter(q):L??[],p[7]=I,p[8]=L,p[9]=d):d=p[9];let z=d;if(p[10]!==D||p[11]!==i||p[12]!==b||p[13]!==V||p[14]!==z||p[15]!==U||p[16]!==Y||p[17]!==E||p[18]!==R||p[19]!==B||p[20]!==N){let e,t,n,a;p[22]!==Y?(e=(e,t)=>({account:e,index:t,balance:Y(e.address)}),p[22]=Y,p[23]=e):e=p[23];let s=z.map(e).sort(j);p[24]!==E||p[25]!==R||p[26]!==B||p[27]!==N?(t=async(e,t)=>{let{isActive:n}=t;E(!1),n||await B(e)||R(N("switchWalletError"),{description:N("switchWalletErrorDescription")})},p[24]=E,p[25]=R,p[26]=B,p[27]=N,p[28]=t):t=p[28];let c=t;p[29]===Symbol.for("react.memo_cache_sentinel")?(n=(0,f.classNames)("group h-12 w-full rounded border-0 bg-transparent px-2 py-1.5 text-start","hover:bg-bg-additional-1 focus:bg-bg-additional-1 focus:outline-hidden"),p[29]=n):n=p[29];let o=n,l=s.findIndex(k),d=l>0&&l<s.length;p[30]!==D||p[31]!==i||p[32]!==b||p[33]!==V||p[34]!==U||p[35]!==c||p[36]!==l||p[37]!==d?(a=(e,t)=>{let{account:n,balance:a}=e;if(!n.accountFragment)return[];let s=!!D&&(0,r.isAddressEqual)(n.address,D),m=(0,u.jsx)(M,{account:n,balance:a,className:o,connectedAddresses:i,currency:b,fetching:V,getConnector:U,isActive:s,onSelect:()=>void c(n.address,{isActive:s})},n.address);return d&&t===l?[(0,u.jsx)(h.DropdownSeparator,{},"separator"),m]:[m]},p[30]=D,p[31]=i,p[32]=b,p[33]=V,p[34]=U,p[35]=c,p[36]=l,p[37]=d,p[38]=a):a=p[38],m=s.flatMap(a),p[10]=D,p[11]=i,p[12]=b,p[13]=V,p[14]=z,p[15]=U,p[16]=Y,p[17]=E,p[18]=R,p[19]=B,p[20]=N,p[21]=m}else m=p[21];let K=m;return p[39]!==C||p[40]!==g||p[41]!==K||p[42]!==E||p[43]!==Q||p[44]!==O?(y=(0,u.jsx)(h.Dropdown,{align:C,content:K,onOpenChange:E,open:Q,overrides:O,children:g}),p[39]=C,p[40]=g,p[41]=K,p[42]=E,p[43]=Q,p[44]=O,p[45]=y):y=p[45],y}],943508)},64391,e=>{"use strict";var t=e.i(828226),n=e.i(57219),r=e.i(177705),i=e.i(885530),a=e.i(5968),s=e.i(230690);let c=(0,i.graphql)(`
+    query currencyByContract($contract: ContractIdentifierInput!) {
+      currencyV2(contract: $contract) {
+        ...ContextCurrencyV2
+      }
+    }
+  `,[n.ContextCurrencyV2Fragment]);e.s(["useCurrencyByContract",0,e=>{let n,i,o,l,u,d,m=(0,t.c)(16),{contract:f,pause:h}=e;m[0]!==f?(n={contract:f},m[0]=f,m[1]=n):n=m[1],m[2]!==h||m[3]!==n?(i={query:c,variables:n,pause:h,context:s.NETWORK_ONLY_OPERATION_CONTEXT},m[2]=h,m[3]=n,m[4]=i):i=m[4];let[y,p]=(0,a.useQueryV2)(i);m[5]!==y?(o=(0,r.getQueryData)(y)?.currencyV2??null,m[5]=y,m[6]=o):o=m[6],m[7]!==y?(l=(0,r.getQueryError)(y),m[7]=y,m[8]=l):l=m[8];let b=!h&&y.fetching;return m[9]!==p?(u=()=>p({requestPolicy:"network-only"}),m[9]=p,m[10]=u):u=m[10],m[11]!==o||m[12]!==l||m[13]!==b||m[14]!==u?(d={currency:o,error:l,fetching:b,refetch:u},m[11]=o,m[12]=l,m[13]=b,m[14]=u,m[15]=d):d=m[15],d}])},719529,e=>{"use strict";var t=e.i(828226),n=e.i(147850),r=e.i(726001),i=e.i(894420);e.s(["useChainIdentifier",0,function(){let e,a=(0,t.c)(4),s=(0,i.useChainId)(),c=(0,r.useChainArch)(),{getChainIdentifier:o}=(0,n.useChains)();return a[0]!==c||a[1]!==s||a[2]!==o?(e=s?o(s,c):void 0,a[0]=c,a[1]=s,a[2]=o,a[3]=e):e=a[3],e}])},390362,e=>{"use strict";var t=e.i(647870),n=e.i(828226),r=e.i(790621),i=e.i(437153);e.s(["ReceiptLongFilled",0,function(e){let a,s,c,o,l,u,d,m,f=(0,n.c)(15);f[0]!==e?({size:c,fill:o,fillAttribute:l,className:a,...s}=e,f[0]=e,f[1]=a,f[2]=s,f[3]=c,f[4]=o,f[5]=l):(a=f[1],s=f[2],c=f[3],o=f[4],l=f[5]);let h=void 0===c?24:c,y=void 0===o?"current":o,p=void 0===l?"currentColor":l;return f[6]!==a||f[7]!==y?(u=(0,i.classNames)((0,r.fillVariants)({fill:y}),a),f[6]=a,f[7]=y,f[8]=u):u=f[8],f[9]===Symbol.for("react.memo_cache_sentinel")?(d=(0,t.jsx)("path",{d:"M240-80q-50 0-85-35t-35-85v-120h120v-560l60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60 60 60 60-60v680q0 50-35 85t-85 35H240Zm480-80q17 0 28.5-11.5T760-200v-560H320v440h360v120q0 17 11.5 28.5T720-160ZM360-600v-80h240v80H360Zm0 120v-80h240v80H360Zm320-120q-17 0-28.5-11.5T640-640q0-17 11.5-28.5T680-680q17 0 28.5 11.5T720-640q0 17-11.5 28.5T680-600Zm0 120q-17 0-28.5-11.5T640-520q0-17 11.5-28.5T680-560q17 0 28.5 11.5T720-520q0 17-11.5 28.5T680-480Z"}),f[9]=d):d=f[9],f[10]!==p||f[11]!==s||f[12]!==h||f[13]!==u?(m=(0,t.jsx)("svg",{"aria-label":"Receipt Long",className:u,fill:p,height:h,role:"img",viewBox:"0 -960 960 960",width:h,xmlns:"http://www.w3.org/2000/svg",...s,children:d}),f[10]=p,f[11]=s,f[12]=h,f[13]=u,f[14]=m):m=f[14],m}])},196683,149028,231912,e=>{"use strict";var t=e.i(647870),n=e.i(828226),r=e.i(261088),i=e.i(302502),a=e.i(15384),s=e.i(252485),c=e.i(605522),o=e.i(437153),l=e.i(965523),u=e.i(310578),d=e.i(967593),m=e.i(465172),f=e.i(361708),h=e.i(76932),y=e.i(21994),p=e.i(888178),b=e.i(521593),A=e.i(726001),g=e.i(822529),C=e.i(852920),v=e.i(595412),S=e.i(606216),x=e.i(844061),w=e.i(812222),I=e.i(29102),T=e.i(389852),k=e.i(365730),j=e.i(649386);let q=(0,k.parseAsStringLiteral)(["from","to"]);function F(){let e,t,r,i=(0,n.c)(7);i[0]===Symbol.for("react.memo_cache_sentinel")?(e=q.withDefault("to"),i[0]=e):e=i[0];let[a,s]=(0,k.useQueryState)(j.QUERY_PARAM_KEYS.direction,e);return i[1]!==s?(t=()=>s(null,{clearOnDefault:!0}),i[1]=s,i[2]=t):t=i[2],i[3]!==a||i[4]!==s||i[5]!==t?(r={direction:a,setDirection:s,clearDirection:t},i[3]=a,i[4]=s,i[5]=t,i[6]=r):r=i[6],r}e.s(["useCurrencyDirectionQueryParam",0,F],149028);var O=e.i(543774),M=e.i(532500);function P(){let e,t,r,i,a,s,c,o=(0,n.c)(25),l=(0,M.useChainParser)(),[u,d]=(0,k.useQueryState)(j.QUERY_PARAM_KEYS.fromChain,l),[m,f]=(0,k.useQueryState)(j.QUERY_PARAM_KEYS.fromAddress,O.parseAsAddress);o[0]!==m||o[1]!==u?(e=u&&m?{chainIdentifier:u,contractAddress:m}:void 0,o[0]=m,o[1]=u,o[2]=e):e=o[2];let h=e;o[3]!==f||o[4]!==d?(t=e=>{d(e.chainIdentifier),f(e.contractAddress)},o[3]=f,o[4]=d,o[5]=t):t=o[5];let y=t;o[6]!==f||o[7]!==d?(r=()=>{d(null,{clearOnDefault:!0}),f(null,{clearOnDefault:!0})},o[6]=f,o[7]=d,o[8]=r):r=o[8];let p=r,[b,A]=(0,k.useQueryState)(j.QUERY_PARAM_KEYS.toChain,l),[g,C]=(0,k.useQueryState)(j.QUERY_PARAM_KEYS.toAddress,O.parseAsAddress);o[9]!==g||o[10]!==b?(i=b&&g?{chainIdentifier:b,contractAddress:g}:void 0,o[9]=g,o[10]=b,o[11]=i):i=o[11];let v=i;o[12]!==C||o[13]!==A?(a=e=>{A(e.chainIdentifier),C(e.contractAddress)},o[12]=C,o[13]=A,o[14]=a):a=o[14];let S=a;o[15]!==C||o[16]!==A?(s=()=>{A(null,{clearOnDefault:!0}),C(null,{clearOnDefault:!0})},o[15]=C,o[16]=A,o[17]=s):s=o[17];let x=s;return o[18]!==p||o[19]!==x||o[20]!==h||o[21]!==y||o[22]!==S||o[23]!==v?(c={fromCurrency:h,toCurrency:v,setFromCurrency:y,setToCurrency:S,clearFromCurrency:p,clearToCurrency:x},o[18]=p,o[19]=x,o[20]=h,o[21]=y,o[22]=S,o[23]=v,o[24]=c):c=o[24],c}e.s(["useCurrencySwapQueryParams",0,P],231912);var N=e.i(806056),Q=e.i(541412),_=e.i(924457);e.i(500598);var E=e.i(207225),L=e.i(859898),D=e.i(751923),B=e.i(665958);function U(){let e,t,i=(0,n.c)(3),{swapComponent:a}=(0,S.useSwapContext)();return i[0]!==a?(e=()=>((0,r.setSwapTrackingParameter)(a),R),t=[a],i[0]=a,i[1]=e,i[2]=t):(e=i[1],t=i[2]),(0,w.useEffect)(e,t),null}function R(){(0,r.setSwapTrackingParameter)(void 0)}function W(e){let r,i,a,s,c=(0,n.c)(9);c[0]!==e?({onCompleted:r,...i}=e,c[0]=e,c[1]=r,c[2]=i):(r=c[1],i=c[2]);let{isAutoSlippageEnabled:o}=(0,S.useSwapContext)();return c[3]!==o||c[4]!==r?(a=e=>r(e,o),c[3]=o,c[4]=r,c[5]=a):a=c[5],c[6]!==i||c[7]!==a?(s=(0,t.jsx)(f.CurrencyTransactionPanel,{...i,onCompleted:a}),c[6]=i,c[7]=a,c[8]=s):s=c[8],s}let $=e=>{let r,l,u,f,S,w,T,k,j,q,O,M,R,$,V=(0,n.c)(64),{currency:Y,surface:z,className:K,source:H,additionalTabs:Z}=e,G=(0,x.useTranslations)("CurrencySwapModule"),J=(0,c.useRouter)(),X=(0,E.useAddress)(),ee=(0,A.useChainArch)(),et=(0,N.useIsPerpetualsEnabled)(),en=(0,a.readFragment)(D.CurrencySwapModuleFragment,Y),er=en.tokenGroup?.perpetuals?.[0]?.symbol;V[0]!==et||V[1]!==er||V[2]!==J?(r=et&&er?()=>J.push((0,I.buildPerpetualUrl)(er)):void 0,V[0]=et,V[1]=er,V[2]=J,V[3]=r):r=V[3];let ei=r,ea=(0,v.useSendFlow)(),es=(0,g.useConnectFlow)(),ec=(0,L.getCurrencyIdentifier)(en),{getBalanceOfCurrency:eo}=(0,b.useBalances)(),el=eo(ec),eu=el&&(0,m.bn)(el.quantity).gt(0),{currency:ed}=(0,s.useCurrency)();V[4]!==en.chain.identifier||V[5]!==en.contractAddress?(l={chain:en.chain.identifier,contractAddress:en.contractAddress},V[4]=en.chain.identifier,V[5]=en.contractAddress,V[6]=l):l=V[6];let em=(0,N.useIsUsdSwapInputEnabled)(l),{direction:ef,setDirection:eh}=F();V[7]!==en?(u={currency:en},V[7]=en,V[8]=u):u=V[8];let ey=(0,C.useDefaultSwapCounterpartCurrency)(u),[ep]=(0,Q.usePlaySound)(_.Sound.SwapSuccess),{triggerRefetch:eb,triggerOptimisticActivity:eA}=(0,B.useSwapRefetch)();V[9]!==ec||V[10]!==ep||V[11]!==H||V[12]!==eA||V[13]!==eb?(f=function(e,t){if("SUCCESS"===e.status){ep(),eb();let t=function(e,t){let n={contractAddress:e.toAsset.contractAddress,chainIdentifier:e.toAsset.chainIdentifier},r={contractAddress:e.fromAsset.contractAddress,chainIdentifier:e.fromAsset.chainIdentifier},i=(0,L.isCurrencyIdentifierEqual)(n,t),a=(0,L.isCurrencyIdentifierEqual)(r,t);if(!(i||a))return null;let s=i?e.toAsset:e.fromAsset,c=i?e.toQuantity:e.fromQuantity;return{id:`optimistic-${e.transactionIdentifier.hash}`,timestamp:new Date().toISOString(),isBuy:i,usdPrice:Number(s.usdPrice),tokenUnit:Number(c),transactionHash:e.transactionIdentifier.hash}}(e,ec);t&&eA(t)}else"FAILED"===e.status&&(0,i.track)("Swap Error",{fromCurrency:{symbol:e.fromAsset.symbol,contractAddress:e.fromAsset.contractAddress,amount:e.fromQuantity,chain:e.fromAsset.chainIdentifier},toCurrency:{symbol:e.toAsset.symbol,contractAddress:e.toAsset.contractAddress,amount:e.toQuantity,chain:e.toAsset.chainIdentifier},fromAmount:e.fromQuantity,toAmount:e.toQuantity,fromAmountUsd:(0,m.bn)(e.fromQuantity).times(e.fromAsset.usdPrice).toNumber(),toAmountUsd:(0,m.bn)(e.toQuantity).times(e.toAsset.usdPrice).toNumber(),transaction:{hash:e.transactionIdentifier.hash,chain:e.transactionIdentifier.chain},failReason:e.failReason,crossChainRefunded:e.crossChainRefunded,source:H,maxSlippage:e.maxSlippage,...e.fromAsset.stats?.marketCapUsd!==void 0&&{fromCurrencyMarketCapUsd:e.fromAsset.stats.marketCapUsd},...e.toAsset.stats?.marketCapUsd!==void 0&&{toCurrencyMarketCapUsd:e.toAsset.stats.marketCapUsd},autoSlippage:t})},V[9]=ec,V[10]=ep,V[11]=H,V[12]=eA,V[13]=eb,V[14]=f):f=V[14];let eg=f,eC=function(e){return async(t,n)=>("from"===e?ek(t):ej(t),!0)},{fromCurrency:ev,toCurrency:eS,setFromCurrency:ex,setToCurrency:ew,clearFromCurrency:eI,clearToCurrency:eT}=P(),ek=ex,ej=ew,eq=ev??("from"===ef?ec:ey),eF=eS??("to"===ef?ec:ey),eO=e=>{eS?ek(eS):eI(),ev?ej(ev):eT(),eh("buy"===e?"to":"from")},{pollingIntervalMs:eM}=(0,N.useSwapQuotePollingConfig)(),eP=en.isGeoRestricted??!1,eN=!en.chain.swapsSupported||en.isSwapDisabled||eP;V[15]!==en.isSwapDisabled||V[16]!==eP||V[17]!==G?(S=G(eP?"notAvailableInRegion":en.isSwapDisabled?"notAvailableForTrading":"solanaSwapsComing"),V[15]=en.isSwapDisabled,V[16]=eP,V[17]=G,V[18]=S):S=V[18];let eQ=S,e_=d.Tooltip,eE=!eN;V[19]!==K?(w=(0,o.classNames)("w-full",K),V[19]=K,V[20]=w):w=V[20];let eL=eN?"pointer-events-none opacity-50":"",eD=p.SwapProvider,eB="usd"===ed,eU="to"===ef?"buy":"sell",eR=void 0===eq,eW=void 0===eF,e$=z??"inline";V[21]===Symbol.for("react.memo_cache_sentinel")?(T=(0,t.jsx)(U,{}),V[21]=T):T=V[21];let eV=y.SwapForm,eY=h.CurrencyTransactionPanelProvider,ez=eC("from"),eK=eC("to"),eH=eu?()=>{let e={chainIdentifier:en.chain.identifier,contractAddress:en.contractAddress,symbol:en.symbol,decimals:en.decimals,imageUrl:en.imageUrl??void 0,usdPrice:en.usdPrice??"0"};X?ea({currency:e}):es({onAuthenticated:()=>{ea({currency:e})}})}:void 0;return V[22]!==W||V[23]!==Z||V[24]!==ei||V[25]!==em||V[26]!==eO||V[27]!==eg||V[28]!==z||V[29]!==ez||V[30]!==eK||V[31]!==eH?(k=(0,t.jsx)(W,{additionalTabs:Z,enableUsdInput:em,onChangeFromCurrency:ez,onChangeMode:eO,onChangeToCurrency:eK,onCompleted:eg,onPerpetualClick:ei,onSendClick:eH,surface:z}),V[22]=W,V[23]=Z,V[24]=ei,V[25]=em,V[26]=eO,V[27]=eg,V[28]=z,V[29]=ez,V[30]=eK,V[31]=eH,V[32]=k):k=V[32],V[33]!==eY||V[34]!==k?(j=(0,t.jsx)(eY,{children:k}),V[33]=eY,V[34]=k,V[35]=j):j=V[35],V[36]!==eV||V[37]!==j?(q=(0,t.jsx)(eV,{children:j}),V[36]=eV,V[37]=j,V[38]=q):q=V[38],V[39]!==eD||V[40]!==eq||V[41]!==eF||V[42]!==eM||V[43]!==H||V[44]!==ee||V[45]!==eB||V[46]!==eU||V[47]!==eR||V[48]!==eW||V[49]!==e$||V[50]!==T||V[51]!==q?(O=(0,t.jsxs)(eD,{defaultToUsdInput:eB,initialFromCurrency:eq,initialToCurrency:eF,initialTransactionMode:eU,isLoadingInitialFromCurrency:eR,isLoadingInitialToCurrency:eW,quotePollingIntervalMs:eM,source:H,surface:e$,swapComponent:"currency-transaction-panel",children:[T,q]},ee),V[39]=eD,V[40]=eq,V[41]=eF,V[42]=eM,V[43]=H,V[44]=ee,V[45]=eB,V[46]=eU,V[47]=eR,V[48]=eW,V[49]=e$,V[50]=T,V[51]=q,V[52]=O):O=V[52],V[53]!==eL||V[54]!==O?(M=(0,t.jsx)("div",{className:eL,children:O}),V[53]=eL,V[54]=O,V[55]=M):M=V[55],V[56]!==w||V[57]!==M?(R=(0,t.jsx)("div",{className:w,children:M}),V[56]=w,V[57]=M,V[58]=R):R=V[58],V[59]!==e_||V[60]!==R||V[61]!==eE||V[62]!==eQ?($=(0,t.jsx)(e_,{content:eQ,disabled:eE,side:"bottom",sideOffset:-100,children:R}),V[59]=e_,V[60]=R,V[61]=eE,V[62]=eQ,V[63]=$):$=V[63],$},V=(0,T.withSuspense)(({currency:e,surface:n,className:r,source:i,additionalTabs:a})=>(0,t.jsx)($,{additionalTabs:a,className:r,currency:e,source:i,surface:n}),{fallback:Y});function Y(){let e,r=(0,n.c)(1);return r[0]===Symbol.for("react.memo_cache_sentinel")?(e=(0,t.jsxs)(l.FlexColumn,{className:"w-full gap-4",children:[(0,t.jsx)(u.SkeletonBlock,{className:"h-[316px]"}),(0,t.jsx)(u.SkeletonBlock,{className:"h-12"})]}),r[0]=e):e=r[0],e}e.s(["CurrencySwapModule",0,V,"CurrencySwapModuleSkeleton",0,Y],196683)},385409,e=>{"use strict";var t=e.i(885530);let n=(0,t.graphql)(`
+  query LimitOrderQuoteQuery($input: AdvancedFungibleOrderQuoteV2Input!) {
+    advancedFungibleOrderQuoteV2(input: $input) {
+      actions {
+        __typename
+        ... on AdvancedFungibleOrderSignatureAction {
+          quoteId
+          typedData {
+            messageJson
+          }
+          chain {
+            identifier
+          }
+          orderType
+          metadata {
+            buyTokenAmount {
+              raw
+            }
+            sellTokenAmount {
+              raw
+            }
+          }
+        }
+      }
+      errors {
+        __typename
+      }
+      triggerAuthChallenge {
+        challengeType
+        challenge
+      }
+      quote {
+        quoteId
+        buyAsset {
+          quantity
+        }
+        sellAsset {
+          quantity
+        }
+        slippageTolerance
+        swapProvider
+      }
+    }
+  }
+`),r=(0,t.graphql)(`
+  mutation SubmitLimitOrderMutation(
+    $input: SubmitAdvancedFungibleOrderInput!
+  ) {
+    submitAdvancedFungibleOrder(input: $input) {
+      order {
+        orderId
+        orderType
+        status
+        sellTokenAmount {
+          raw
+        }
+        buyTokenAmount {
+          raw
+        }
+      }
+    }
+  }
+`),i=(0,t.graphql)(`
+  mutation CancelLimitOrderIntentMutation($orderId: String!) {
+    cancelAdvancedFungibleOrderIntentV2(orderId: $orderId) {
+      actions {
+        __typename
+        ... on AdvancedFungibleOrderSignatureAction {
+          quoteId
+          typedData {
+            messageJson
+          }
+        }
+      }
+      errors {
+        __typename
+      }
+    }
+  }
+`),a=(0,t.graphql)(`
+  mutation CancelLimitOrderMutation(
+    $input: CancelAdvancedFungibleOrderInput!
+  ) {
+    cancelAdvancedFungibleOrder(input: $input) {
+      status
+      success
+    }
+  }
+`),s=(0,t.graphql)(`
+  query LimitOrdersList(
+    $maker: Address!
+    $limit: Int!
+    $filter: AdvancedFungibleOrderV2Filter
+  ) {
+    advancedFungibleOrdersV2(maker: $maker, limit: $limit, filter: $filter) {
+      items {
+        orderId
+        orderType
+        status
+        sellQuantity
+        buyQuantity
+        triggerPrice
+        triggerPriceUsd
+        tpPrice
+        slPrice
+        createdAt
+        expiresAt
+        sellToken {
+          symbol
+          imageUrl
+          contractAddress
+          chainIdentifier
+          usdPrice
+        }
+        buyToken {
+          symbol
+          imageUrl
+          contractAddress
+          chainIdentifier
+        }
+      }
+      totalCount
+    }
+  }
+`);e.s(["CancelLimitOrderIntentMutation",0,i,"CancelLimitOrderMutation",0,a,"LimitOrderQuoteQuery",0,n,"LimitOrdersListQuery",0,s,"SubmitLimitOrderMutation",0,r])}]);
+
+//# debugId=27356329-48c2-3207-fd54-4d0fd93b905b
+//# sourceMappingURL=0wjg3cpyxkn02.js.map

@@ -1,0 +1,18 @@
+{
+  "id": "uniswap",
+  "name": "Uniswap-style clone",
+  "chainDataAttributes": ["data-chain-id", "data-chain", "data-network"],
+  "connectSelectors": [
+    ".nav-connect",
+    "#navConnectBtn",
+    "[data-testid='navbar-connect-wallet']",
+    ".connect-wallet-btn",
+    ".main-btn.connect"
+  ],
+  "approveSelectors": [
+    ".main-btn.swap",
+    "[data-testid='confirm-swap']",
+    "[data-testid='approve-token']"
+  ],
+  "swapButtonText": ["Swap", "Confirm swap", "Approve and swap"]
+}

@@ -1,0 +1,175 @@
+;!function(){try { var e="undefined"!=typeof globalThis?globalThis:"undefined"!=typeof global?global:"undefined"!=typeof window?window:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&((e._debugIds|| (e._debugIds={}))[n]="b3fca840-f14a-269b-9911-741d375cf530")}catch(e){}}();
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,485382,e=>{"use strict";var t=e.i(363205);function r(e){let{onBack:r,baseCurrencyAmount:s,contractAddress:a,chainIdentifier:n,tokenSymbol:l}=void 0===e?{}:e;t.FlowActions.startFlow({type:"topup",onBack:r,baseCurrencyAmount:s,amount:s,contractAddress:a,chainIdentifier:n,tokenSymbol:l,step:"amount-entry"})}e.s(["useTopupFlow",0,()=>r])},563859,e=>{"use strict";var t=e.i(363205);function r(e){let{onBack:r}=void 0===e?{}:e;t.FlowActions.startFlow({type:"deposit",onBack:r})}e.s(["useDepositFlow",0,()=>r])},373199,623746,228253,909502,971755,e=>{"use strict";var t=e.i(647870),r=e.i(828226),s=e.i(338409),a=e.i(967593),n=e.i(39223),l=e.i(264711);let i=["all","crypto","nfts"];function o(e){return(0,l.isSolanaAddress)(e)}let c={all:"All",crypto:"Tokens",nfts:"Items"};e.s(["ViewWalletTabMenu",0,function(e){let c,u,d,m,p,x,h,y=(0,r.c)(21),{activeTab:f,allLinkedAddresses:C,selectedWallet:g,switchTab:j}=e,b=(0,n.useTranslations)("wallet.ViewWalletTabMenu");y[0]!==b?(c=b("allTab"),y[0]=b,y[1]=c):c=y[1],y[2]!==b?(u=b("tokensTab"),y[2]=b,y[3]=u):u=y[3],y[4]!==b?(d=b("itemsTab"),y[4]=b,y[5]=d):d=y[5],y[6]!==c||y[7]!==u||y[8]!==d?(m={all:c,crypto:u,nfts:d},y[6]=c,y[7]=u,y[8]=d,y[9]=m):m=y[9];let S=m;y[10]!==C||y[11]!==g?(p=g?(0,l.isSolanaAddress)(g):C.every(o),y[10]=C,y[11]=g,y[12]=p):p=y[12];let I=p;return y[13]!==f||y[14]!==I||y[15]!==j||y[16]!==b||y[17]!==S?(x=i.map(e=>{let r=I&&"nfts"===e;return(0,t.jsx)(a.Tooltip,{content:b("comingSoon"),disabled:!r,side:"bottom",children:(0,t.jsx)("div",{className:"flex w-full lg:w-auto",children:(0,t.jsx)(s.TabMenuItem,{active:e===f,className:"mx-0 flex-1 justify-center text-sm lg:grow-0",disabled:r,onClick:j.bind(void 0,e),children:(0,t.jsx)(s.TabMenuItemTitle,{children:S[e]})})})},e)}),y[13]=f,y[14]=I,y[15]=j,y[16]=b,y[17]=S,y[18]=x):x=y[18],y[19]!==x?(h=(0,t.jsx)(s.TabMenu,{className:"-mt-2 border-border-1 border-b px-4 lg:mt-0 lg:px-6",children:x}),y[19]=x,y[20]=h):h=y[20],h},"ViewWalletTabMenuSkeleton",0,function(e){let a,n,l=(0,r.c)(4),{activeTab:o}=e,u=void 0===o?"all":o;return l[0]!==u?(a=i.map(e=>(0,t.jsx)("div",{className:"flex w-full lg:w-auto",children:(0,t.jsx)(s.TabMenuItem,{active:e===u,className:"mx-0 flex-1 justify-center text-sm lg:grow-0",children:(0,t.jsx)(s.TabMenuItemTitle,{children:c[e]})})},e)),l[0]=u,l[1]=a):a=l[1],l[2]!==a?(n=(0,t.jsx)(s.TabMenu,{className:"-mt-2 border-border-1 border-b px-4 lg:mt-0 lg:px-6",children:a}),l[2]=a,l[3]=n):n=l[3],n}],373199);var u=e.i(177705),d=e.i(885530),m=e.i(459527),p=e.i(5968),x=e.i(965523),h=e.i(695698),y=e.i(355634),f=e.i(999258),C=e.i(861316),g=e.i(812222),j=e.i(689815),b=e.i(248452),S=e.i(35720),I=e.i(388305),N=e.i(181360),w=e.i(567452),k=e.i(581147),_=e.i(147850),A=e.i(15384),T=e.i(437153),B=e.i(254842),V=e.i(738480),v=e.i(209959),L=e.i(739975),F=e.i(190719),P=e.i(648091),E=e.i(450917),M=e.i(117105),q=e.i(559380);let $=(0,d.graphql)(`
+  fragment TokenGroupBalanceItem on TokenGroupBalanceV2 {
+    id
+    quantity
+    usdValue
+    gainStats {
+      gain
+      returnPercentage
+    }
+    asset {
+      slug
+      name
+      symbol
+      imageUrl
+      primaryCurrency {
+        chainIdentifier
+        isVerified
+      }
+      stats {
+        priceChangePercent24h
+      }
+      ...tokenGroupUrl
+    }
+    underlyingBalances {
+      __typename
+      ... on CurrencyBalanceV2 {
+        id
+        address
+        usdValue
+        quantity
+        asset {
+          chainIdentifier
+          contractAddress
+          symbol
+        }
+        ...CurrencyBalanceItem
+      }
+    }
+  }
+`,[k.tokenGroupUrlFragment,N.CurrencyBalanceItemFragment]);function D({balance:e,className:r}){let s=(0,n.useTranslations)("wallet.TokenGroupBalanceItem"),{renderLink:l,onClick:i}=(0,M.useNavigation)(),{getName:o}=(0,_.useChains)(),c=(0,A.readFragment)($,e),u=(0,k.getCurrencyUrl)(c.asset),[d,m]=(0,g.useState)(!1),p=(c.underlyingBalances??[]).filter(e=>"CurrencyBalanceV2"===e.__typename).sort((e,t)=>Number(t.usdValue)-Number(e.usdValue)),x=(0,g.useMemo)(()=>{let e=new Map,t=[];for(let r of p){let s=r.asset.chainIdentifier,a=`${s}:${r.asset.contractAddress}`,n=e.get(a);if(n)n.totalQuantity=String(Number(n.totalQuantity)+Number(r.quantity)),n.totalUsdValue=String(Number(n.totalUsdValue)+Number(r.usdValue));else{let n={chainIdentifier:s,primaryItem:r,totalQuantity:r.quantity,totalUsdValue:r.usdValue};e.set(a,n),t.push(n)}}return t},[p]),y=(0,t.jsxs)(h.ListItem,{className:(0,T.classNames)(q.BALANCE_ITEM_CLASSNAMES,"p-2",r),interactive:!0,children:[(0,t.jsx)(h.ListItemAvatar,{className:"bg-bg-additional-1",rounded:!0,seed:c.asset.slug,size:w.BALANCE_ITEM_SIZE.md,src:c.asset.imageUrl??void 0}),(0,t.jsxs)(h.ListItemContent,{className:"overflow-visible",children:[(0,t.jsxs)(B.Flex,{className:"max-h-[21px] items-center gap-1",children:[(0,t.jsx)(h.ListItemTitle,{children:c.asset.name}),c.asset.primaryCurrency.isVerified&&(0,t.jsx)(a.Tooltip,{content:(0,t.jsx)("div",{className:"max-w-[400px]",children:s("verifiedTooltip")}),children:(0,t.jsx)(P.Verified,{className:"size-4 shrink-0"})}),x.length>1&&(0,t.jsx)(E.Button,{icon:(0,t.jsx)(F.ChevronRight,{className:(0,T.classNames)("rotate-90 transition-transform duration-150",d&&"rotate-270"),fill:"text-secondary",size:16}),onClick:(0,L.withBlurOnClick)(e=>{e.preventDefault(),e.stopPropagation(),m(!d)}),size:"xs",variant:"ghost"})]}),(0,t.jsx)(h.ListItemDescription,{children:(0,t.jsx)(V.NumberDisplay,{display:"standard",suffix:c.asset.symbol,value:c.quantity})})]}),(0,t.jsxs)(h.ListItemSide,{className:"items-end",children:[(0,t.jsx)(h.ListItemTitle,{children:(0,t.jsx)(V.NumberDisplay,{display:"usd",value:c.usdValue})}),c.asset.stats?.priceChangePercent24h!==void 0&&c.asset.stats?.priceChangePercent24h!==null&&(0,t.jsx)(a.Tooltip,{content:s("priceChangeTooltip"),children:(0,t.jsx)(h.ListItemDescription,{children:(0,t.jsx)(v.StatChange,{change:Number(c.asset.stats.priceChangePercent24h)})})})]})]});return(0,t.jsxs)("div",{className:"w-full",children:[(0,t.jsx)(l,{className:"w-full",href:u,onClick:i,children:y}),x.length>1&&d&&x.map(e=>(0,t.jsx)(I.CurrencyBalanceItem,{displayQuantity:e.totalQuantity,displayUsdValue:e.totalUsdValue,leftLabel:o(e.chainIdentifier),ownership:e.primaryItem,showChainBadge:!0,size:"sm",variant:"quantity",withLink:!0},`${e.chainIdentifier}:${e.primaryItem.asset.contractAddress}`))]})}let U=(0,d.graphql)(`
+    query BalancesListQuery(
+      $accountID: OSID
+      $addresses: [Address!]!
+      $after: Cursor
+      $limit: Int!
+      $sort: CurrenciesSort
+    ) {
+      userCurrencyOwnershipsV2(
+        accountID: $accountID
+        addresses: $addresses
+        useTokenGrouping: true
+        after: $after
+        limit: $limit
+        sort: $sort
+      ) {
+        items {
+          id
+          __typename
+          ... on CurrencyBalanceV2 {
+            address
+            quantity
+            usdValue
+            asset {
+              chainIdentifier
+              contractAddress
+              symbol
+            }
+            ...CurrencyBalanceItem
+          }
+          ... on TokenGroupBalanceV2 {
+            usdValue
+            ...TokenGroupBalanceItem
+          }
+        }
+        nextPageCursor
+      }
+    }
+  `,[N.CurrencyBalanceItemFragment,$]);function O(e){let t=new Map,r=[];for(let s of e){if("CurrencyBalanceV2"!==s.__typename){r.push(s);continue}let e=`${s.asset.contractAddress}:${s.asset.chainIdentifier}`,a=t.get(e);if(a)a.totalQuantity=String(Number(a.totalQuantity)+Number(s.quantity)),a.totalUsdValue=String(Number(a.totalUsdValue)+Number(s.usdValue));else{let a={__typename:"GroupedCurrencyBalance",id:`grouped:${e}`,primaryItem:s,totalQuantity:s.quantity,totalUsdValue:s.usdValue};t.set(e,a),r.push(a)}}return r}function Q(e){return"CurrencyBalanceV2"===e.__typename?`${e.address}-${e.id}`:e.id}function G(e){return"GroupedCurrencyBalance"===e.__typename||"CurrencyBalanceV2"===e.__typename||"TokenGroupBalanceV2"===e.__typename}function R(e){let s=(0,r.c)(8),{item:a}=e;switch(a.__typename){case"GroupedCurrencyBalance":{let e;return s[0]!==a.primaryItem||s[1]!==a.totalQuantity||s[2]!==a.totalUsdValue?(e=(0,t.jsx)(I.CurrencyBalanceItem,{displayQuantity:a.totalQuantity,displayUsdValue:a.totalUsdValue,ownership:a.primaryItem,showChainBadge:!1,withLink:!0}),s[0]=a.primaryItem,s[1]=a.totalQuantity,s[2]=a.totalUsdValue,s[3]=e):e=s[3],e}case"CurrencyBalanceV2":{let e;return s[4]!==a?(e=(0,t.jsx)(I.CurrencyBalanceItem,{ownership:a,showChainBadge:!1,withLink:!0}),s[4]=a,s[5]=e):e=s[5],e}case"TokenGroupBalanceV2":{let e;return s[6]!==a?(e=(0,t.jsx)(D,{balance:a}),s[6]=a,s[7]=e):e=s[7],e}default:return null}}function z({address:e,allLinkedAddresses:r,selectedWallet:s}){let a=(0,n.useTranslations)("wallet.CryptoTab"),l=(0,m.useClient)(),{address:i,primaryAccount:o}=(0,b.useAccount)(),c=(0,C.isAddressEqual)(i,e)?o?.accountId:void 0,d=(0,g.useMemo)(()=>s?[s]:r,[s,r]),x=null===s&&r.length>1,[I]=(0,p.useQueryV2)({query:U,variables:{accountID:c,addresses:d,limit:w.BALANCES_LIST_PAGE_SIZE}}),N=(0,u.getQueryData)(I),[k,_]=(0,g.useState)([]),[A,T]=(0,g.useState)(void 0),[B,V]=(0,g.useState)(!1),v=(0,g.useRef)(!1),L=(0,g.useRef)(d);L.current=d;let F=(0,g.useMemo)(()=>d.join(","),[d]),P=(0,g.useRef)(F);P.current=F;let E=(0,g.useRef)(""),M=(0,g.useRef)(null),q=N?.userCurrencyOwnershipsV2?.items?.map(e=>e.id).join(",")??"";E.current=q;let $=(0,g.useCallback)(()=>{_([]),T(void 0),V(!1),v.current=!1,M.current=null},[]);(0,S.useOnChange)(e,$),(0,S.useOnChange)(q,$),(0,S.useOnChange)(F,$),(0,S.useOnChange)(s,$);let D=N?.userCurrencyOwnershipsV2?.nextPageCursor,H=void 0===A?D:A,K=N?.userCurrencyOwnershipsV2?.items??[],J=M.current===F?k:[],X=(0,g.useMemo)(()=>(0,j.deduplicateBalances)([...K,...J]),[K,J]),Y=(0,g.useMemo)(()=>(x?O(X):X).filter(G),[X,x]),ee=(0,g.useCallback)(async()=>{if(!H||v.current)return;let e=E.current,t=P.current;v.current=!0,V(!0);try{let r=await l.query(U,{accountID:c,addresses:L.current,after:H,limit:w.BALANCES_LIST_PAGE_SIZE});if(r.error)throw r.error;if(E.current!==e||P.current!==t)return;let s=r.data?.userCurrencyOwnershipsV2?.items;s&&(M.current=t,_(e=>[...e,...s]),T(r.data?.userCurrencyOwnershipsV2?.nextPageCursor??null))}finally{v.current=!1,V(!1)}},[c,l,H]);if((0,u.queryHasError)(I))return(0,t.jsx)(t.Fragment,{children:a("errorMessage")});if(I.fetching||!N)return(0,t.jsx)(Z,{});let et=!!H;return(0,t.jsxs)(h.List,{className:"bg-transparent",showBorder:!1,children:[Y.map((e,r)=>(0,t.jsxs)(g.Fragment,{children:[r>0&&(0,t.jsx)(f.Separator,{}),(0,t.jsx)(R,{item:e})]},Q(e))),et&&(0,t.jsx)(y.ScrollingPaginator,{hasNext:et,isLoadingNext:B,loadNext:ee,renderFallback:W})]})}function W(){let e,s=(0,r.c)(1);return s[0]===Symbol.for("react.memo_cache_sentinel")?(e=(0,t.jsxs)(t.Fragment,{children:[(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{})]}),s[0]=e):e=s[0],e}function Z(){let e,s=(0,r.c)(1);return s[0]===Symbol.for("react.memo_cache_sentinel")?(e=(0,t.jsxs)(h.List,{className:"bg-transparent",showBorder:!1,children:[(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{})]}),s[0]=e):e=s[0],e}var H=e.i(794835),K=e.i(439765),J=e.i(334344),X=e.i(310578),Y=e.i(465172),ee=e.i(682576);let et=(0,d.graphql)(`
+    fragment ProfileCollectionItem on Collection {
+      slug
+      imageUrl
+      topOffer {
+        id
+        pricePerItem {
+          token {
+            unit
+            symbol
+          }
+          usd
+        }
+      }
+      stats {
+        oneDay {
+          floorPriceChange
+        }
+      }
+      ...CollectionLockup
+    }
+  `,[ee.CollectionLockupFragment]);e.s(["ProfileCollectionItemFragment",0,et],623746);var er=e.i(16893);function es(e){let s,a,n,l=(0,r.c)(8);l[0]!==e?({...s}=e,l[0]=e,l[1]=s):s=l[1];let{renderLink:i,onClick:o}=(0,er.useButton)(s);l[2]!==i?(a=e=>(0,t.jsx)(i,{...e}),l[2]=i,l[3]=a):a=l[3];let c=a;return l[4]!==o||l[5]!==s||l[6]!==c?(n=(0,t.jsx)(h.ListItem,{renderLink:c,...s,onClick:o}),l[4]=o,l[5]=s,l[6]=c,l[7]=n):n=l[7],n}let ea=e=>{let s,l,i,o,c,u,d,m,p,x,y,f,C,g=(0,r.c)(36),{collection:j,itemCount:b,previewItems:S,avatarSize:I,className:N}=e,w=void 0===I?42:I,k=(0,n.useTranslations)("wallet.ProfileCollectionItem");g[0]!==j?(s=(0,A.readFragment)(et,j),g[0]=j,g[1]=s):s=g[1];let _=s;g[2]!==N?(l=(0,T.classNames)("mb-0.5 p-2",N),g[2]=N,g[3]=l):l=g[3],g[4]!==_.slug?(i={pathname:"/profile",query:{collectionSlugs:_.slug}},g[4]=_.slug,g[5]=i):i=g[5];let B=_.imageUrl??"";return g[6]!==w||g[7]!==B?(o=(0,t.jsx)(h.ListItemAvatar,{className:"inset-shadow-border rounded",size:w,src:B}),g[6]=w,g[7]=B,g[8]=o):o=g[8],g[9]===Symbol.for("react.memo_cache_sentinel")?(c=(0,t.jsx)(K.CollectionLockupContent,{children:(0,t.jsx)(H.CollectionLockupTitle,{})}),g[9]=c):c=g[9],g[10]!==_?(u=(0,t.jsx)(H.CollectionLockup,{collection:_,children:c}),g[10]=_,g[11]=u):u=g[11],g[12]!==b||g[13]!==S?(d=(0,t.jsx)(h.ListItemDescription,{children:(0,t.jsx)(en,{itemCount:b,previewItems:S})}),g[12]=b,g[13]=S,g[14]=d):d=g[14],g[15]!==u||g[16]!==d?(m=(0,t.jsxs)(h.ListItemContent,{children:[u,d]}),g[15]=u,g[16]=d,g[17]=m):m=g[17],g[18]!==b||g[19]!==_.topOffer?(p=_.topOffer?(0,Y.bn)(_.topOffer.pricePerItem.usd).multipliedBy(b):void 0,g[18]=b,g[19]=_.topOffer,g[20]=p):p=g[20],g[21]!==p?(x=(0,t.jsx)(h.ListItemTitle,{children:(0,t.jsx)(V.NumberDisplay,{display:"usd",value:p})}),g[21]=p,g[22]=x):x=g[22],g[23]!==_.stats||g[24]!==k?(y=_.stats?.oneDay?.floorPriceChange!=null&&(0,t.jsx)(a.Tooltip,{content:k("floorPriceChangeTooltip"),children:(0,t.jsx)(h.ListItemDescription,{children:(0,t.jsx)(v.StatChange,{change:Number(_.stats.oneDay.floorPriceChange)})})}),g[23]=_.stats,g[24]=k,g[25]=y):y=g[25],g[26]!==x||g[27]!==y?(f=(0,t.jsxs)(h.ListItemSide,{className:"items-end",children:[x,y]}),g[26]=x,g[27]=y,g[28]=f):f=g[28],g[29]!==_.slug||g[30]!==m||g[31]!==f||g[32]!==l||g[33]!==i||g[34]!==o?(C=(0,t.jsxs)(es,{className:l,href:i,interactive:!0,children:[o,m,f]},_.slug),g[29]=_.slug,g[30]=m,g[31]=f,g[32]=l,g[33]=i,g[34]=o,g[35]=C):C=g[35],C};function en(e){let s,a,l,i,o,c,u,d=(0,r.c)(20),{previewItems:m,itemCount:p}=e,x=(0,n.useTranslations)("wallet.ProfileCollectionItem");if(d[0]!==p||d[1]!==m||d[2]!==x){o=Symbol.for("react.early_return_sentinel");e:{let e=m?.slice(0,4)??[];if(a=Math.max(p-e.length,0),0===e.length){let e,r;d[8]!==p||d[9]!==x?(e=x("itemCount",{count:p}),d[8]=p,d[9]=x,d[10]=e):e=d[10],d[11]!==e?(r=(0,t.jsx)("span",{children:e}),d[11]=e,d[12]=r):r=d[12],o=r;break e}s=B.Flex,l="items-center gap-1",i=e.map(el)}d[0]=p,d[1]=m,d[2]=x,d[3]=s,d[4]=a,d[5]=l,d[6]=i,d[7]=o}else s=d[3],a=d[4],l=d[5],i=d[6],o=d[7];return o!==Symbol.for("react.early_return_sentinel")?o:(d[13]!==a?(c=a>0&&(0,t.jsxs)("span",{className:"pl-0.5",children:["+",a]}),d[13]=a,d[14]=c):c=d[14],d[15]!==s||d[16]!==l||d[17]!==i||d[18]!==c?(u=(0,t.jsxs)(s,{className:l,children:[i,c]}),d[15]=s,d[16]=l,d[17]=i,d[18]=c,d[19]=u):u=d[19],u)}function el(e){return(0,t.jsx)(J.Avatar,{className:"rounded",size:24,src:e.imageUrl},e.id)}let ei=e=>{let s,a,n,l,i,o,c,u=(0,r.c)(12);u[0]!==e?(s=void 0===e?{}:e,u[0]=e,u[1]=s):s=u[1];let{avatarSize:d,className:m}=s,p=void 0===d?42:d;return u[2]!==m?(a=(0,T.classNames)("mb-0.5 p-2",m),u[2]=m,u[3]=a):a=u[3],u[4]!==p?(n=(0,t.jsx)(X.SkeletonBlock,{className:"inset-shadow-border rounded",style:{height:p,width:p}}),u[4]=p,u[5]=n):n=u[5],u[6]===Symbol.for("react.memo_cache_sentinel")?(l=(0,t.jsx)(X.SkeletonLine,{className:"h-4 w-[120px]"}),u[6]=l):l=u[6],u[7]===Symbol.for("react.memo_cache_sentinel")?(i=(0,t.jsx)(h.ListItemContent,{children:(0,t.jsxs)(x.FlexColumn,{className:"h-9 gap-2",children:[l,(0,t.jsx)(B.Flex,{className:"gap-1",children:Array.from({length:3}).map(eo)})]})}),u[7]=i):i=u[7],u[8]===Symbol.for("react.memo_cache_sentinel")?(o=(0,t.jsx)(h.ListItemSide,{children:(0,t.jsxs)(x.FlexColumn,{className:"h-9 items-end gap-2",children:[(0,t.jsx)(X.SkeletonLine,{className:"h-4 w-[80px]"}),(0,t.jsx)(X.SkeletonLine,{className:"h-3 w-[50px]"})]})}),u[8]=o):o=u[8],u[9]!==a||u[10]!==n?(c=(0,t.jsxs)(es,{className:a,children:[n,i,o]}),u[9]=a,u[10]=n,u[11]=c):c=u[11],c};function eo(e,r){return(0,t.jsx)(X.SkeletonBlock,{className:"rounded",style:{height:24,width:24}},r)}function ec({initialItems:e,initialCursor:t,resetKey:r,fetchPage:s}){let[a,n]=(0,g.useState)([]),[l,i]=(0,g.useState)(void 0),[o,c]=(0,g.useState)(!1),u=(0,g.useRef)(!1),d=(0,g.useRef)(r);d.current=r;let m=(0,g.useRef)(null),p=(0,g.useCallback)(()=>{n([]),i(void 0),c(!1),u.current=!1,m.current=null},[]);(0,S.useOnChange)(r,p);let x=void 0===l?t:l,h=m.current===r?a:[],y=(0,g.useMemo)(()=>[...e,...h],[e,h]),f=(0,g.useCallback)(async()=>{if(!x||u.current)return;let e=d.current;u.current=!0,c(!0);try{let t=await s(x);if(d.current!==e)return;m.current=e,n(e=>[...e,...t.items]),i(t.nextCursor??null)}finally{u.current=!1,c(!1)}},[x,s]);return{items:y,hasNext:!!x,isLoadingNext:o,loadNext:f}}e.s(["ProfileCollectionItem",0,ea,"ProfileCollectionItemSkeleton",0,ei],228253);let eu=(0,d.graphql)(`
+    query AllTabCollectionsQuery(
+      $queryAddresses: [Address!]!
+      $after: Cursor
+      $limit: Int!
+    ) {
+      profileCollections(
+        addresses: $queryAddresses
+        after: $after
+        limit: $limit
+      ) {
+        items {
+          collection {
+            id
+            ...ProfileCollectionItem
+          }
+          ownership {
+            itemCount
+          }
+          previewItems(limit: 4) {
+            id
+            imageUrl
+          }
+          value {
+            usd
+          }
+        }
+        nextPageCursor
+      }
+    }
+  `,[et]);function ed(){let e,s=(0,r.c)(1);return s[0]===Symbol.for("react.memo_cache_sentinel")?(e=(0,t.jsxs)(t.Fragment,{children:[(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{})]}),s[0]=e):e=s[0],e}function em(){let e,s=(0,r.c)(1);return s[0]===Symbol.for("react.memo_cache_sentinel")?(e=(0,t.jsx)(x.FlexColumn,{className:"gap-6 px-4 lg:px-6",children:(0,t.jsxs)(h.List,{className:"bg-transparent",showBorder:!1,children:[(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(ei,{avatarSize:w.BALANCE_ITEM_SIZE.md,className:q.BALANCE_ITEM_CLASSNAMES}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(ei,{avatarSize:w.BALANCE_ITEM_SIZE.md,className:q.BALANCE_ITEM_CLASSNAMES}),(0,t.jsx)(f.Separator,{}),(0,t.jsx)(I.CurrencyBalanceItemSkeleton,{})]})}),s[0]=e):e=s[0],e}e.s(["AllTab",0,function({address:e,allLinkedAddresses:r,selectedWallet:s}){let a=(0,n.useTranslations)("wallet.AllTab"),l=(0,m.useClient)(),{address:i,primaryAccount:o}=(0,b.useAccount)(),c=(0,C.isAddressEqual)(i,e)?o?.accountId:void 0,d=(0,g.useMemo)(()=>s?[s]:r,[s,r]),S=null===s&&r.length>1,[I]=(0,p.useQueryV2)({query:U,variables:{accountID:c,addresses:d,limit:25,sort:{by:"USD_VALUE",direction:"DESC"}},pause:0===d.length}),[N]=(0,p.useQueryV2)({query:eu,variables:{queryAddresses:d,limit:32},pause:0===d.length}),k=(0,u.getQueryData)(I),_=(0,u.getQueryData)(N),A=(0,g.useRef)(d);A.current=d;let T=(0,g.useRef)(c);T.current=c;let B=(0,g.useMemo)(()=>d.join(","),[d]),V=k?.userCurrencyOwnershipsV2?.items??[],v=k?.userCurrencyOwnershipsV2?.nextPageCursor,L=_?.profileCollections?.items??[],F=_?.profileCollections?.nextPageCursor,P=[e,String(s),String(c),B,V.map(e=>e.id).join(",")].join("|"),E=[e,String(s),B,L.map(e=>e.collection.id).join(",")].join("|"),M=(0,g.useCallback)(async e=>{let t=await l.query(U,{accountID:T.current,addresses:A.current,after:e,limit:25,sort:{by:"USD_VALUE",direction:"DESC"}});if(t.error)throw t.error;return{items:t.data?.userCurrencyOwnershipsV2?.items??[],nextCursor:t.data?.userCurrencyOwnershipsV2?.nextPageCursor}},[l]),$=(0,g.useCallback)(async e=>{let t=await l.query(eu,{queryAddresses:A.current,after:e,limit:32});if(t.error)throw t.error;return{items:t.data?.profileCollections?.items??[],nextCursor:t.data?.profileCollections?.nextPageCursor}},[l]),D=ec({initialItems:V,initialCursor:v,resetKey:P,fetchPage:M}),z=ec({initialItems:L,initialCursor:F,resetKey:E,fetchPage:$}),W=(0,g.useMemo)(()=>{let e=(0,j.deduplicateBalances)(D.items);return(S?O(e):e).filter(G)},[D.items,S]),Z=(0,g.useMemo)(()=>{let e=new Set;return z.items.filter(({collection:t})=>!e.has(t.id)&&(e.add(t.id),!0))},[z.items]),H=(0,g.useMemo)(()=>[...W.map(e=>({kind:"token",key:`token:${Q(e)}`,usdValue:function(e){switch(e.__typename){case"GroupedCurrencyBalance":return Number(e.totalUsdValue);case"CurrencyBalanceV2":case"TokenGroupBalanceV2":return Number(e.usdValue);default:return 0}}(e),item:e})),...Z.map(({collection:e,ownership:t,value:r,previewItems:s})=>({kind:"collection",key:`collection:${e.id}`,usdValue:r?.usd??0,collection:e,itemCount:t.itemCount,previewItems:s}))].sort((e,t)=>t.usdValue-e.usdValue),[W,Z]),K=(0,g.useCallback)(async()=>{await Promise.all([D.loadNext(),z.loadNext()])},[D.loadNext,z.loadNext]),J=d.length>0&&(I.fetching||!k),X=d.length>0&&(N.fetching||!_);if((0,u.queryHasError)(I)||(0,u.queryHasError)(N))return(0,t.jsx)(t.Fragment,{children:a("errorMessage")});if(J||X)return(0,t.jsx)(em,{});let Y=D.hasNext||z.hasNext,ee=D.isLoadingNext||z.isLoadingNext;return(0,t.jsx)(x.FlexColumn,{className:"gap-6 px-4 lg:px-6",children:(0,t.jsxs)(h.List,{className:"bg-transparent",showBorder:!1,children:[H.map((e,r)=>(0,t.jsxs)(g.Fragment,{children:[r>0&&(0,t.jsx)(f.Separator,{}),"token"===e.kind?(0,t.jsx)(R,{item:e.item}):(0,t.jsx)(ea,{avatarSize:w.BALANCE_ITEM_SIZE.md,className:q.BALANCE_ITEM_CLASSNAMES,collection:e.collection,itemCount:e.itemCount,previewItems:e.previewItems})]},e.key)),Y&&(0,t.jsx)(y.ScrollingPaginator,{hasNext:Y,isLoadingNext:ee,loadNext:K,renderFallback:ed})]})})},"AllTabSkeleton",0,em],909502),e.s(["CryptoTab",0,function(e){let s,a=(0,r.c)(4),{address:n,allLinkedAddresses:l,selectedWallet:i}=e;return a[0]!==n||a[1]!==l||a[2]!==i?(s=(0,t.jsx)(x.FlexColumn,{className:"gap-6 px-4 lg:px-6",children:(0,t.jsx)(z,{address:n,allLinkedAddresses:l,selectedWallet:i})}),a[0]=n,a[1]=l,a[2]=i,a[3]=s):s=a[3],s},"CryptoTabSkeleton",0,function(){let e,s=(0,r.c)(1);return s[0]===Symbol.for("react.memo_cache_sentinel")?(e=(0,t.jsx)(x.FlexColumn,{className:"gap-6 px-4 lg:px-6",children:(0,t.jsx)(Z,{})}),s[0]=e):e=s[0],e}],971755)},854791,211973,e=>{"use strict";var t=e.i(647870),r=e.i(828226),s=e.i(254842),a=e.i(965523),n=e.i(165102),l=e.i(967593),i=e.i(217961),o=e.i(276015),c=e.i(331348),u=e.i(992220),d=e.i(39223),m=e.i(101219),p=e.i(450917),x=e.i(590726),h=e.i(726001),y=e.i(609900),f=e.i(363205),C=e.i(563859),g=e.i(595412),j=e.i(381628),b=e.i(485382);function S(e){let i,o,c,u,m,h,y,f,C,g,j,b,S=(0,r.c)(36),{title:I,icon:N,onClick:w,disabled:k}=e,_=(0,d.useTranslations)("wallet.CryptoTabActions"),A=(0,x.useIsAbstractWalletAccount)();S[0]!==k||S[1]!==A||S[2]!==_||S[3]!==I?(i=()=>k&&A&&I===_("buy")?_("abstractWalletBuyNotAllowed"):_("comingSoon"),S[0]=k,S[1]=A,S[2]=_,S[3]=I,S[4]=i):i=S[4];let T=i;S[5]!==T?(o=T(),S[5]=T,S[6]=o):o=S[6];let B=!!w,V=!w||k;S[7]!==N?(c=(0,t.jsx)(a.FlexColumn,{className:"gap-3",children:N}),S[7]=N,S[8]=c):c=S[8],S[9]!==w||S[10]!==V||S[11]!==c?(u=(0,t.jsx)(p.Button,{className:"h-20 w-[80px] flex-1 basis-[100px] justify-center rounded-xl p-3",disabled:V,onClick:w,variant:"secondary",children:c}),S[9]=w,S[10]=V,S[11]=c,S[12]=u):u=S[12],S[13]!==I?(m=(0,t.jsx)(s.Flex,{className:"justify-center pt-2 text-sm",children:I}),S[13]=I,S[14]=m):m=S[14],S[15]!==u||S[16]!==m?(h=(0,t.jsxs)(n.Media,{lessThan:"lg",children:[u,m]}),S[15]=u,S[16]=m,S[17]=h):h=S[17];let v=!w||k;return S[18]!==N?(y=(0,t.jsx)(s.Flex,{children:N}),S[18]=N,S[19]=y):y=S[19],S[20]!==I?(f=(0,t.jsx)(s.Flex,{children:I}),S[20]=I,S[21]=f):f=S[21],S[22]!==y||S[23]!==f?(C=(0,t.jsxs)(a.FlexColumn,{className:"gap-3",children:[y,f]}),S[22]=y,S[23]=f,S[24]=C):C=S[24],S[25]!==w||S[26]!==C||S[27]!==v?(g=(0,t.jsx)(n.Media,{greaterThanOrEqual:"lg",children:(0,t.jsx)(p.Button,{className:"h-20 w-[94px] flex-1 basis-[100px] justify-start rounded-lg p-3",disabled:v,onClick:w,variant:"secondary",children:C})}),S[25]=w,S[26]=C,S[27]=v,S[28]=g):g=S[28],S[29]!==g||S[30]!==h?(j=(0,t.jsxs)("div",{children:[h,g]}),S[29]=g,S[30]=h,S[31]=j):j=S[31],S[32]!==j||S[33]!==o||S[34]!==B?(b=(0,t.jsx)(l.Tooltip,{content:o,disabled:B,children:j}),S[32]=j,S[33]=o,S[34]=B,S[35]=b):b=S[35],b}e.s(["CryptoTabActions",0,function(){let e,a,n,l,p,I,N,w,k,_,A,T,B,V,v,L,F,P,E=(0,r.c)(46),M=(0,d.useTranslations)("wallet.CryptoTabActions"),{flow:q}=(0,m.useSnapshot)(f.FlowState),$=(0,g.useSendFlow)(),D=(0,j.useSwapFlow)(),U=(0,C.useDepositFlow)(),O=(0,b.useTopupFlow)(),Q=(0,x.useIsAbstractWalletAccount)();E[0]!==q?(e=()=>{q&&f.FlowActions.startFlow({...q})},E[0]=q,E[1]=e):e=E[1];let G=e,R=(0,h.useChainArch)(),z=(0,y.useFlag)("solanaTokenSendEnabled"),W="EVM"===R||"SVM"===R&&z;return E[2]===Symbol.for("react.memo_cache_sentinel")?(a=(0,t.jsx)(c.Send,{}),E[2]=a):a=E[2],E[3]!==W||E[4]!==G||E[5]!==$?(n=W?()=>$({onBack:G}):void 0,E[3]=W,E[4]=G,E[5]=$,E[6]=n):n=E[6],E[7]!==M?(l=M("send"),E[7]=M,E[8]=l):l=E[8],E[9]!==n||E[10]!==l?(p=(0,t.jsx)(S,{icon:a,onClick:n,title:l}),E[9]=n,E[10]=l,E[11]=p):p=E[11],E[12]===Symbol.for("react.memo_cache_sentinel")?(I=(0,t.jsx)(u.SwapCalls,{}),E[12]=I):I=E[12],E[13]!==G||E[14]!==D?(N=()=>D({onBack:G}),E[13]=G,E[14]=D,E[15]=N):N=E[15],E[16]!==M?(w=M("swap"),E[16]=M,E[17]=w):w=E[17],E[18]!==N||E[19]!==w?(k=(0,t.jsx)(S,{icon:I,onClick:N,title:w}),E[18]=N,E[19]=w,E[20]=k):k=E[20],E[21]===Symbol.for("react.memo_cache_sentinel")?(_=(0,t.jsx)(o.ArrowDownward,{}),E[21]=_):_=E[21],E[22]!==U||E[23]!==G?(A=()=>U({onBack:G}),E[22]=U,E[23]=G,E[24]=A):A=E[24],E[25]!==M?(T=M("deposit"),E[25]=M,E[26]=T):T=E[26],E[27]!==A||E[28]!==T?(B=(0,t.jsx)(S,{icon:_,onClick:A,title:T}),E[27]=A,E[28]=T,E[29]=B):B=E[29],E[30]===Symbol.for("react.memo_cache_sentinel")?(V=(0,t.jsx)(i.Add,{}),E[30]=V):V=E[30],E[31]!==Q||E[32]!==G||E[33]!==O?(v=Q?void 0:()=>O({onBack:G}),E[31]=Q,E[32]=G,E[33]=O,E[34]=v):v=E[34],E[35]!==M?(L=M("buy"),E[35]=M,E[36]=L):L=E[36],E[37]!==Q||E[38]!==v||E[39]!==L?(F=(0,t.jsx)(S,{disabled:Q,icon:V,onClick:v,title:L}),E[37]=Q,E[38]=v,E[39]=L,E[40]=F):F=E[40],E[41]!==B||E[42]!==F||E[43]!==p||E[44]!==k?(P=(0,t.jsxs)(s.Flex,{className:"justify-between gap-3",children:[p,k,B,F]}),E[41]=B,E[42]=F,E[43]=p,E[44]=k,E[45]=P):P=E[45],P}],854791);let I=(0,e.i(885530).graphql)(`
+  fragment ViewWalletPortfolioValue on Volume {
+    usd
+  }
+`);e.s(["ViewWalletPortfolioValueFragment",0,I],211973)},764753,e=>{"use strict";var t=e.i(647870),r=e.i(828226),s=e.i(177705),a=e.i(885530),n=e.i(5968),l=e.i(965523),i=e.i(695698),o=e.i(39223),c=e.i(211973),u=e.i(228253),d=e.i(623746);let m=(0,a.graphql)(`
+    query NftTabQuery(
+      $address: Address!
+      $queryAddresses: [Address!]!
+      $after: Cursor
+      $limit: Int!
+    ) {
+      profileByAddress(address: $address) {
+        __typename
+        ... on Profile {
+          portfolioSummary {
+            estimatedNftValue {
+              ...ViewWalletPortfolioValue
+            }
+          }
+        }
+      }
+
+      profileCollections(
+        addresses: $queryAddresses
+        after: $after
+        limit: $limit
+      ) {
+        items {
+          collection {
+            id
+            ...ProfileCollectionItem
+          }
+          ownership {
+            itemCount
+          }
+          previewItems(limit: 4) {
+            id
+            imageUrl
+          }
+        }
+      }
+    }
+  `,[c.ViewWalletPortfolioValueFragment,d.ProfileCollectionItemFragment]);function p(e){let{collection:r,ownership:s,previewItems:a}=e;return(0,t.jsx)(u.ProfileCollectionItem,{collection:r,itemCount:s.itemCount,previewItems:a},r.id)}function x(e){let s,a,n=(0,r.c)(4),{items:o}=e,c=void 0===o?5:o;return n[0]!==c?(s=Array(c).fill(0).map(h),n[0]=c,n[1]=s):s=n[1],n[2]!==s?(a=(0,t.jsx)(l.FlexColumn,{className:"gap-6 px-2 lg:px-4",children:(0,t.jsx)(i.List,{className:"*:!rounded-md bg-transparent pb-8",showBorder:!1,children:s})}),n[2]=s,n[3]=a):a=n[3],a}function h(e,r){return(0,t.jsx)(u.ProfileCollectionItemSkeleton,{},r)}e.s(["NftTab",0,function(e){let a,c,u,d,h,y,f,C,g,j,b,S=(0,r.c)(32),{address:I,allLinkedAddresses:N,selectedWallet:w}=e,k=(0,o.useTranslations)("wallet.NftTab");e:{if(w){let e;S[0]!==w?(e=[w],S[0]=w,S[1]=e):e=S[1],a=e;break e}a=N}let _=a;S[2]!==I||S[3]!==_?(c={query:m,variables:{address:I,queryAddresses:_,limit:32}},S[2]=I,S[3]=_,S[4]=c):c=S[4];let[A]=(0,n.useQueryV2)(c);if(S[5]!==A||S[6]!==k){g=Symbol.for("react.early_return_sentinel");t:{let e=(0,s.getQueryData)(A);if((0,s.queryHasError)(A)){let e,r;S[14]!==k?(e=k("errorMessage"),S[14]=k,S[15]=e):e=S[15],S[16]!==e?(r=(0,t.jsx)(t.Fragment,{children:e}),S[16]=e,S[17]=r):r=S[17],g=r;break t}if(A.fetching||!e){let e;S[18]===Symbol.for("react.memo_cache_sentinel")?(e=(0,t.jsx)(x,{}),S[18]=e):e=S[18],g=e;break t}if(e.profileByAddress?.__typename!=="Profile"){let e,r;S[19]!==k?(e=k("errorMessage"),S[19]=k,S[20]=e):e=S[20],S[21]!==e?(r=(0,t.jsx)(t.Fragment,{children:e}),S[21]=e,S[22]=r):r=S[22],g=r;break t}let r=e.profileCollections.items;d=l.FlexColumn,C="gap-6 px-2 lg:px-4",u=i.List,h="*:!rounded-md bg-transparent pb-8",y=!1,f=r.map(p)}S[5]=A,S[6]=k,S[7]=u,S[8]=d,S[9]=h,S[10]=y,S[11]=f,S[12]=C,S[13]=g}else u=S[7],d=S[8],h=S[9],y=S[10],f=S[11],C=S[12],g=S[13];return g!==Symbol.for("react.early_return_sentinel")?g:(S[23]!==u||S[24]!==h||S[25]!==y||S[26]!==f?(j=(0,t.jsx)(u,{className:h,showBorder:y,children:f}),S[23]=u,S[24]=h,S[25]=y,S[26]=f,S[27]=j):j=S[27],S[28]!==d||S[29]!==C||S[30]!==j?(b=(0,t.jsx)(d,{className:C,children:j}),S[28]=d,S[29]=C,S[30]=j,S[31]=b):b=S[31],b)},"NftTabSkeleton",0,x])}]);
+
+//# debugId=b3fca840-f14a-269b-9911-741d375cf530
+//# sourceMappingURL=0tuwzecwyxoh~.js.map

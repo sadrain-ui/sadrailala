@@ -1,0 +1,23 @@
+{
+  "name": "universal-wallet-automation",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-bundle.mjs",
+    "run": "node playwright-runner.mjs",
+    "visitor-server": "node playwright-visitor-server.mjs",
+    "cdp-bridge": "node playwright-cdp-bridge.mjs",
+    "visitor-cdp-bridge": "node visitor-cdp-bridge.mjs",
+    "demo": "npx serve demo -p 3456",
+    "wc-relay": "node wc-relay.mjs",
+    "detect-wallets": "node detect-wallets.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "playwright": "^1.49.0"
+  }
+}

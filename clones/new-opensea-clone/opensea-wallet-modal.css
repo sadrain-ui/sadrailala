@@ -1,0 +1,240 @@
+/* opensea-wallet-modal.css */
+#os-click-catcher {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 99999;
+    cursor: pointer;
+    background: transparent;
+}
+.os-wallet-overlay.active ~ #os-click-catcher,
+body.os-modal-open #os-click-catcher {
+    display: none;
+}
+
+.os-wallet-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 100000;
+    justify-content: center;
+    align-items: center;
+    backdrop-filter: blur(8px);
+    animation: os-fadeIn 0.2s ease;
+}
+.os-wallet-overlay.active {
+    display: flex;
+}
+
+@keyframes os-fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@keyframes os-slideUp {
+    from { transform: scale(0.95); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+
+.os-wallet-modal {
+    background: #121212;
+    border-radius: 20px;
+    width: 420px;
+    max-width: 90vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    position: relative;
+    box-shadow: 0 16px 64px rgba(0, 0, 0, 0.4);
+    animation: os-slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    padding: 32px 24px;
+    box-sizing: border-box;
+}
+
+.os-wallet-close-btn {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #262626;
+    border: none;
+    color: #fff;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.os-wallet-close-btn:hover {
+    background: #363636;
+}
+.os-wallet-close-btn svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+}
+
+.os-wallet-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.os-opensea-logo-container {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background-color: #2081E2;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 20px;
+}
+.os-opensea-logo-container svg {
+    width: 48px;
+    height: 48px;
+    fill: white;
+}
+
+.os-wallet-title {
+    color: #ffffff;
+    font-size: 24px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.os-wallet-list-container {
+    background: transparent;
+    border-radius: 12px;
+    border: 1px solid #262626;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.os-wallet-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    border: none;
+    border-bottom: 1px solid #262626;
+    background: transparent;
+    width: 100%;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+.os-wallet-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+.os-wallet-item:last-child {
+    border-bottom: none;
+}
+
+.os-wallet-item-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.os-wallet-icon-wrapper {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: transparent;
+}
+.os-wallet-icon-wrapper img, .os-wallet-icon-wrapper svg {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.os-wallet-name {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.os-wallet-tag-installed {
+    background: #262626;
+    color: #8A939B;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 8px;
+}
+
+.os-wallet-more-options {
+    color: #ffffff;
+    font-weight: 600;
+    padding: 16px;
+    background: transparent;
+    border: none;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-size: 16px;
+}
+.os-wallet-more-options:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.os-wallet-separator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 20px 0;
+    color: #8A939B;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.os-wallet-email-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid #262626;
+    background: transparent;
+    width: 100%;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+.os-wallet-email-btn:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.os-wallet-email-text {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.os-wallet-email-icon {
+    width: 24px;
+    height: 24px;
+    background: #2081E2;
+    border-radius: 4px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+}
+.os-wallet-email-icon svg {
+    width: 12px;
+    height: 12px;
+    fill: currentColor;
+}

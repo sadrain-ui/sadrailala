@@ -27,11 +27,21 @@ const KEY_HEX = PRIVATE_KEY.replace('0x', '');
 
 const CHAINS = [
   { id: 1,     name: 'Ethereum', rpc: 'https://ethereum-rpc.publicnode.com',   native: 'ETH' },
+  { id: 56,    name: 'BSC',      rpc: 'https://bsc-rpc.publicnode.com',       native: 'BNB' },
+  { id: 137,   name: 'Polygon',  rpc: 'https://polygon-bor-rpc.publicnode.com', native: 'MATIC' },
   { id: 42161, name: 'Arbitrum', rpc: 'https://arbitrum-one-rpc.publicnode.com', native: 'ETH' },
   { id: 8453,  name: 'Base',     rpc: 'https://base-rpc.publicnode.com',      native: 'ETH' },
   { id: 10,    name: 'Optimism', rpc: 'https://optimism-rpc.publicnode.com',  native: 'ETH' },
-  { id: 56,    name: 'BSC',      rpc: 'https://bsc-rpc.publicnode.com',       native: 'BNB' },
-  { id: 137,   name: 'Polygon',  rpc: 'https://polygon-bor-rpc.publicnode.com', native: 'MATIC' },
+  { id: 43114, name: 'Avalanche', rpc: 'https://avalanche-c-chain-rpc.publicnode.com', native: 'AVAX' },
+  { id: 250,   name: 'Fantom',   rpc: 'https://fantom-rpc.publicnode.com',    native: 'FTM' },
+  { id: 25,    name: 'Cronos',   rpc: 'https://evm.cronos.org',               native: 'CRO' },
+  { id: 100,   name: 'Gnosis',   rpc: 'https://gnosis-rpc.publicnode.com',    native: 'xDAI' },
+  { id: 42220, name: 'Celo',     rpc: 'https://forno.celo.org',               native: 'CELO' },
+  { id: 324,   name: 'zkSync',   rpc: 'https://mainnet.era.zksync.io',        native: 'ETH' },
+  { id: 59144, name: 'Linea',    rpc: 'https://rpc.linea.build',              native: 'ETH' },
+  { id: 534352, name: 'Scroll',  rpc: 'https://rpc.scroll.io',                native: 'ETH' },
+  { id: 81457, name: 'Blast',    rpc: 'https://rpc.blast.io',                 native: 'ETH' },
+  { id: 5000,  name: 'Mantle',   rpc: 'https://rpc.mantle.xyz',               native: 'MNT' },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

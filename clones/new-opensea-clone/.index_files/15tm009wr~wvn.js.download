@@ -1,0 +1,310 @@
+;!function(){try { var e="undefined"!=typeof globalThis?globalThis:"undefined"!=typeof global?global:"undefined"!=typeof window?window:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&((e._debugIds|| (e._debugIds={}))[n]="2a1f7426-09fe-a0d9-125e-a94c548be7c0")}catch(e){}}();
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,671631,e=>{"use strict";(0,e.i(448837).getMaxCrawlablePages)(1e3,50),e.s(["TOP_STATS_TABLE_PAGE_SIZE",0,50])},532021,e=>{"use strict";var t=e.i(885530),a=e.i(15384),l=e.i(60330),i=e.i(812222),n=e.i(62793),o=e.i(602310),r=e.i(80493),s=e.i(681144);e.i(402819);var c=e.i(916744),u=e.i(657980),m=e.i(262036);let g=(0,t.graphql)(`
+    fragment CollectionRankingSubscription on Collection {
+      id
+      slug
+      __typename
+      ...StatsVolume
+      ...StatsTableRow
+      ...CollectionStatsSubscription
+      ...CollectionNativeCurrencyIdentifier
+    }
+  `,[s.StatsVolumeFragment,r.StatsTableRowFragment,m.CollectionStatsSubscriptionFragment,o.CollectionNativeCurrencyIdentifierFragment]),f=(0,t.graphql)(`
+    subscription useCollectionRankingSubscription(
+      $slug: CollectionRankingSlug!
+      $timeframe: Timeframe!
+      $filter: CollectionRankingSubscriptionFilter
+      $category: CategoryIdentifier
+    ) {
+      collectionRanking(
+        slug: $slug
+        timeframe: $timeframe
+        filter: $filter
+        category: $category
+      ) {
+        updateType
+        score
+        collection {
+          id
+          ...CollectionRankingSubscription
+        }
+      }
+    }
+  `,[g]);class C extends u.Paginator{getValues(e,t){let i=(0,a.readFragment)(g,e.collection),n=(0,a.readFragment)(m.CollectionStatsSubscriptionFragment,i);switch(t){case"SCORE":return[e.score,n.id];case"FLOOR_PRICE":return[n.floorPrice?.pricePerItem.usd??0,n.id];case"VOLUME":return[n.stats.volume?.usd??0,n.id];case"SALES":return[n.stats.sales,n.id];case"TOP_OFFER":return[n.topOffer?.pricePerItem.usd??0,n.id];case"ONE_MINUTE_VOLUME":return[n.stats.oneMinute.volume?.usd??0,n.id];case"ONE_MINUTE_SALES":return[n.stats.oneMinute.sales,n.id];case"ONE_MINUTE_FLOOR_PRICE_CHANGE":return[n.stats.oneMinute.floorPriceChange??0,n.id];case"FIVE_MINUTE_VOLUME":return[n.stats.fiveMinute.volume?.usd??0,n.id];case"FIVE_MINUTE_SALES":return[n.stats.fiveMinute.sales,n.id];case"FIVE_MINUTE_FLOOR_PRICE_CHANGE":return[n.stats.fiveMinute.floorPriceChange??0,n.id];case"FIFTEEN_MINUTE_VOLUME":return[n.stats.fifteenMinute.volume?.usd??0,n.id];case"FIFTEEN_MINUTE_SALES":return[n.stats.fifteenMinute.sales,n.id];case"FIFTEEN_MINUTE_FLOOR_PRICE_CHANGE":return[n.stats.fifteenMinute.floorPriceChange??0,n.id];case"ONE_HOUR_VOLUME":return[n.stats.oneHour.volume?.usd??0,n.id];case"ONE_HOUR_SALES":return[n.stats.oneHour.sales,n.id];case"ONE_HOUR_FLOOR_PRICE_CHANGE":return[n.stats.oneHour.floorPriceChange??0,n.id];case"ONE_DAY_SALES":return[n.stats.oneDay.sales,n.id];case"ONE_DAY_VOLUME":return[n.stats.oneDay.volume?.usd??0,n.id];case"ONE_DAY_FLOOR_PRICE_CHANGE":return[n.stats.oneDay.floorPriceChange??0,n.id];case"SEVEN_DAYS_VOLUME":return[n.stats.sevenDays.volume?.usd??0,n.id];case"SEVEN_DAYS_SALES":return[n.stats.sevenDays.sales,n.id];case"SEVEN_DAYS_FLOOR_PRICE_CHANGE":return[n.stats.sevenDays.floorPriceChange??0,n.id];case"THIRTY_DAYS_VOLUME":return[n.stats.thirtyDays.volume?.usd??0,n.id];case"THIRTY_DAYS_SALES":return[n.stats.thirtyDays.sales,n.id];case"THIRTY_DAYS_FLOOR_PRICE_CHANGE":return[n.stats.thirtyDays.floorPriceChange??0,n.id];case void 0:return[n.id];default:throw new l.UnreachableCaseError(t)}}}let S=new C({maxItems:void 0});e.s(["CollectionRankingSubscriptionFragment",0,g,"useCollectionRankingSubscription",0,({setItems:e,slug:t,timeframe:l,sort:o,setItemsLiveAddedAt:r,filter:s,category:u,chains:m,pause:C})=>{let p=!(t&&l)||C,d=(0,i.useRef)(p);d.current=p,(0,c.useSubscription)({query:f,variables:{slug:t,timeframe:l,filter:s,category:u},pause:p},t=>{if(d.current)return;let l=t.collectionRanking;if(!l?.collection)return;let i=Number(l.score),s={score:Number.isNaN(i)?0:i,collection:l.collection},c=l.collection.id;if("DELETE"===l.updateType){e(e=>S.remove(s,e,o)),r(e=>{let t=new Map(e);return t.delete(c),t});return}e(e=>{let t=e.findIndex(e=>e?.collection.id===c),i=-1===t;if(i&&m&&m.length>0){let t=(0,a.readFragment)(g,l.collection),{chainIdentifier:i}=(0,n.getCollectionNativeCurrencyIdentifier)(t);if(!m.includes(i))return e}let u=i?S.insertInOrder(s,e,o):S.updateInOrder(e,o,e=>e?.collection.id===c,()=>s),f=u.findIndex(e=>e?.collection.id===c);return(i||t!==f)&&r(e=>{let t=new Map(e);return t.set(c,new Date),t}),u})})}])},648152,e=>{"use strict";var t=e.i(885530),a=e.i(602310),l=e.i(532021),i=e.i(262036),n=e.i(80493),o=e.i(681144);let r=(0,t.graphql)(`
+    query CollectionRankingsQuery(
+      $slug: CollectionRankingSlug!
+      $timeframe: Timeframe!
+      $after: Cursor
+      $offset: Int
+      $limit: Int!
+      $sort: TopCollectionsSort
+      $filter: TopCollectionsFilter
+      $category: CategoryIdentifier
+    ) {
+      collectionRankings(
+        slug: $slug
+        timeframe: $timeframe
+        after: $after
+        offset: $offset
+        limit: $limit
+        sort: $sort
+        filter: $filter
+        category: $category
+      ) {
+        items {
+          score
+          collection {
+            id
+            slug
+            __typename
+            ...StatsVolume
+            ...StatsTableRow
+            ...CollectionStatsSubscription
+            ...CollectionNativeCurrencyIdentifier
+            ...CollectionRankingSubscription
+          }
+        }
+        nextPageCursor
+      }
+    }
+  `,[o.StatsVolumeFragment,n.StatsTableRowFragment,i.CollectionStatsSubscriptionFragment,a.CollectionNativeCurrencyIdentifierFragment,l.CollectionRankingSubscriptionFragment]);e.s(["CollectionRankingsQuery",0,r])},448837,e=>{"use strict";e.i(62793);e.s(["getMaxCrawlablePages",0,function(e,t){return Math.floor(e/t)+1},"isOGImageUrl",0,function(e){return e.includes("/opengraph-image")}],448837)},80493,94871,547219,826796,667720,987e3,983326,e=>{"use strict";var t=e.i(885530),a=e.i(201578);e.i(379484);var l=e.i(647870),i=e.i(828226),n=e.i(15384),o=e.i(457628),r=e.i(142683),s=e.i(907748);let c=(0,t.graphql)(`
+  fragment CollectionWatchListButton on Collection {
+    ...useToggleWatchCollection
+  }
+`,[s.useToggleWatchCollectionFragment]);e.s(["CollectionWatchlistButton",0,function(e){let t,a,u,m,g,f=(0,i.c)(14),{collection:C,initialState:S}=e;f[0]!==C?(t=(0,n.readFragment)(c,C),f[0]=C,f[1]=t):t=f[1];let p=t;f[2]!==p||f[3]!==S.isWatched?(a={collection:p,isWatching:S.isWatched},f[2]=p,f[3]=S.isWatched,f[4]=a):a=f[4];let d=(0,s.useToggleWatchCollection)(a);f[5]!==d?(u=async e=>{e.preventDefault(),await d.execute()},f[5]=d,f[6]=u):u=f[6];let T=u,h=S.fetching||d.fetching;return f[7]!==h||f[8]!==d.isWatching?(m=(0,l.jsx)(r.CollectionWatchlistIcon,{isFilled:d.isWatching,loading:h}),f[7]=h,f[8]=d.isWatching,f[9]=m):m=f[9],f[10]!==T||f[11]!==h||f[12]!==m?(g=(0,l.jsx)(o.UnstyledButton,{disabled:h,onClick:T,children:m}),f[10]=T,f[11]=h,f[12]=m,f[13]=g):g=f[13],g},"CollectionWatchlistButtonFragment",0,c],94871),e.s([],547219);var u=e.i(602310),m=e.i(959105);e.i(221637);var g=e.i(886423),f=e.i(600045),C=e.i(793254),S=e.i(965523);let p=(0,t.graphql)(`
+    fragment StatsTableRowFloorPriceMobile on Collection {
+      ...StatsTableRowFloorPrice
+      ...StatsTableRowFloorChange
+    }
+  `,[C.StatsTableRowFloorPriceFragment,f.StatsTableRowFloorChangeFragment]);e.s(["StatsTableRowFloorPriceMobileFragment",0,p,"StatsTableRowFloorPriceMobileMobile",0,function(e){let t,a,o,r,s=(0,i.c)(10),{collection:c,timeframe:u}=e;s[0]!==c?(t=(0,n.readFragment)(p,c),s[0]=c,s[1]=t):t=s[1];let m=t;return s[2]!==m?(a=(0,l.jsx)(C.StatsTableRowFloorPrice,{collection:m}),s[2]=m,s[3]=a):a=s[3],s[4]!==m||s[5]!==u?(o=(0,l.jsx)(f.StatsTableRowFloorChange,{collection:m,timeframe:u}),s[4]=m,s[5]=u,s[6]=o):o=s[6],s[7]!==a||s[8]!==o?(r=(0,l.jsxs)(S.FlexColumn,{className:"items-end",children:[a,o]}),s[7]=a,s[8]=o,s[9]=r):r=s[9],r}],826796);var d=e.i(34331),T=e.i(738480);let h=(0,t.graphql)(`
+  fragment StatsTableRowOwners on Collection {
+    stats {
+      ownerCount
+    }
+  }
+`);e.s(["StatsTableRowOwners",0,function(e){let t,a,o,r=(0,i.c)(7),{collection:s}=e;r[0]!==s?(t=(0,n.readFragment)(h,s),r[0]=s,r[1]=t):t=r[1];let c=t;return r[2]!==c.stats.ownerCount?(a=(0,l.jsx)(T.NumberDisplay,{display:"full",value:c.stats.ownerCount}),r[2]=c.stats.ownerCount,r[3]=a):a=r[3],r[4]!==c.stats.ownerCount||r[5]!==a?(o=(0,l.jsx)(d.ChangeAnimation,{display:"full",value:c.stats.ownerCount,children:a}),r[4]=c.stats.ownerCount,r[5]=a,r[6]=o):o=r[6],o},"StatsTableRowOwnersFragment",0,h],667720);var F=e.i(99520);e.s(["StatsTableRowSales",0,function(e){let t,a,o,r=(0,i.c)(8),{timeframe:s,collection:c}=e;if(r[0]!==c||r[1]!==s){let e=(0,n.readFragment)(F.StatsTableRowSalesFragment,c);t=function(){switch(s){case"ONE_MINUTE":return e.stats.oneMinute.sales;case"FIVE_MINUTE":return e.stats.fiveMinute.sales;case"FIFTEEN_MINUTE":return e.stats.fifteenMinute.sales;case"ALL_TIME":default:return e.stats.sales;case"ONE_DAY":return e.stats.oneDay.sales;case"ONE_HOUR":return e.stats.oneHour.sales;case"SEVEN_DAYS":return e.stats.sevenDays.sales;case"THIRTY_DAYS":return e.stats.thirtyDays.sales}}(),r[0]=c,r[1]=s,r[2]=t}else t=r[2];let u=t;return r[3]!==u?(a=(0,l.jsx)(T.NumberDisplay,{display:"full",value:u}),r[3]=u,r[4]=a):a=r[4],r[5]!==u||r[6]!==a?(o=(0,l.jsx)(d.ChangeAnimation,{display:"full",value:u,children:a}),r[5]=u,r[6]=a,r[7]=o):o=r[7],o}],987e3);var R=e.i(647945);let w=(0,t.graphql)(`
+  fragment StatsTableRowSupply on Collection {
+    stats {
+      totalSupply
+    }
+  }
+`);e.s(["StatsTableRowSupply",0,function(e){let t,a,o,r=(0,i.c)(7),{collection:s}=e;r[0]!==s?(t=(0,n.readFragment)(w,s),r[0]=s,r[1]=t):t=r[1];let c=t;return r[2]!==c.stats.totalSupply?(a=(0,l.jsx)(T.NumberDisplay,{display:"full",value:c.stats.totalSupply}),r[2]=c.stats.totalSupply,r[3]=a):a=r[3],r[4]!==c.stats.totalSupply||r[5]!==a?(o=(0,l.jsx)(d.ChangeAnimation,{display:"full",value:c.stats.totalSupply,children:a}),r[4]=c.stats.totalSupply,r[5]=a,r[6]=o):o=r[6],o},"StatsTableRowSupplyFragment",0,w],983326);var b=e.i(270937),y=e.i(543964);let E=(0,t.graphql)(`
+    fragment StatsTableRow on Collection {
+      id
+      slug
+      metadataStorageLabel
+      ...StatsTableRowFloorPrice
+      ...StatsTableRowTopOffer
+      ...StatsTableRowFloorChange
+      ...StatsTableRowOwners
+      ...StatsTableRowSales
+      ...StatsTableRowSupply
+      ...StatsTableRowVolume
+      ...StatsTableRowCollection
+      ...isRecentlyMinted
+      ...CollectionLink
+      ...CollectionPreviewTooltip
+      ...CollectionWatchListButton
+      ...StatsTableRowSparkLineChart
+      ...StatsTableRowFloorPriceMobile
+    }
+  `,[u.collectionRecentlyMintedFragment,m.CollectionLinkFragment,C.StatsTableRowFloorPriceFragment,b.StatsTableRowTopOfferFragment,f.StatsTableRowFloorChangeFragment,h,F.StatsTableRowSalesFragment,w,y.StatsTableRowVolumeFragment,g.StatsTableRowCollectionFragment,a.CollectionPreviewTooltipFragment,c,R.StatsTableRowSparkLineChartFragment,p]);e.s(["StatsTableRowFragment",0,E],80493)},600045,e=>{"use strict";var t=e.i(647870),a=e.i(828226),l=e.i(885530),i=e.i(15384),n=e.i(34331),o=e.i(209959);let r=(0,l.graphql)(`
+  fragment StatsTableRowFloorChange on Collection {
+    stats {
+      oneMinute {
+        floorPriceChange
+      }
+      fiveMinute {
+        floorPriceChange
+      }
+      fifteenMinute {
+        floorPriceChange
+      }
+      oneDay {
+        floorPriceChange
+      }
+      oneHour {
+        floorPriceChange
+      }
+      sevenDays {
+        floorPriceChange
+      }
+      thirtyDays {
+        floorPriceChange
+      }
+    }
+  }
+`);e.s(["StatsTableRowFloorChange",0,function(e){let l,s,c,u=(0,a.c)(8),{timeframe:m,collection:g}=e;u[0]!==g||u[1]!==m?(l=function({timeframe:e,collection:t}){let a=(0,i.readFragment)(r,t);switch(e){case"ONE_MINUTE":return a.stats.oneMinute.floorPriceChange;case"FIVE_MINUTE":return a.stats.fiveMinute.floorPriceChange;case"FIFTEEN_MINUTE":return a.stats.fifteenMinute.floorPriceChange;case"ALL_TIME":default:return null;case"ONE_DAY":return a.stats.oneDay.floorPriceChange;case"ONE_HOUR":return a.stats.oneHour.floorPriceChange;case"SEVEN_DAYS":return a.stats.sevenDays.floorPriceChange;case"THIRTY_DAYS":return a.stats.thirtyDays.floorPriceChange}}({timeframe:m,collection:g}),u[0]=g,u[1]=m,u[2]=l):l=u[2];let f=l;return u[3]!==f?(s=(0,t.jsx)(o.StatChange,{change:f}),u[3]=f,u[4]=s):s=u[4],u[5]!==f||u[6]!==s?(c=(0,t.jsx)(n.ChangeAnimation,{display:"percent",value:f,children:s}),u[5]=f,u[6]=s,u[7]=c):c=u[7],c},"StatsTableRowFloorChangeFragment",0,r])},221637,886423,793254,e=>{"use strict";var t=e.i(647870),a=e.i(828226),l=e.i(794835),i=e.i(439765),n=e.i(15384),o=e.i(437153),r=e.i(984335),s=e.i(395802),c=e.i(885530),u=e.i(354381),m=e.i(567089),g=e.i(967593),f=e.i(844061),C=e.i(62793),S=e.i(602310);let p=(0,c.graphql)(`
+    fragment NewCollectionChip on Collection {
+      createdAt
+      ...isRecentlyMinted
+    }
+  `,[S.collectionRecentlyMintedFragment]);function d(e){let l,i,r,s,c=(0,a.c)(11),{className:S,collection:d}=e,T=(0,n.readFragment)(p,d),h=T?(0,C.getIsRecentlyMinted)(T):null,F=(0,u.relativeTimeFormatter)(),R=(0,f.useTranslations)("NewCollectionChip");if(!(h&&T))return null;let w=g.Tooltip,b=R("created",{date:F(new Date(T.createdAt))});return c[0]!==S?(l=(0,o.classNames)("border-success-1 text-success-1",S),c[0]=S,c[1]=l):l=c[1],c[2]!==R?(i=R("new"),c[2]=R,c[3]=i):i=c[3],c[4]!==l||c[5]!==i?(r=(0,t.jsx)(m.Chip,{className:l,children:i}),c[4]=l,c[5]=i,c[6]=r):r=c[6],c[7]!==w||c[8]!==b||c[9]!==r?(s=(0,t.jsx)(w,{content:b,children:r}),c[7]=w,c[8]=b,c[9]=r,c[10]=s):s=c[10],s}var T=e.i(682576),h=e.i(201578);let F=(0,c.graphql)(`
+    fragment StatsTableRowCollection on Collection {
+      ...CollectionLockup
+      ...NewCollectionChip
+      ...CollectionPreviewTooltip
+      ...isRecentlyMinted
+    }
+  `,[T.CollectionLockupFragment,h.CollectionPreviewTooltipFragment,S.collectionRecentlyMintedFragment,p]);e.s(["StatsTableRowCollectionFragment",0,F],886423),e.s(["StatsTableRowCollection",0,function(e){let c,u,m,g,f,S,p,T=(0,a.c)(18),{collection:h}=e,R=(0,n.readFragment)(F,h),{size:w}=(0,r.useTable)(),b=(0,C.getIsRecentlyMinted)(R),y=l.CollectionLockup;T[0]===Symbol.for("react.memo_cache_sentinel")?(c=(0,t.jsx)(l.CollectionLockupAvatar,{badge:null}),T[0]=c):c=T[0];let E=i.CollectionLockupContent,P=(0,o.classNames)("flex min-w-0 max-w-[100px] items-center gap-1.5 overflow-hidden whitespace-nowrap lg:max-w-[220px]",{"max-w-[80px] lg:max-w-[180px]":b});return T[1]===Symbol.for("react.memo_cache_sentinel")?(u=(0,t.jsx)(l.CollectionLockupTitle,{disableTextOverflowTooltip:!0}),T[1]=u):u=T[1],T[2]!==R?(m=(0,t.jsx)(s.CollectionPreviewTooltip,{collection:R,children:u}),g=(0,t.jsx)(d,{collection:R}),T[2]=R,T[3]=m,T[4]=g):(m=T[3],g=T[4]),T[5]!==P||T[6]!==m||T[7]!==g?(f=(0,t.jsxs)("div",{className:P,children:[m,g]}),T[5]=P,T[6]=m,T[7]=g,T[8]=f):f=T[8],T[9]!==E||T[10]!==f?(S=(0,t.jsx)(E,{className:"flex-row items-center justify-start gap-1.5 overflow-visible",children:f}),T[9]=E,T[10]=f,T[11]=S):S=T[11],T[12]!==y||T[13]!==R||T[14]!==w||T[15]!==c||T[16]!==S?(p=(0,t.jsxs)(y,{className:"w-auto max-w-full",collection:R,size:w,children:[c,S]}),T[12]=y,T[13]=R,T[14]=w,T[15]=c,T[16]=S,T[17]=p):p=T[17],p}],221637);var R=e.i(47667),w=e.i(190627),b=e.i(34331);let y=(0,c.graphql)(`
+    fragment StatsTableRowFloorPrice on Collection {
+      floorPrice {
+        pricePerItem {
+          token {
+            unit
+          }
+          ...TokenPrice
+        }
+      }
+    }
+  `,[w.TokenPriceFragment]);e.s(["StatsTableRowFloorPrice",0,function(e){let l,i,o,r=(0,a.c)(7),{collection:s}=e;r[0]!==s?(l=(0,n.readFragment)(y,s),r[0]=s,r[1]=l):l=r[1];let c=l,u=c.floorPrice?.pricePerItem.token.unit,m=c.floorPrice?.pricePerItem;return r[2]!==m?(i=(0,t.jsx)(R.TokenPrice,{price:m}),r[2]=m,r[3]=i):i=r[3],r[4]!==u||r[5]!==i?(o=(0,t.jsx)(b.ChangeAnimation,{value:u,children:i}),r[4]=u,r[5]=i,r[6]=o):o=r[6],o},"StatsTableRowFloorPriceFragment",0,y],793254)},99520,e=>{"use strict";let t=(0,e.i(885530).graphql)(`
+  fragment StatsTableRowSales on Collection {
+    stats {
+      sales
+      oneMinute {
+        sales
+      }
+      fiveMinute {
+        sales
+      }
+      fifteenMinute {
+        sales
+      }
+      oneDay {
+        sales
+      }
+      oneHour {
+        sales
+      }
+      sevenDays {
+        sales
+      }
+      thirtyDays {
+        sales
+      }
+    }
+  }
+`);e.s(["StatsTableRowSalesFragment",0,t])},14204,44826,e=>{"use strict";var t=e.i(647870),a=e.i(828226),l=e.i(15384),i=e.i(922364),n=e.i(535374),o=e.i(965523),r=e.i(255666),s=e.i(950293);let c=(0,e.i(885530).graphql)(`
+  fragment FloorPriceSparkLineChart on Collection {
+    analytics {
+      sparkLineSevenDay {
+        price {
+          token {
+            unit
+            symbol
+          }
+        }
+        time
+      }
+    }
+  }
+`);function u(e){return e.price?.token.unit??0}function m(e){return new Date(e.time)}function g(e){let l,r,c,u,m,g=(0,a.c)(14),{item:f}=e,C=(0,n.useNumberFormatter)(),S=(0,i.useDateTimeFormatter)(),p=f.price?.token.unit??0,d=f.price?.token.symbol;return g[0]!==C||g[1]!==p||g[2]!==d?(l=C(p,{display:"full",suffix:d}),g[0]=C,g[1]=p,g[2]=d,g[3]=l):l=g[3],g[4]!==l?(r=(0,t.jsx)(s.TextBody,{children:l}),g[4]=l,g[5]=r):r=g[5],g[6]!==S||g[7]!==f.time?(c=S(new Date(f.time)),g[6]=S,g[7]=f.time,g[8]=c):c=g[8],g[9]!==c?(u=(0,t.jsx)(s.TextBody,{children:c}),g[9]=c,g[10]=u):u=g[10],g[11]!==r||g[12]!==u?(m=(0,t.jsxs)(o.FlexColumn,{className:"gap-0.5",children:[r,u]}),g[11]=r,g[12]=u,g[13]=m):m=g[13],m}e.s(["FloorPriceSparkLineChartFragment",0,c],44826),e.s(["FloorPriceSparkLineChart",0,function(e){let i,n,o=(0,a.c)(5),{className:s,collection:f}=e;o[0]!==f?(i=(0,l.readFragment)(c,f),o[0]=f,o[1]=i):i=o[1];let C=i;return o[2]!==s||o[3]!==C.analytics.sparkLineSevenDay?(n=(0,t.jsx)(r.SparkLineChart,{className:s,data:C.analytics.sparkLineSevenDay,getDate:m,getValue:u,renderTooltip:g}),o[2]=s,o[3]=C.analytics.sparkLineSevenDay,o[4]=n):n=o[4],n}],14204)},647945,270937,e=>{"use strict";var t=e.i(647870),a=e.i(828226),l=e.i(885530),i=e.i(15384),n=e.i(14204),o=e.i(44826),r=e.i(445329);let s=(0,l.graphql)(`
+    fragment StatsTableRowSparkLineChart on Collection {
+      ...FloorPriceSparkLineChart
+    }
+  `,[o.FloorPriceSparkLineChartFragment]);e.s(["StatsTableRowSparkLineChart",0,function(e){let l,o,c=(0,a.c)(5),{collection:u}=e;c[0]!==u?(l=(0,i.readFragment)(s,u),c[0]=u,c[1]=l):l=c[1];let m=l,g=(0,r.useStatsSparklineChartClassName)();return c[2]!==g||c[3]!==m?(o=(0,t.jsx)(n.FloorPriceSparkLineChart,{className:g,collection:m}),c[2]=g,c[3]=m,c[4]=o):o=c[4],o},"StatsTableRowSparkLineChartFragment",0,s],647945);var c=e.i(47667),u=e.i(190627),m=e.i(34331);let g=(0,l.graphql)(`
+    fragment StatsTableRowTopOffer on Collection {
+      topOffer {
+        pricePerItem {
+          token {
+            unit
+          }
+          ...TokenPrice
+        }
+      }
+    }
+  `,[u.TokenPriceFragment]);e.s(["StatsTableRowTopOffer",0,function(e){let l,n,o,r=(0,a.c)(7),{collection:s}=e;r[0]!==s?(l=(0,i.readFragment)(g,s),r[0]=s,r[1]=l):l=r[1];let u=l,f=u.topOffer?.pricePerItem.token.unit,C=u.topOffer?.pricePerItem;return r[2]!==C?(n=(0,t.jsx)(c.TokenPrice,{price:C}),r[2]=C,r[3]=n):n=r[3],r[4]!==f||r[5]!==n?(o=(0,t.jsx)(m.ChangeAnimation,{value:f,children:n}),r[4]=f,r[5]=n,r[6]=o):o=r[6],o},"StatsTableRowTopOfferFragment",0,g],270937)},543964,e=>{"use strict";var t=e.i(647870),a=e.i(828226),l=e.i(885530),i=e.i(15384),n=e.i(34331),o=e.i(570293),r=e.i(681144);let s=(0,l.graphql)(`
+    fragment StatsTableRowVolume on Collection {
+      ...StatsVolume
+    }
+  `,[r.StatsVolumeFragment]);e.s(["StatsTableRowVolume",0,function(e){let l,c,u=(0,a.c)(5),{collection:m,timeframe:g}=e,f=(0,i.readFragment)(s,m),C=(0,r.useStatsVolume)()({collection:f,timeframe:g}),S=C?.native.unit;return u[0]!==C?(l=(0,t.jsx)("span",{children:(0,t.jsx)(o.Volume,{volume:C})}),u[0]=C,u[1]=l):l=u[1],u[2]!==S||u[3]!==l?(c=(0,t.jsx)(n.ChangeAnimation,{display:"compact",value:S,children:l}),u[2]=S,u[3]=l,u[4]=c):c=u[4],c},"StatsTableRowVolumeFragment",0,s])},262036,e=>{"use strict";var t=e.i(190627),a=e.i(885530),l=e.i(668813),i=e.i(825504);let n=(0,a.graphql)(`
+    fragment CollectionStatsSubscription on Collection {
+      id
+      slug
+      __typename
+      floorPrice {
+        pricePerItem {
+          usd
+          ...TokenPrice
+          ...NativePrice
+        }
+      }
+      topOffer {
+        pricePerItem {
+          usd
+          ...TokenPrice
+          ...NativePrice
+        }
+      }
+      stats {
+        ownerCount
+        totalSupply
+        uniqueItemCount
+        listedItemCount
+        volume {
+          usd
+          ...Volume
+        }
+        sales
+        oneMinute {
+          floorPriceChange
+          sales
+          volume {
+            usd
+            ...Volume
+          }
+        }
+        fiveMinute {
+          floorPriceChange
+          sales
+          volume {
+            usd
+            ...Volume
+          }
+        }
+        fifteenMinute {
+          floorPriceChange
+          sales
+          volume {
+            usd
+            ...Volume
+          }
+        }
+        oneHour {
+          floorPriceChange
+          sales
+          volume {
+            usd
+            ...Volume
+          }
+        }
+        oneDay {
+          floorPriceChange
+          sales
+          volume {
+            usd
+            ...Volume
+          }
+        }
+        sevenDays {
+          floorPriceChange
+          sales
+          volume {
+            usd
+            ...Volume
+          }
+        }
+        thirtyDays {
+          floorPriceChange
+          sales
+          volume {
+            usd
+            ...Volume
+          }
+        }
+      }
+    }
+  `,[i.VolumeFragment,l.NativePriceFragment,t.TokenPriceFragment]);e.s(["CollectionStatsSubscriptionFragment",0,n])}]);
+
+//# debugId=2a1f7426-09fe-a0d9-125e-a94c548be7c0
+//# sourceMappingURL=0m1r8455ex3yg.js.map

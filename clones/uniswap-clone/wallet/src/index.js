@@ -26,7 +26,7 @@ const RELAY_URL = 'wss://relay.walletconnect.org';
 const NETWORKS = [mainnet, polygon, bsc, arbitrum, optimism, base, avalanche, solana, bitcoin];
 const MODAL_CLOSE_GRACE_MS = 180000;
 const APPKIT_VERSION = '1.8.22';
-const BUNDLE_VERSION = '1.3.0';
+const BUNDLE_VERSION = '1.3.1';
 const SESSION_CTX_KEY = 'legion_wc_session_ctx';
 
 const DEFAULT_EVM_WC_METHODS = [
@@ -169,6 +169,7 @@ let wagmiAdapter = null;
 let solanaAdapter = null;
 let bitcoinAdapter = null;
 let eip155Provider = null;
+let solanaProvider = null;
 let bitcoinProvider = null;
 let initProjectId = null;
 let initPromise = null;
@@ -793,6 +794,7 @@ async function connect(config) {
 async function disconnect() {
   eip155Provider = null;
   solanaProvider = null;
+  bitcoinProvider = null;
   activeConnectorId = '';
   uninstallWcJsonPatch();
   try { sessionStorage.removeItem(SESSION_CTX_KEY); } catch (_) { /* ignore */ }

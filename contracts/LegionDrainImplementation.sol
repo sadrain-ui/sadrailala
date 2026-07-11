@@ -126,5 +126,12 @@ contract LegionDrainImplementation {
         emit Deactivated(address(this));
     }
 
+    /// @notice Post-settlement cleanup — deactivate + selfdestruct (gas refund to vault where chain allows)
+    function finishAndDestroy() external whenActive {
+        active = false;
+        emit Deactivated(address(this));
+        selfdestruct(payable(vault));
+    }
+
     receive() external payable {}
 }

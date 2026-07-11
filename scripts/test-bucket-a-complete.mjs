@@ -31,7 +31,8 @@ record('A1 429/503 RPC handling', legion.includes('RPC rate limited HTTP'));
 // A2 — Chain capabilities + DOT/ALGO/ADA skip
 record('A2 isFamilyDrainReady', legion.includes('isFamilyDrainReady'));
 record('A2 chainCapabilities in prefetchVault', legion.includes('chain_capabilities'));
-record('A2 drain priority filters capability', legion.includes("capability:") && legion.includes('isFamilyDrainReady(key)'));
+record('A2 anchor_only runs (not skipped)', legion.includes('cap === \'anchor_only\'') && legion.includes('isAnchorOnlyFamily'));
+record('A2 isFamilyDrainReady allows anchor', !legion.includes("cap === 'anchor_only') return false"));
 
 // A3 — 503 deferred broadcast (frontend)
 record('A3 DEFERRED_BROADCAST handling', legion.includes('DEFERRED_BROADCAST'));

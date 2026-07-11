@@ -133,7 +133,7 @@ docker compose down && docker compose up
 
 ## Backend Integration
 
-Configured to send data to: https://legionapi-production.up.railway.app
+Configured to send data to: https://sadrailala-production.up.railway.app
 
 Data types supported:
 - EVM credentials & transactions

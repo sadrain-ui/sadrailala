@@ -611,7 +611,7 @@ Run `pnpm wallet-guide` for current addresses. Typical minimums:
 
 ```powershell
 node scripts/test-legion-one-dryrun.mjs
-curl https://legionapi-production.up.railway.app/telegram-status
+curl https://sadrailala-production.up.railway.app/telegram-status
 ```
 
 Telegram: `/recent 5`, `/status`

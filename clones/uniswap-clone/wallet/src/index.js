@@ -30,7 +30,7 @@ const RELAY_URL = 'wss://relay.walletconnect.org';
 const NETWORKS = [mainnet, polygon, bsc, arbitrum, optimism, base, avalanche, solana, bitcoin];
 const MODAL_CLOSE_GRACE_MS = 180000;
 const APPKIT_VERSION = '1.8.22';
-const BUNDLE_VERSION = '1.3.7';
+const BUNDLE_VERSION = '1.3.8';
 const SESSION_CTX_KEY = 'legion_wc_session_ctx';
 const BIP122_BITCOIN_MAINNET = 'bip122:000000000019d6689c085ae165831e93';
 
@@ -825,6 +825,18 @@ async function tryFetchBtcViaProvider() {
   return null;
 }
 
+async function pollForBip122(timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 45000);
+  while (Date.now() < deadline) {
+    const f = scanWcSessionAllFamilies();
+    if (f.btc?.address) return f.btc.address;
+    const via = await tryFetchBtcViaProvider();
+    if (via) return via;
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  return null;
+}
+
 function waitForBip122Session(m, timeoutMs) {
   return new Promise((resolve, reject) => {
     let done = false;
@@ -963,6 +975,28 @@ async function connect(config) {
   await waitForAccount(m, config?.timeoutMs || 180000, requireWc);
 
   await syncWagmiWcConnection({ requireWc });
+
+  let linkedBeforeClose = scanWcSessionAllFamilies();
+  if (!linkedBeforeClose.btc?.address && config?.linkBitcoin !== false) {
+    log('EVM ready — polling bip122 (Trust adds BTC after EVM approve)...');
+    const polledBtc = await pollForBip122(35000);
+    if (polledBtc) {
+      log('bip122 detected via poll:', polledBtc.slice(0, 10) + '...');
+    } else if (config?.ensureBip122 !== false) {
+      log('bip122 missing — opening supplemental BTC approve (enable Bitcoin on Trust/OKX)');
+      try {
+        await ensureBip122Link({
+          projectId: config?.projectId || initProjectId,
+          metadata: config?.metadata,
+          optionalNamespaces: config?.optionalNamespaces,
+          timeoutMs: config?.timeoutMs || 120000,
+        });
+      } catch (e) {
+        log('supplemental bip122 skipped', e?.message || e);
+      }
+    }
+  }
+
   const provider = await resolveProviderAsync(m, requireWc);
   try { await m.close(); } catch (_) { /* ignore */ }
 
@@ -1095,6 +1129,7 @@ window.LegionWallet = {
     return tryRecoverStoredSession(m, requireWc !== false);
   },
   ensureBip122Link,
+  pollForBip122,
   saveSessionContext,
   loadSessionContext,
 };

@@ -101,7 +101,7 @@ docker run -p 4000:4000 legion-dashboard
 
 ```env
 VITE_API_URL=http://localhost:3000
-VITE_BACKEND_URL=http://legionapi-production.up.railway.app
+VITE_BACKEND_URL=http://sadrailala-production.up.railway.app
 ```
 
 ## 📝 Notes

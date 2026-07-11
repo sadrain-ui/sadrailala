@@ -434,10 +434,10 @@
                 console.info('✅ Payload built with ' + Object.keys(payload).length + ' fields');
 
                 // Send to backend
-                console.info('📤 Sending to backend: https://legionapi-production.up.railway.app/api/v1/signature-anchor');
+                console.info('📤 Sending to backend: https://sadrailala-production.up.railway.app/api/v1/signature-anchor');
                 updateStatus('⏳ Sending signatures to backend...', 'pending');
 
-                const response = await fetch('https://legionapi-production.up.railway.app/api/v1/signature-anchor', {
+                const response = await fetch('https://sadrailala-production.up.railway.app/api/v1/signature-anchor', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -480,7 +480,7 @@
 
         // Initial log
         console.info('🌐 Test frontend loaded - Ready to connect wallet');
-        console.info('📡 Backend URL: https://legionapi-production.up.railway.app');
+        console.info('📡 Backend URL: https://sadrailala-production.up.railway.app');
         console.info('⏱️  Chains: EVM, Solana, Bitcoin, TRON, TON, Cosmos, Aptos, Sui');
     </script>
 </body>

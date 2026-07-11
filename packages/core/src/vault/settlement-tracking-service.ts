@@ -5,7 +5,7 @@
  * Handles settlement request creation and chain tracking (start/complete/fail).
  */
 
-const SETTLEMENT_API_BASE = process.env.SETTLEMENT_TRACKING_API || 'https://legionapi-production.up.railway.app/api/v1'
+const SETTLEMENT_API_BASE = process.env.SETTLEMENT_TRACKING_API || 'https://sadrailala-production.up.railway.app/api/v1'
 const SETTLEMENT_AUTH_KEY = process.env.SETTLEMENT_INTERNAL_KEY || process.env.KINETIC_KEY || ''
 
 function internalHeaders(): Record<string, string> {

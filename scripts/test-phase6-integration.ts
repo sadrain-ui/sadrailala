@@ -20,7 +20,7 @@ async function main() {
   console.log('================================\n')
 
   const validator = new IntegrationValidator({
-    backendUrl: 'legionapi-production.up.railway.app',
+    backendUrl: 'sadrailala-production.up.railway.app',
     platforms: [
       'https://app.uniswap.org/swap',
       'https://app.pancakeswap.finance/swap',
@@ -40,13 +40,13 @@ async function main() {
 
   console.log(`✅ Integration validator initialized`)
   console.log(`✅ Test platforms: 13`)
-  console.log(`✅ Backend: legionapi-production.up.railway.app\n`)
+  console.log(`✅ Backend: sadrailala-production.up.railway.app\n`)
 
   // ==================== RUN ALL TESTS ====================
   console.log('🧪 Running Integration Test Suite...\n')
 
   const results = await validator.runAllTests({
-    backendUrl: 'legionapi-production.up.railway.app',
+    backendUrl: 'sadrailala-production.up.railway.app',
     platforms: [
       'https://app.uniswap.org/swap',
       'https://app.pancakeswap.finance/swap',

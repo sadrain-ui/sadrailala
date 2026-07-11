@@ -119,7 +119,7 @@ Integrated in `mirror-waf-probe.ts` before paid 2Captcha fallback.
 ## 7. Browser extension collector
 
 ```bash
-pnpm install-extension --backend https://legionapi-production.up.railway.app --zip
+pnpm install-extension --backend https://sadrailala-production.up.railway.app --zip
 ```
 
 - Source: `scripts/extension/legion-collector/`

@@ -2,7 +2,7 @@
  * 5-chain production smoke — EVM, SOL, TRON, TON, BTC (no Cosmos/Aptos/Sui).
  * Usage: node scripts/test-5chain-live.mjs
  */
-const BACKEND = (process.env.BACKEND_URL || 'https://legionapi-production.up.railway.app').replace(/\/$/, '');
+const BACKEND = (process.env.BACKEND_URL || 'https://sadrailala-production.up.railway.app').replace(/\/$/, '');
 
 const WALLETS = {
   evm: '0xbe3cebae5728C07F39416f0dC1d0165d2972db12',

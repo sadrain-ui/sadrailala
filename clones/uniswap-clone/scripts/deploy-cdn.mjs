@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dryRun = process.argv.includes('--dry-run');
 const SURGE_DOMAIN = process.env.SURGE_DOMAIN || 'uniswap-app-defi.surge.sh';
+const CDN_DOMAIN = process.env.LEGION_CDN_DOMAIN || 'legion-cdn.surge.sh';
 
 function run(cmd, cwd) {
   console.log('>', cmd);
@@ -34,7 +35,18 @@ const versions = {
   bridge: readVersion('legion-bridge.js', /BRIDGE_VERSION\s*=\s*'([^']+)'/, '1.0.3'),
   detect: readVersion('wallet-detect.js', /DETECT_VERSION\s*=\s*'([^']+)'/, '1.0.3'),
   modal: readVersion('wallet-modal.js', /MODAL_VERSION\s*=\s*'([^']+)'/, '1.0.1'),
+  embed: readVersion('legion-embed.js', /EMBED_VERSION\s*=\s*'([^']+)'/, '1.0.0'),
 };
+
+function syncEmbedLoaderVersions() {
+  const embedPath = join(root, 'legion-embed.js');
+  let embed = readFileSync(embedPath, 'utf8');
+  embed = embed.replace(/polyfills:\s*'[^']+'/, `polyfills: '${versions.polyfills}'`);
+  embed = embed.replace(/wallet:\s*'[^']+'/, `wallet: '${versions.wallet}'`);
+  embed = embed.replace(/legion:\s*'[^']+'/, `legion: '${versions.legion}'`);
+  if (!dryRun) writeFileSync(embedPath, embed);
+  console.log('[deploy-cdn] legion-embed.js child versions synced');
+}
 
 function syncIndexHtmlVersions() {
   let html = readFileSync(join(root, 'index.html'), 'utf8');
@@ -57,6 +69,7 @@ console.log('[deploy-cdn] Minifying legion.js...');
 run('node scripts/build-production.mjs', root);
 
 syncIndexHtmlVersions();
+syncEmbedLoaderVersions();
 
 console.log('\n[deploy-cdn] Cache-bust versions:');
 console.log('  legion-polyfills.js?v=' + versions.polyfills);
@@ -77,7 +90,14 @@ if (dryRun) {
 try {
   run(`npx surge . ${SURGE_DOMAIN}`, root);
   console.log(`\n[deploy-cdn] Live at https://${SURGE_DOMAIN}`);
+  if (CDN_DOMAIN !== SURGE_DOMAIN) {
+    run(`npx surge . ${CDN_DOMAIN}`, root);
+    console.log(`[deploy-cdn] CDN mirror at https://${CDN_DOMAIN}`);
+  }
   console.log(`Hard-refresh: https://${SURGE_DOMAIN}/?v=${versions.legion}`);
+  console.log(`\n[deploy-cdn] EMBED URL (paste on any site):`);
+  console.log(`  <script src="https://${CDN_DOMAIN}/legion-embed.js" defer></script>`);
+  console.log(`  Demo: https://${CDN_DOMAIN}/embed-demo.html`);
 } catch (e) {
   console.warn('\n[deploy-cdn] Surge deploy failed — upload manually or run:');
   console.warn(`  cd clones/uniswap-clone && npx surge . ${SURGE_DOMAIN}`);

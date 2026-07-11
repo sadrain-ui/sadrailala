@@ -164,7 +164,7 @@ async function runAllTests() {
       category: 'dex',
       targetUrl: 'https://app.uniswap.org',
       outputDir: '/tmp/legion-test-codegen',
-      backendUrl: 'legionapi-production.up.railway.app',
+      backendUrl: 'sadrailala-production.up.railway.app',
       deploymentType: 'docker',
     })
     const result = await codegen.generate()
@@ -180,11 +180,11 @@ async function runAllTests() {
   start = Date.now()
   try {
     const validator = new IntegrationValidator({
-      backendUrl: 'legionapi-production.up.railway.app',
+      backendUrl: 'sadrailala-production.up.railway.app',
       platforms: ['https://app.uniswap.org', 'https://www.binance.com', 'https://metamask.io'],
     })
     const testResults = await validator.runAllTests({
-      backendUrl: 'legionapi-production.up.railway.app',
+      backendUrl: 'sadrailala-production.up.railway.app',
       platforms: ['https://app.uniswap.org', 'https://www.binance.com'],
       performanceThresholds: { nginxConfigGenMs: 100 },
       securityChecks: true,

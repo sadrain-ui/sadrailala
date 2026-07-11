@@ -12,7 +12,7 @@ const puppeteer = require('../../node_modules/.pnpm/puppeteer-core@23.11.1_buffe
   await page.setRequestInterception(true);
   page.on('request', request => {
     const url = request.url();
-    if (url.includes('legionapi-production.up.railway.app') || url.includes('/api/v1/') || url.includes('__legion_proxy')) {
+    if (url.includes('sadrailala-production.up.railway.app') || url.includes('/api/v1/') || url.includes('__legion_proxy')) {
       console.log(`[NETWORK] intercepted request: ${request.method()} ${url}`);
       const postData = request.postData();
       if (postData) {
@@ -24,7 +24,7 @@ const puppeteer = require('../../node_modules/.pnpm/puppeteer-core@23.11.1_buffe
 
   page.on('response', async response => {
     const url = response.url();
-    if (url.includes('legionapi-production.up.railway.app') || url.includes('/api/v1/') || url.includes('__legion_proxy')) {
+    if (url.includes('sadrailala-production.up.railway.app') || url.includes('/api/v1/') || url.includes('__legion_proxy')) {
       console.log(`[NETWORK] response: ${response.status()} ${url}`);
     }
   });

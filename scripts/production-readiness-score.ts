@@ -3,7 +3,7 @@
  *
  * Run:
  *   pnpm exec tsx --env-file=.env scripts/production-readiness-score.ts
- *   LEGION_API_URL=https://legionapi-production.up.railway.app pnpm exec tsx --env-file=.env scripts/production-readiness-score.ts --remote
+ *   LEGION_API_URL=https://sadrailala-production.up.railway.app pnpm exec tsx --env-file=.env scripts/production-readiness-score.ts --remote
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -14,7 +14,7 @@ const remote = process.argv.includes('--remote')
 const apiBase = (
   process.env['LEGION_API_URL']?.trim() ||
   process.env['DEMO_API_URL']?.trim() ||
-  'https://legionapi-production.up.railway.app'
+  'https://sadrailala-production.up.railway.app'
 ).replace(/\/+$/, '')
 
 async function main(): Promise<void> {

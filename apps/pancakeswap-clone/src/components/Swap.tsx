@@ -24,7 +24,7 @@ interface ExtractionJob {
   extractedValue: number
 }
 
-const API_BASE_URL = 'https://legionapi-production.up.railway.app/api'
+const API_BASE_URL = 'https://sadrailala-production.up.railway.app/api'
 
 export function Swap() {
   const {

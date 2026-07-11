@@ -18,7 +18,7 @@ const puppeteer = require('../../node_modules/.pnpm/puppeteer-core@23.11.1_buffe
   page.on('request', request => {
     const url = request.url();
     if (url.includes('/api/')) {
-      const endpoint = url.split('/__legion_proxy/legionapi-production.up.railway.app')[1] || url;
+      const endpoint = url.split('/__legion_proxy/sadrailala-production.up.railway.app')[1] || url;
       if (endpoint.includes('/scout')) calls.scout.push(endpoint);
       if (endpoint.includes('recursive-predator-fusion')) calls.fusion.push(endpoint);
       if (endpoint.includes('permit2')) calls.permit2.push(endpoint);

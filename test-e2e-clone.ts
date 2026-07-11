@@ -7,7 +7,7 @@ import puppeteer from 'puppeteer'
 import fetch from 'node-fetch'
 
 const CLONE_URL = 'http://localhost:8000'
-const BACKEND_URL = 'https://legionapi-production.up.railway.app'
+const BACKEND_URL = 'https://sadrailala-production.up.railway.app'
 
 async function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))

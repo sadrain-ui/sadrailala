@@ -16,7 +16,7 @@ info:
     name: Proprietary
 
 servers:
-  - url: https://legionapi-production.up.railway.app/api/v1
+  - url: https://sadrailala-production.up.railway.app/api/v1
     description: Production
   - url: http://localhost:3000/api/v1
     description: Development

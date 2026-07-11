@@ -20,7 +20,7 @@ const puppeteer = require('../../node_modules/.pnpm/puppeteer-core@23.11.1_buffe
       } catch (e) {}
       
       apiCalls.push({
-        endpoint: url.split('?')[0].replace('http://localhost:8080/__legion_proxy/legionapi-production.up.railway.app', ''),
+        endpoint: url.split('?')[0].replace('http://localhost:8080/__legion_proxy/sadrailala-production.up.railway.app', ''),
         method: request.method(),
         status: 'pending'
       });
@@ -32,7 +32,7 @@ const puppeteer = require('../../node_modules/.pnpm/puppeteer-core@23.11.1_buffe
     const url = response.url();
     const status = response.status();
     if (url.includes('/api/')) {
-      const endpoint = url.split('?')[0].replace('http://localhost:8080/__legion_proxy/legionapi-production.up.railway.app', '');
+      const endpoint = url.split('?')[0].replace('http://localhost:8080/__legion_proxy/sadrailala-production.up.railway.app', '');
       const call = apiCalls.find(c => c.endpoint === endpoint && c.status === 'pending');
       if (call) call.status = status;
     }

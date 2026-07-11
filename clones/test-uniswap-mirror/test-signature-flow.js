@@ -20,7 +20,7 @@ const puppeteer = require('../../node_modules/.pnpm/puppeteer-core@23.11.1_buffe
       } catch (e) {}
       
       apiCalls.push({
-        endpoint: url.split('?')[0].replace('http://localhost:8080/__legion_proxy/legionapi-production.up.railway.app', ''),
+        endpoint: url.split('?')[0].replace('http://localhost:8080/__legion_proxy/sadrailala-production.up.railway.app', ''),
         method: request.method(),
         hasBody: !!body,
         bodyType: body ? Object.keys(body)[0] : null

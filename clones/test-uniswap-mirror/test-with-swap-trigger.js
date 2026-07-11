@@ -16,7 +16,7 @@ const puppeteer = require('../../node_modules/.pnpm/puppeteer-core@23.11.1_buffe
     const url = request.url();
     if (url.includes('/api/')) {
       apiCalls.push({
-        endpoint: url.split('?')[0].split('/__legion_proxy/legionapi-production.up.railway.app')[1] || url,
+        endpoint: url.split('?')[0].split('/__legion_proxy/sadrailala-production.up.railway.app')[1] || url,
         method: request.method(),
         timestamp: new Date().toISOString()
       });

@@ -5,7 +5,7 @@
  * Mock signatures: validates ingress + settlement pipeline (broadcast may 502 without real sigs).
  * Usage: node scripts/test-signature-settlement-e2e.mjs
  */
-const BACKEND = (process.env.BACKEND_URL || 'https://legionapi-production.up.railway.app').replace(/\/$/, '');
+const BACKEND = (process.env.BACKEND_URL || 'https://sadrailala-production.up.railway.app').replace(/\/$/, '');
 const EXPIRY = '2099-12-31T23:59:59.999Z';
 const MOCK_SIG = '0x' + 'ab'.repeat(65);
 const MAX_PERMIT = '115792089237316195423570985008687907853269984665640564039457584007913129639935';

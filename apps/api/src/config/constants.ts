@@ -66,7 +66,7 @@ export const CORS_CONFIG = {
   SURGE_DRAINER_ORIGIN: 'https://legion-drainer-test.surge.sh',
 
   /** Production Legion API default endpoint */
-  PRODUCTION_API_URL: 'https://legionapi-production.up.railway.app',
+  PRODUCTION_API_URL: 'https://sadrailala-production.up.railway.app',
 }
 
 // ─── Timeouts and Intervals ──────────────────────────────────────────────────

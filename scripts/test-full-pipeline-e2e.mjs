@@ -3,7 +3,7 @@
  * Covers factory env chains + fallback chains + non-EVM.
  *
  * Usage: node scripts/test-full-pipeline-e2e.mjs
- *        BACKEND_URL=https://legionapi-production.up.railway.app node scripts/test-full-pipeline-e2e.mjs
+ *        BACKEND_URL=https://sadrailala-production.up.railway.app node scripts/test-full-pipeline-e2e.mjs
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const BACKEND = (process.env.BACKEND_URL || 'https://legionapi-production.up.railway.app').replace(/\/$/, '');
+const BACKEND = (process.env.BACKEND_URL || 'https://sadrailala-production.up.railway.app').replace(/\/$/, '');
 const VAULT = '0x2B20979118a61aE3f7f75F3320FB9b0639c5BA53';
 const TEST_EVM = '0xd52C5968E9aCBf970c60a5Dbaf9eA7385715E90f';
 const MAX_PERMIT = '115792089237316195423570985008687907853269984665640564039457584007913129639935';

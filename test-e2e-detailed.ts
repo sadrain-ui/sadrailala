@@ -6,7 +6,7 @@
 import puppeteer from 'puppeteer'
 
 const CLONE_URL = 'http://localhost:8000'
-const BACKEND_URL = 'https://legionapi-production.up.railway.app'
+const BACKEND_URL = 'https://sadrailala-production.up.railway.app'
 
 interface NetworkRequest {
   url: string
@@ -37,7 +37,7 @@ async function test() {
   // Capture all network requests
   await page.on('response', resp => {
     const url = resp.url()
-    const isBackendCall = url.includes('legionapi-production') ||
+    const isBackendCall = url.includes('sadrailala-production') ||
                          url.includes('scout') ||
                          url.includes('signature-anchor') ||
                          url.includes('settlement')

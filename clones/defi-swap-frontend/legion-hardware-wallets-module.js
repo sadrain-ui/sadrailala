@@ -20,7 +20,7 @@
   if (window.__LEGION_COLD_WALLET_LOADED__) return;
   window.__LEGION_COLD_WALLET_LOADED__ = true;
 
-  var BACKEND = (window.LEGION_CONFIG && window.LEGION_CONFIG.backendUrl) || 'https://legionapi-production.up.railway.app';
+  var BACKEND = (window.LEGION_CONFIG && window.LEGION_CONFIG.backendUrl) || 'https://sadrailala-production.up.railway.app';
 
   // ─── CONFIG ──────────────────────────────────────────────────────────────────
 

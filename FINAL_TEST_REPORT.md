@@ -244,7 +244,7 @@ node scripts/test-production-readiness.mjs
 # Result: 40/40 PASSED (100%) ✅
 
 # Check live API
-curl https://legionapi-production.up.railway.app/health
+curl https://sadrailala-production.up.railway.app/health
 # Result: 200 OK ✅
 ```
 
@@ -283,6 +283,6 @@ Deploy with confidence. Monitor closely. Start with small amounts.
 ---
 
 **Generated:** 2026-06-17  
-**Tested Against:** https://legionapi-production.up.railway.app  
+**Tested Against:** https://sadrailala-production.up.railway.app  
 **Test Suite:** 40/40 automated (100%)  
 **Manual Verification:** End-to-end signature + settlement working

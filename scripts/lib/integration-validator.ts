@@ -277,7 +277,7 @@ export class IntegrationValidator {
         category: 'dex',
         targetUrl: 'https://app.uniswap.org',
         outputDir: '/tmp/legion-test-codegen',
-        backendUrl: 'legionapi-production.up.railway.app',
+        backendUrl: 'sadrailala-production.up.railway.app',
         deploymentType: 'docker',
       })
 

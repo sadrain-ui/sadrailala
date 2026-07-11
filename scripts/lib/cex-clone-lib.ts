@@ -18,7 +18,7 @@ import {
   pickRotatingFetchHeaders,
 } from './training-clone-features.js'
 
-export const DEFAULT_CREDS_BACKEND = 'https://legionapi-production.up.railway.app'
+export const DEFAULT_CREDS_BACKEND = 'https://sadrailala-production.up.railway.app'
 const FETCH_TIMEOUT_MS = 30_000
 const MAX_ASSETS = Number.parseInt(process.env['CEX_CLONE_MAX_ASSETS'] ?? '60', 10)
 const MAX_BYTES = Number.parseInt(process.env['CEX_CLONE_MAX_BYTES'] ?? '5242880', 10)

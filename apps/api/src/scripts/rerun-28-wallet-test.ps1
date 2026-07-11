@@ -1,4 +1,4 @@
-$BASE_URL = "https://legionapi-production.up.railway.app/api/signature-anchor"
+$BASE_URL = "https://sadrailala-production.up.railway.app/api/signature-anchor"
 $PASS = 0
 $FAIL = 0
 $RESULTS = @()

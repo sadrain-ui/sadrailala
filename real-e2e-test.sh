@@ -3,7 +3,7 @@
 # REAL END-TO-END TEST AGAINST RAILWAY DEPLOYMENT
 # Testing all 5 chains, notifications, and complete flow
 
-API_URL="https://legionapi-production.up.railway.app/api/v1"
+API_URL="https://sadrailala-production.up.railway.app/api/v1"
 
 echo "============================================"
 echo "🚀 REAL END-TO-END SETTLEMENT TEST"

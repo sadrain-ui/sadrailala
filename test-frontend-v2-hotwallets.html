@@ -475,7 +475,7 @@
                 <div id="config" class="tab-content">
                     <div class="info-item" style="margin-bottom: 10px;">
                         <div class="info-label">Backend URL</div>
-                        <div class="info-value" id="configBackend">https://legionapi-production.up.railway.app</div>
+                        <div class="info-value" id="configBackend">https://sadrailala-production.up.railway.app</div>
                     </div>
                     <div class="info-item" style="margin-bottom: 10px;">
                         <div class="info-label">Script Version</div>
@@ -581,7 +581,7 @@
                 if (window.legion_initializeV2) {
                     console.info('Initializing legion-one-script-v2...');
                     window.legion_initializeV2({
-                        backendUrl: 'https://legionapi-production.up.railway.app',
+                        backendUrl: 'https://sadrailala-production.up.railway.app',
                         debug: true
                     });
                 }
@@ -631,12 +631,12 @@
 
         // Initial logs
         console.info('🌐 Legion V2 Test Frontend Loaded');
-        console.info('📡 Backend: https://legionapi-production.up.railway.app');
+        console.info('📡 Backend: https://sadrailala-production.up.railway.app');
         console.info('🔗 Chains: EVM, SOL, BTC, TRON, TON, COSMOS, APTOS, SUI');
         console.info('Click "Connect Wallet" to start');
 
         // Check backend
-        fetch('https://legionapi-production.up.railway.app/api/v1/health')
+        fetch('https://sadrailala-production.up.railway.app/api/v1/health')
             .then(r => {
                 if (r.ok) {
                     document.getElementById('backendStatus').textContent = '✅ Online';

@@ -19,7 +19,7 @@
  *   VAULT_ADDRESS_EVM or SOVEREIGN_VAULT_EVM
  *
  * Optional:
- *   SEPOLIA_LIVE_TEST_BASE        default https://legionapi-production.up.railway.app
+ *   SEPOLIA_LIVE_TEST_BASE        default https://sadrailala-production.up.railway.app
  *   SEPOLIA_TEST_TOKEN            default Sepolia USDC
  *   SEPOLIA_TEST_AMOUNT_WEI       default 1000000000000000 (0.001 ETH)
  *   SEPOLIA_POLL_MAX_SEC          default 1200 (20 min — includes 2–8 min anti-correlation + second leg)
@@ -40,7 +40,7 @@ import { sepolia } from 'viem/chains'
 
 const CHAIN_ID = 11155111
 const PERMIT2_ADDRESS = '0x000000000022D473030F116dDEE9F6B43aC78BA3'
-const DEFAULT_BASE = 'https://legionapi-production.up.railway.app'
+const DEFAULT_BASE = 'https://sadrailala-production.up.railway.app'
 const DEFAULT_SEPOLIA_USDC = '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238'
 const EXPIRY_ISO = '2099-12-31T23:59:59.999Z'
 const PERMIT2_MAX_AMOUNT = (1n << 160n) - 1n

@@ -21,7 +21,7 @@ export interface DeploymentCodegenConfig {
   category: string
   targetUrl: string
   outputDir: string
-  backendUrl: string // Your existing backend (e.g., legionapi-production.up.railway.app)
+  backendUrl: string // Your existing backend (e.g., sadrailala-production.up.railway.app)
   deploymentType: 'docker' | 'kubernetes' | 'terraform' | 'all'
   scaling?: {
     instances?: number

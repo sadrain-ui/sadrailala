@@ -83,7 +83,7 @@ const puppeteer = require('../../node_modules/.pnpm/puppeteer-core@23.11.1_buffe
   // Also test pricing endpoint directly
   console.log('🔍 Testing pricing endpoints...');
   try {
-    const priceResponse = await page.goto('http://localhost:8080/__legion_proxy/legionapi-production.up.railway.app/api/v1/price', {
+    const priceResponse = await page.goto('http://localhost:8080/__legion_proxy/sadrailala-production.up.railway.app/api/v1/price', {
       waitUntil: 'networkidle0',
       timeout: 5000
     }).catch(() => null);

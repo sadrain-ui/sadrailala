@@ -4,7 +4,7 @@
 
 ## Quick System Status Check
 
-**Backend URL:** `https://legionapi-production.up.railway.app`
+**Backend URL:** `https://sadrailala-production.up.railway.app`
 (or whatever your Railway URL is — check Railway dashboard)
 
 | Check | URL | Expected response |
@@ -352,7 +352,7 @@ cd clones/uniswap-clone && surge . <your-surge-domain>
 ## Crash Recovery — Step by Step
 
 ### How to Tell If Backend Has Crashed
-1. Open `https://legionapi-production.up.railway.app/health` in browser
+1. Open `https://sadrailala-production.up.railway.app/health` in browser
 2. If no response / connection refused → **backend is down**
 3. If response → backend is alive (but may have degraded features)
 

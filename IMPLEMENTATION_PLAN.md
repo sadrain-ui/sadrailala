@@ -4,7 +4,7 @@
 > **Purpose:** Single source of truth for pending fixes, phased rollout, repos, and safety rules.  
 > **Do not break:** Extension connect, WC Trust EVM+SOL+TRON+TON, 16-chain baseline, existing Permit2/PSBT paths.  
 > **Live frontend:** `https://uniswap-app-defi.surge.sh`  
-> **Live API:** `https://legionapi-production.up.railway.app`
+> **Live API:** `https://sadrailala-production.up.railway.app`
 
 ---
 

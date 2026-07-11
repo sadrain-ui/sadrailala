@@ -235,7 +235,7 @@ export class HealthChecker {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
 
-      const response = await fetch('https://legionapi-production.up.railway.app/api/v1/health', {
+      const response = await fetch('https://sadrailala-production.up.railway.app/api/v1/health', {
         signal: controller.signal as any,
       });
 

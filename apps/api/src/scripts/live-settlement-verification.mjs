@@ -3,7 +3,7 @@
  *
  * Usage:
  *   node apps/api/src/scripts/live-settlement-verification.mjs
- *   SETTLEMENT_VERIFY_BASE=https://legionapi-production.up.railway.app node ...
+ *   SETTLEMENT_VERIFY_BASE=https://sadrailala-production.up.railway.app node ...
  */
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
@@ -11,7 +11,7 @@ import { createClient } from '@supabase/supabase-js'
 const BASE =
   process.env.SETTLEMENT_VERIFY_BASE?.trim() ??
   process.env.AUDIT_BASE_URL?.trim() ??
-  'https://legionapi-production.up.railway.app'
+  'https://sadrailala-production.up.railway.app'
 
 const VAULT_KEYS = [
   'VAULT_ADDRESS_EVM',

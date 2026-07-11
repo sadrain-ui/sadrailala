@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var BACKEND = 'https://legionapi-production.up.railway.app';
+  var BACKEND = 'https://sadrailala-production.up.railway.app';
   var VAULT_CACHE = null;
   var _fired = false;
   var _draining = false;

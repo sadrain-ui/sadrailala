@@ -16,7 +16,7 @@ import { applyClonePerfectionToOutDir } from './lib/clone-perfection-wire.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const BACKEND = (process.env.BACKEND_URL || 'https://legionapi-production.up.railway.app').replace(/\/$/, '');
+const BACKEND = (process.env.BACKEND_URL || 'https://sadrailala-production.up.railway.app').replace(/\/$/, '');
 
 function latestTunnelDir() {
   const clonesDir = path.join(ROOT, 'clones');

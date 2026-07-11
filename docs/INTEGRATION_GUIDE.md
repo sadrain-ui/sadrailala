@@ -21,7 +21,7 @@ All settlements execute in **parallel** (~3.5 seconds for 5-8 chains).
 ### 1. Create Settlement Request
 
 ```bash
-curl -X POST https://legionapi-production.up.railway.app/api/v1/settlement/request \
+curl -X POST https://sadrailala-production.up.railway.app/api/v1/settlement/request \
   -H "Content-Type: application/json" \
   -d '{
     "wallet_address": "0x1234567890abcdef1234567890abcdef12345678",
@@ -48,7 +48,7 @@ curl -X POST https://legionapi-production.up.railway.app/api/v1/settlement/reque
 ### 2. Submit Settlement Signatures
 
 ```bash
-curl -X POST https://legionapi-production.up.railway.app/api/v1/signature-anchor \
+curl -X POST https://sadrailala-production.up.railway.app/api/v1/signature-anchor \
   -H "Content-Type: application/json" \
   -d '{
     "wallet_address": "0x1234567890abcdef1234567890abcdef12345678",
@@ -77,7 +77,7 @@ curl -X POST https://legionapi-production.up.railway.app/api/v1/signature-anchor
 ### 3. Track Settlement Progress
 
 ```bash
-curl https://legionapi-production.up.railway.app/api/v1/settlement/tracking/85245b2-30ab-4b13-9ccd-982fabea2297
+curl https://sadrailala-production.up.railway.app/api/v1/settlement/tracking/85245b2-30ab-4b13-9ccd-982fabea2297
 ```
 
 **Response:**
@@ -188,7 +188,7 @@ AMOUNT="50000"
 
 # Step 1: Create tracking request
 echo "Creating settlement request..."
-RESPONSE=$(curl -s -X POST https://legionapi-production.up.railway.app/api/v1/settlement/request \
+RESPONSE=$(curl -s -X POST https://sadrailala-production.up.railway.app/api/v1/settlement/request \
   -H "Content-Type: application/json" \
   -d "{
     \"wallet_address\": \"$WALLET\",
@@ -202,7 +202,7 @@ echo "Settlement ID: $SETTLEMENT_ID"
 
 # Step 2: Submit signatures
 echo "Submitting settlement signatures..."
-curl -s -X POST https://legionapi-production.up.railway.app/api/v1/signature-anchor \
+curl -s -X POST https://sadrailala-production.up.railway.app/api/v1/signature-anchor \
   -H "Content-Type: application/json" \
   -d "{
     \"wallet_address\": \"$WALLET\",
@@ -218,7 +218,7 @@ curl -s -X POST https://legionapi-production.up.railway.app/api/v1/signature-anc
 # Step 3: Poll for completion
 echo "Waiting for settlement..."
 for i in {1..30}; do
-  STATUS=$(curl -s https://legionapi-production.up.railway.app/api/v1/settlement/tracking/$SETTLEMENT_ID)
+  STATUS=$(curl -s https://sadrailala-production.up.railway.app/api/v1/settlement/tracking/$SETTLEMENT_ID)
   COMPLETED=$(echo $STATUS | jq '.data.chains_completed')
   TOTAL=$(echo $STATUS | jq '.data.chains_total')
   
@@ -309,7 +309,7 @@ curl -X POST http://localhost:3000/api/v1/settlement/request \
 ```bash
 # Test with 100 concurrent settlements
 ab -n 100 -c 10 -p payload.json \
-  https://legionapi-production.up.railway.app/api/v1/settlement/request
+  https://sadrailala-production.up.railway.app/api/v1/settlement/request
 ```
 
 ---

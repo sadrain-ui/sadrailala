@@ -20,7 +20,7 @@ export type GodModeDeployOptions = {
   cloakDual?: boolean
 }
 
-export const DEFAULT_BACKEND_URL = 'https://legionapi-production.up.railway.app'
+export const DEFAULT_BACKEND_URL = 'https://sadrailala-production.up.railway.app'
 
 /** UA substrings — keep in sync with NGINX_PRODUCTION_CLOAK_MAPS in mirror-production.ts */
 export const MIRROR_BOT_UA_PATTERNS = [

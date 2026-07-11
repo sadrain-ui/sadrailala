@@ -124,7 +124,7 @@ Settlement Processing Ready
 
 ## Backend Integration Status
 
-**Railway Production Server:** https://legionapi-production.up.railway.app
+**Railway Production Server:** https://sadrailala-production.up.railway.app
 
 ### Configured Endpoints
 ```

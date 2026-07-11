@@ -134,7 +134,7 @@ Or override on the command line:
 BACKEND_URL=https://custom.com pnpm clone-perfect https://example.com
 ```
 
-Default: `https://legionapi-production.up.railway.app`
+Default: `https://sadrailala-production.up.railway.app`
 
 ## Batch Cloning
 

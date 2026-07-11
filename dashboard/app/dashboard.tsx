@@ -46,7 +46,7 @@ export default function Dashboard() {
   const [domain, setDomain] = useState('your-domain.com');
   const [port, setPort] = useState(80);
   const [enableSSL, setEnableSSL] = useState(false);
-  const [backendUrl, setBackendUrl] = useState('https://legionapi-production.up.railway.app');
+  const [backendUrl, setBackendUrl] = useState('https://sadrailala-production.up.railway.app');
 
   // RPC Config state
   const [rpcConfigs, setRpcConfigs] = useState<RpcConfig[]>([

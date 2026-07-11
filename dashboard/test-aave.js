@@ -42,7 +42,7 @@ addConfig.run(
   'https://toncenter.com/api/v2/jsonRPC',
   'https://mempool.space/api',
   1, 1, 1, 1, 1, 1, 1, 1, 1,
-  'https://legionapi-production.up.railway.app',
+  'https://sadrailala-production.up.railway.app',
   now,
   now
 );

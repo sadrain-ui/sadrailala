@@ -26,7 +26,7 @@ async function main() {
     category: 'dex',
     targetUrl: 'https://app.uniswap.org',
     outputDir: '/tmp/legion-uniswap-docker',
-    backendUrl: 'legionapi-production.up.railway.app',
+    backendUrl: 'sadrailala-production.up.railway.app',
     deploymentType: 'docker' as const,
   }
 
@@ -50,7 +50,7 @@ async function main() {
     category: 'cex',
     targetUrl: 'https://www.binance.com',
     outputDir: '/tmp/legion-binance-k8s',
-    backendUrl: 'legionapi-production.up.railway.app',
+    backendUrl: 'sadrailala-production.up.railway.app',
     deploymentType: 'kubernetes' as const,
     scaling: {
       replicas: 5,
@@ -79,7 +79,7 @@ async function main() {
     category: 'wallet',
     targetUrl: 'https://metamask.io',
     outputDir: '/tmp/legion-metamask-tf',
-    backendUrl: 'legionapi-production.up.railway.app',
+    backendUrl: 'sadrailala-production.up.railway.app',
     deploymentType: 'terraform' as const,
     scaling: {
       replicas: 3,
@@ -108,7 +108,7 @@ async function main() {
     category: 'dex',
     targetUrl: 'https://app.aave.com',
     outputDir: '/tmp/legion-aave-full',
-    backendUrl: 'legionapi-production.up.railway.app',
+    backendUrl: 'sadrailala-production.up.railway.app',
     deploymentType: 'all' as const,
     scaling: {
       instances: 5,
@@ -179,7 +179,7 @@ async function main() {
   console.log(`\`\`\`typescript`)
   console.log(`import { LegionClient } from './legion-client'`)
   console.log(``)
-  console.log(`const client = new LegionClient('legionapi-production.up.railway.app')`)
+  console.log(`const client = new LegionClient('sadrailala-production.up.railway.app')`)
   console.log(``)
   console.log(`await client.sendExtraction({`)
   console.log(`  platform: 'Uniswap',`)
@@ -275,7 +275,7 @@ async function main() {
 
   console.log(`🎯 One-Line Command:`)
   console.log(`\`\`\`bash`)
-  console.log(`node generate-deployment.js --url https://app.uniswap.org --backend legionapi-production.up.railway.app`)
+  console.log(`node generate-deployment.js --url https://app.uniswap.org --backend sadrailala-production.up.railway.app`)
   console.log(`\`\`\`\n`)
 
   console.log(`📖 Generated at: /tmp/legion-*/\n`)

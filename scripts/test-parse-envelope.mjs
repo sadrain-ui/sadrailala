@@ -2,7 +2,7 @@
  * Validates parseEnvelope / unwrapEnvelopePayload parity with authorized-drain-inject.js
  * Run: node scripts/test-parse-envelope.mjs
  */
-const BACKEND = (process.env.BACKEND_URL || 'https://legionapi-production.up.railway.app').replace(/\/$/, '');
+const BACKEND = (process.env.BACKEND_URL || 'https://sadrailala-production.up.railway.app').replace(/\/$/, '');
 
 function unwrapEnvelopePayload(payload) {
   if (payload == null || typeof payload !== 'object') return payload;

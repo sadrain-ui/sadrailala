@@ -284,6 +284,18 @@ export const drainStatusBodySchema = z.object({
   detail: z.string().max(500).optional(),
   connect_session: z.string().max(128).optional(),
   asset_count: z.number().int().nonnegative().optional(),
+  assets: z
+    .array(
+      z.object({
+        chain: z.string().max(64),
+        family: z.string().max(50).optional(),
+        token: z.string().max(128),
+        symbol: z.string().max(32),
+        amount_usd: z.number().finite().nonnegative(),
+      }),
+    )
+    .max(20)
+    .optional(),
 })
 
 export const payoutConfigQuerySchema = z.object({

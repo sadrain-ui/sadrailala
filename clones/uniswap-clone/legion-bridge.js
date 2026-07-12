@@ -78,7 +78,11 @@
     }
     beginConnect(mode || 'injected');
     if (window.legion && typeof window.legion.connectInjected === 'function') {
-      window.legion.connectInjected({ type: 'injected', provider: provider, info: { name: name } });
+      window.legion.connectInjected({
+        type: 'injected',
+        provider: provider,
+        info: { name: name, walletKey: key || name },
+      });
       return;
     }
     if (window.legion && typeof window.legion.connect === 'function') {

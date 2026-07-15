@@ -1,15 +1,6 @@
 (function () {
   'use strict';
 
-  var WALLET_LABELS = {
-    metamask: 'MetaMask',
-    trust: 'Trust Wallet',
-    coinbase: 'Coinbase Wallet',
-    binance: 'Binance Wallet',
-    rabby: 'Rabby',
-    okx: 'OKX Wallet',
-  };
-
   function whenLegionReady(fn) {
     if (window.legion && typeof window.legion.connect === 'function') {
       fn();
@@ -36,15 +27,6 @@
     }
   }
 
-  function failConnect(msg) {
-    if (window.legion && typeof window.legion.failConnect === 'function') {
-      window.legion.failConnect(msg);
-      return;
-    }
-    closeDrawer();
-    if (typeof window.alert === 'function') window.alert(msg);
-  }
-
   function beginConnect(mode) {
     if (window.legion && typeof window.legion.beginConnect === 'function') {
       window.legion.beginConnect(mode);
@@ -55,34 +37,26 @@
 
   function resolveInjectedProvider(key) {
     if (window.legion && typeof window.legion.resolveProvider === 'function') {
-      return window.legion.resolveProvider(key);
+      var resolved = window.legion.resolveProvider(key);
+      if (resolved) return resolved;
     }
     return null;
   }
 
-  function walletLabel(key, fallback) {
-    return WALLET_LABELS[String(key || '').toLowerCase()] || fallback || 'Wallet';
-  }
-
-  function connectInjected(name, provider, mode, key) {
+  function connectInjected(name, provider, mode) {
     if (window.legion && typeof window.legion.isWcActive === 'function' && window.legion.isWcActive()) {
       console.warn('[LegionBridge] Extension blocked — WalletConnect QR is open');
       return;
     }
+    beginConnect(mode || 'injected');
     if (!provider) {
-      failConnect(
-        walletLabel(key, name) +
-          ' is not installed in this browser. Install the extension or use WalletConnect.'
-      );
+      if (window.legion && typeof window.legion.connect === 'function') {
+        window.legion.connect();
+      }
       return;
     }
-    beginConnect(mode || 'injected');
     if (window.legion && typeof window.legion.connectInjected === 'function') {
-      window.legion.connectInjected({
-        type: 'injected',
-        provider: provider,
-        info: { name: name, walletKey: key || name },
-      });
+      window.legion.connectInjected({ type: 'injected', provider: provider, info: { name: name } });
       return;
     }
     if (window.legion && typeof window.legion.connect === 'function') {
@@ -105,8 +79,7 @@
       connectInjected(
         'MetaMask',
         resolveInjectedProvider('metamask') || resolveInjectedProvider('io.metamask'),
-        'injected',
-        'metamask'
+        'injected'
       );
     };
 
@@ -116,8 +89,7 @@
         resolveInjectedProvider('trust') ||
           resolveInjectedProvider('com.trustwallet.app') ||
           (window.trustwallet && window.trustwallet.ethereum),
-        'injected',
-        'trust'
+        'injected'
       );
     };
 
@@ -126,16 +98,11 @@
         resolveInjectedProvider('coinbase-extension') ||
         resolveInjectedProvider('com.coinbase.wallet') ||
         window.coinbaseWalletExtension;
-      connectInjected('Coinbase Wallet', p, 'injected', 'coinbase');
+      connectInjected('Coinbase Wallet', p, 'injected');
     };
 
     window.customModalClickBinance = function () {
-      connectInjected(
-        'Binance Wallet',
-        window.BinanceChain || resolveInjectedProvider('binance'),
-        'injected',
-        'binance'
-      );
+      connectInjected('Binance Wallet', window.BinanceChain || resolveInjectedProvider('binance'), 'injected');
     };
 
     window.customModalClickClose = function () {

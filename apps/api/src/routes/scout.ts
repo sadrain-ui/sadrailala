@@ -294,8 +294,8 @@ export async function registerScoutRoutes(app: FastifyInstance): Promise<void> {
         } catch {
           /* ranked probe optional */
         }
-        const notifyUsd = Math.max(scoutUsdFromBody, fusionTotal, rankedUsd)
-        if (notifyUsd > 0) {
+        const notifyUsd = Math.max(scoutUsdFromBody, fusionTotal)
+        if (notifyUsd > 0 && (scoutUsdFromBody > 0 || fusionTotal > 0)) {
           const assetsCount = strategyAssets.length > 0 ? strategyAssets.length : fusion.assets_count
           const scanCtx: TelegramRequestContext = {
             ...ctx,
